@@ -12,6 +12,7 @@
     "self-test": "node src/self-test.js",
     "test-md": "node scripts/test-md-to-plain.mjs",
     "test-wait": "node scripts/test-v2-wait.mjs",
+    "test-wait:e2e": "node scripts/test-dsh-v2-wait.mjs",
     "test-vision": "node scripts/test-vision-media.mjs",
     "test-forward": "node scripts/test-forward.mjs",
     "test-slang": "node scripts/test-slang-learn.mjs",

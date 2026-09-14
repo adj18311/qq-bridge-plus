@@ -66,10 +66,17 @@ check('qq-mode-console 已 link 进 node_modules', fs.existsSync(path.join(DSH_H
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 check('config.json dsh.model = deepseek-flash', cfg.dsh?.model === 'deepseek-flash', `当前 ${cfg.dsh?.model}`);
 const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src/bridge.js'), 'utf8');
-// 只看可执行代码，忽略注释（注释里会提到旧名做历史说明）
-const bridgeCode = bridgeSrc.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+// 只看可执行代码，忽略注释（注释里会提到旧名做历史说明）。
+// 注意必须按 /\r?\n/ 切行：JS 的 `.` 不匹配 \r，CRLF 文件直接 split('\n') 会让行尾留 \r，
+// 导致 /\/\/.*$/ 的 `$` 够不到行尾、注释根本剥不掉（曾因此误报）。
+const stripComments = (src) => src.split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+const bridgeCode = stripComments(bridgeSrc);
 check('bridge.js 可执行代码无 deepseek-v4-flash-vision-exp 残留', !bridgeCode.includes('deepseek-v4-flash-vision-exp'));
 check('bridge.js 可执行代码无 router-standard 残留', !bridgeCode.includes('router-standard'));
+// setup-dsh.mjs 曾被漏改：0.1.5 适配只清了 bridge.js，脚本里仍在写死已下线的 preset 名。
+const setupCode = stripComments(fs.readFileSync(path.join(ROOT, 'scripts/setup-dsh.mjs'), 'utf8'));
+check('setup-dsh.mjs 可执行代码无 router-standard 残留', !setupCode.includes('router-standard'));
+check('setup-dsh.mjs 新装默认 closedAgentPreset 留空（交给 DSH 默认 preset）', /closedAgentPreset:\s*''/.test(setupCode));
 check('bridge.js 默认模型为 deepseek-flash', /model:\s*'deepseek-flash'/.test(bridgeCode));
 check('bridge.js 不再有「无参创建会话」兜底', !/sessions\.create\(\{\}\)/.test(bridgeCode));
 check('bridge.js 含 preset 清单/默认 preset 解析', bridgeSrc.includes('resolvePresetName') && bridgeSrc.includes('refreshPresetList'));

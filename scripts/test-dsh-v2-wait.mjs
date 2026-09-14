@@ -1,10 +1,13 @@
+// 二代等待逻辑的「实时」端到端测试：真建一个 qq-chat-v2 会话并向 DSH 提问，
+// 断言 qq_wait_for_messages 出现在该 preset 的可用工具面里。需要 DSH 正在运行。
+// （纯逻辑单测见 scripts/test-v2-wait.mjs，两者不重复。）
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './src/dsh-client.js';
+import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from '../src/dsh-client.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname);
+const ROOT = path.resolve(__dirname, '..');
 
 async function main() {
   let auth;
