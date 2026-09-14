@@ -2,7 +2,7 @@
 
 > Connect QQ messages to DeepSeek Harness (DSH) agents: QQ friends/groups become DSH conversations, and agent replies (including questions and tool approvals) are sent back to QQ.
 
-> ⚠️ **This branch/version is the DSH 0.1.2-alpha.1 adaptation.** It uses the new Cookie auth, slash RPC endpoints, and `/api/remote.mux` event stream, and is not compatible with older DSH protocols. For the old version use the `main` branch.
+> ⚠️ **This branch/version targets DSH 0.1.5-rc.1** (the same wire protocol was verified on 0.1.2-alpha.1 / 0.1.1-rc.2). It uses Cookie auth, slash RPC endpoints, and the `/api/remote.mux` event stream, and is not compatible with older DSH protocols. For the old version use the `main` branch.
 
 For the detailed Chinese guide, see **[docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)**.
 
@@ -15,7 +15,7 @@ QQ messages ──► SnowLuma (OneBot v11 WS) ──► qq-bridge ──► DSH
 ```
 
 - **QQ side**: `@snowluma/sdk` provides the OneBot v11 WebSocket client.
-- **DSH side**: adapted for DSH 0.1.2-alpha.1 — launch-token Cookie auth, `/api/<namespace>/<method>` slash RPC, and `/api/remote.mux` + `session/follow` event stream.
+- **DSH side**: adapted for DSH 0.1.2+ and re-verified on 0.1.5 — launch-token Cookie auth, `/api/<namespace>/<method>` slash RPC, and `/api/remote.mux` + `session/follow` event stream. The per-session model is pinned by the bridge via `session.selectModel` from `config.json`'s `dsh.model` (default `deepseek-flash` = DeepSeek-V41-Flash, multimodal).
 - **Agent tools**: safe MCP servers expose a restricted QQ toolset (`qq_status`, `qq_list_groups`, `qq_get_group_history`, `qq_send_group_message`, `qq_reply`, etc.).
 - **Console**: a local web console at `http://127.0.0.1:3100` for mode switching, role management, whitelist/admin settings, slang management, memory, stickers and more.
 

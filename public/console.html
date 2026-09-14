@@ -247,7 +247,7 @@
       </div>
       <div class="row" style="margin-top:12px">
         <label style="flex:1;margin:0">封闭 Agent 使用的 DSH 预设</label>
-        <select id="closedPreset" style="max-width:260px"><option value="">加载中…</option></select>
+        <select id="closedPreset" style="max-width:260px"><option value="">（DSH 默认 preset）</option></select>
       </div>
       <div class="meta">二代仿真模式（reserved2）骨架已接入；完整“一切皆工具”链路开发中。</div>
     </section>
@@ -977,6 +977,11 @@ async function refreshPresets() {
     const r = await api('/api/presets');
     const sel = document.getElementById('closedPreset');
     sel.innerHTML = '';
+    // 空值 = 使用 DSH 自己声明的默认 preset（closed-agent 的推荐选择）
+    const defOpt = document.createElement('option');
+    defOpt.value = '';
+    defOpt.textContent = '（DSH 默认 preset）';
+    sel.appendChild(defOpt);
     for (const p of r.presets) {
       const opt = document.createElement('option');
       opt.value = p.id;
@@ -988,7 +993,9 @@ async function refreshPresets() {
 }
 
 async function saveMode(mode) {
-  const preset = document.getElementById('closedPreset').value || 'router-standard';
+  // 不再硬编码 'router-standard'（DSH 0.1.5 已无此 preset）；
+  // 留空表示让桥接使用 DSH 自己声明的默认 preset。
+  const preset = document.getElementById('closedPreset').value || '';
   const r = await api('/api/mode', 'POST', { mode, closedAgentPreset: preset });
   if (r.ok) refresh(); else alert(r.error || '切换失败');
   return r;

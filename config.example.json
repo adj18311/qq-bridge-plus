@@ -2,7 +2,7 @@
   "dsh": {
     "baseUrl": "http://127.0.0.1:3080",
     "provider": "deepseek-official",
-    "model": "deepseek-v4-flash-vision-exp",
+    "model": "deepseek-flash",
     "reasoningEffort": "max",
     "authToken": "",
     "authHeader": "authorization",

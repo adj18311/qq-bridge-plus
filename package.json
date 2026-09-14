@@ -16,6 +16,14 @@
     "test-forward": "node scripts/test-forward.mjs",
     "test-slang": "node scripts/test-slang-learn.mjs",
     "test-stickers": "node scripts/test-stickers.mjs",
+    "test-console": "node scripts/test-console.mjs",
+    "verify:adaptation": "node scripts/verify-dsh-015-adaptation.mjs",
+    "verify:persona": "node scripts/verify-persona-config.mjs",
+    "test:mcp-servers": "node scripts/test-mcp-servers-stdio.mjs",
+    "test:plugin": "node scripts/test-qq-mode-plugin.mjs",
+    "test:setup-idempotent": "node scripts/test-setup-dsh-idempotent.mjs",
+    "probe:events": "node scripts/probe-events.mjs",
+    "probe:tools": "node scripts/probe-tools.mjs",
     "postinstall": "node scripts/patch-snowluma-sdk.mjs"
   },
   "dependencies": {

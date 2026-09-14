@@ -48,30 +48,67 @@ function yamlSingleQuote(s) {
   return `'${String(s).replace(/'/g, "''")}'`;
 }
 
-function mcpBlock() {
+// 由桥接托管的 MCP 条目 id：脚本对这三个 id 拥有所有权，可安全地按 id 增删。
+const MANAGED_MCP_IDS = ['mcp-snowluma', 'mcp-snowluma-host', 'mcp-web-search-safe'];
+
+function mcpEntries() {
   const node = process.execPath;
   const servers = {
-    'mcp-snowluma': path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'),
-    'mcp-snowluma-host': path.join(REPO_ROOT, 'src', 'mcp-host-server.js'),
-    'mcp-web-search-safe': path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js'),
+    'mcp-snowluma': { serverName: 'snowluma', script: path.join(REPO_ROOT, 'src', 'mcp-snowluma-safe.js'), toolCallTimeoutMs: 725000 },
+    'mcp-snowluma-host': { serverName: 'snowluma-host', script: path.join(REPO_ROOT, 'src', 'mcp-host-server.js') },
+    'mcp-web-search-safe': { serverName: 'web-search-safe', script: path.join(REPO_ROOT, 'src', 'mcp-web-search-safe.js') },
   };
   let out = '# === qq-bridge MCP BEGIN ===\n';
-  for (const [id, script] of Object.entries(servers)) {
+  out += '# 由 scripts/setup-dsh.mjs 维护；这段区块会被整体替换，请勿手工编辑内部条目。\n';
+  for (const [id, s] of Object.entries(servers)) {
     out += `- insert:\n`;
     out += `    - id: ${id}\n`;
     out += `      name: '@deepseek-ai/dsh-mcp-client'\n`;
     out += `      config:\n`;
-    out += `        serverName: ${id.replace('mcp-', '')}\n`;
+    out += `        serverName: ${s.serverName}\n`;
     out += `        transport: stdio\n`;
     out += `        command: ${yamlSingleQuote(node)}\n`;
     out += `        args:\n`;
-    out += `          - ${yamlSingleQuote(script)}\n`;
-    if (id === 'mcp-snowluma') {
-      out += `        toolCallTimeoutMs: 725000\n`;
-    }
+    out += `          - ${yamlSingleQuote(s.script)}\n`;
+    // qq_wait_for_messages 最长可等 10 分钟；DSH 默认 60s 会提前掐断工具调用。
+    if (s.toolCallTimeoutMs) out += `        toolCallTimeoutMs: ${s.toolCallTimeoutMs}\n`;
   }
   out += '# === qq-bridge MCP END ===\n';
   return out;
+}
+
+/**
+ * 按「条目 id」从 patch 文本里删掉桥接托管的 MCP 条目（含其 insert: 行）。
+ * 比之前「先找 BEGIN/END 标记」更稳：历史版本装的补丁没有标记，旧逻辑会直接跳过，
+ * 导致升级后缺条目（例如 mcp-web-search-safe 永远装不上）。
+ */
+function stripManagedMcpEntries(text) {
+  const lines = text.split(/\r?\n/);
+  const kept = [];
+  let removed = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = /^\s*-\s*id:\s*(\S+)\s*$/.exec(lines[i]);
+    if (m && MANAGED_MCP_IDS.includes(m[1])) {
+      // 回退掉紧邻其上的 `- insert:` 行（如果存在且未被消费）
+      const prev = kept[kept.length - 1];
+      if (prev !== undefined && /^\s*-\s*insert:\s*$/.test(prev)) kept.pop();
+      removed += 1;
+      // 跳过该条目自身的续行（比 id 行缩进更深的行）
+      const idIndent = lines[i].length - lines[i].trimStart().length;
+      let j = i + 1;
+      while (j < lines.length) {
+        const line = lines[j];
+        if (line.trim() === '') { j += 1; continue; }
+        const indent = line.length - line.trimStart().length;
+        if (indent > idIndent) { j += 1; continue; }
+        break;
+      }
+      i = j - 1;
+      continue;
+    }
+    kept.push(lines[i]);
+  }
+  return { text: kept.join('\n'), removed };
 }
 
 function patchCordis() {
@@ -84,29 +121,26 @@ function patchCordis() {
   }
   const beginMarker = '# === qq-bridge MCP BEGIN ===';
   const endMarker = '# === qq-bridge MCP END ===';
-  const block = mcpBlock();
+
+  // 1) 先删掉旧的托管条目（含历史版本无标记时写入的条目），避免 id 重复导致 DSH 启动失败
+  const stripped = stripManagedMcpEntries(text);
+  text = stripped.text;
+  // 2) 再删掉旧的标记区块（如果还残留）
   if (text.includes(beginMarker) && text.includes(endMarker)) {
     text = text.replace(
-      /[^\n]*# === qq-bridge MCP BEGIN ===[\s\S]*?# === qq-bridge MCP END ===[^\n]*/,
-      block.trimEnd(),
+      new RegExp(`${beginMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${endMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`),
+      '',
     );
-    log(`cordis.patch.yml: qq-bridge MCP block updated`);
-  } else if (text.includes('id: mcp-snowluma') || text.includes('mcp-snowluma-safe.js')) {
-    log(`cordis.patch.yml already contains mcp-snowluma entries; skipped auto-insert. Please check manually if they point to this repo.`);
-    return;
-  } else {
-    // 剥离 DSH 模板自带、独立成行的空数组 `[]`，否则追加的 block 列表会与它组成
-    // 两个 YAML 根节点，DSH 启动时报 “end of the stream or a document separator is expected”。
-    text = text.replace(/^[ \t]*\[\][ \t]*(?:\r?\n|$)/gm, '');
-    if (text.trim().length > 0) {
-      if (!text.endsWith('\n')) text += '\n';
-      text += `\n${block}`;
-    } else {
-      text += block;
-    }
-    log(`cordis.patch.yml: qq-bridge MCP block appended`);
   }
+  // 3) 清掉「独立成行的空数组 []」——它们会和追加的 block 组成两个 YAML 根节点，
+  //    DSH 启动时报 “end of the stream or a document separator is expected”。
+  text = text.replace(/^[ \t]*\[\][ \t]*(?:\r?\n|$)/gm, '');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
+
+  const block = mcpEntries();
+  text = text.trim().length > 0 ? `${text}\n\n${block}` : block;
   fs.writeFileSync(patchFile, text, 'utf8');
+  log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${stripped.removed} 条，写入 ${MANAGED_MCP_IDS.length} 条）`);
 }
 
 function ensurePluginLink() {

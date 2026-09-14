@@ -1,9 +1,13 @@
 // Node 环境的 DSH Web API 客户端。
-// 兼容 DSH 0.1.2-alpha.1 的大改：
+// 兼容 DSH 0.1.2-alpha.1 引入、并在 0.1.5-rc.1 上复核通过的协议：
 // 1. RPC 方法从点号改为斜杠（host.describe -> host/describe 等）；
-// 2. payload 包装为 { args: { <参数名>: 原payload } }；
+// 2. payload 包装为 { args: { <参数名>: 原payload } }（session/list 用 _request，其余多为 request）；
 // 3. 新增浏览器会话鉴权：先用 dsh.authToken（进程启动 token）换取 Cookie，再带 Cookie 访问 API/WS；
-// 4. 事件流不再是 events.mux 下行，而是 /api/remote.mux 上按 session/follow 打开的流。
+// 4. 事件流不再是 events.mux 下行，而是 /api/remote.mux 上按 session/follow 打开的流，
+//    Remote Event（提问/审批）走同一条 mux 上的 $events 逻辑流 + $events/result 回执。
+// 复核记录（DSH 0.1.5-rc.1，逐项实测）：session/{list,create,prompt,selectModel,rename},
+// workspace/{create,rename,archiveSession}, settings/describe, agentPresets/list 的参数形状与
+// 返回结构均与本文件一致；session/prompt 在新版强制要求 requestId（wrapArgs 已自动补）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -159,8 +163,11 @@ export class NodeApiClient extends AbstractApiClient {
   }
 
   /**
-   * 覆写 unary RPC：适配 DSH 0.1.2 的斜杠 endpoint 和 { args } 包装，
-   * 并且只解析最外层信封，不依赖官方包的 value schema。
+   * 覆写 unary RPC：适配 DSH 0.1.2 起、0.1.5 仍沿用的斜杠 endpoint 和 { args } 包装，
+   * 并且只解析最外层信封，不依赖官方包的 value schema
+   * （桥接依赖的 @deepseek-ai/dsh-host-apiproxy 是独立的旧版客户端包，DSH 升级不影响它）。
+   * 注意：新版基类里 callUnary 是 protected/private，这里用同名 public 方法覆写即可，
+   * 业务侧一律走桥接自己的 sessions/workspace/settings 门面，不依赖基类的域方法。
    */
   async callUnary(method, payload, signal, timeoutPolicy = 'default') {
     const endpoint = endpointOf(method);
