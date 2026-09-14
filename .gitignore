@@ -20,9 +20,14 @@ config.json
 /SnowLuma功能调研.md
 /真人语感策略.md
 
-# Local one-off dev/debug/patch scripts (contain machine-specific paths/IDs)
+# Local one-off dev/debug/patch scripts
+# (machine-specific paths/IDs, or bound to artifacts of a single probe run under state/)
+/scripts/cleanup-probe-sessions.mjs
+/scripts/cleanup-probe-workspaces.mjs
 /scripts/cleanup-test-sessions.mjs
 /scripts/debug-whitelist.mjs
+/scripts/diag-archive.mjs
+/scripts/fix-probe-workspace-title.mjs
 /scripts/patch-qq-chat-v2-collect-memory.mjs
 /scripts/patch-qq-chat-v2-presleep.mjs
 /scripts/patch-qq-chat-v2-stickers.mjs
