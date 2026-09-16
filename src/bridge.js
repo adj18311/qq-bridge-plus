@@ -1300,6 +1300,13 @@ async function main() {
             log(`DSH settings ownerQQ 无效，已忽略: ${error?.message ?? error}`);
           }
         }
+        // DSH 的 qq-mode schema 只有 mode / ownerQQ 两个字段，没有 closedAgentPreset；
+        // 该值仍以本地 state/mode.json 为准（用 typeof 判断，允许用空串显式清空），
+        // 否则这里提前 return 会让控制台的 preset 下拉变成永远不生效的死设置。
+        const localPreset = readJsonSafe(path.join(STATE_DIR, 'mode.json'), null);
+        if (typeof localPreset?.closedAgentPreset === 'string') {
+          closedAgentPreset = localPreset.closedAgentPreset;
+        }
         return;
       }
     } catch {}
@@ -1688,7 +1695,20 @@ async function main() {
               : { closedAgentPreset: String(existing.closedAgentPreset ?? '') })
           };
           atomicWriteJson(path.join(STATE_DIR, 'mode.json'), next);
-          if (next.closedAgentPreset) closedAgentPreset = next.closedAgentPreset;
+          // 用字符串判断而非真值判断：空串是「显式清空 preset」，也要生效。
+          closedAgentPreset = next.closedAgentPreset;
+          // 写穿到 DSH 设置。refreshMode() 每 5 秒跑一次且以 DSH 的值为准（插件的 base 保证
+          // 该命名空间永远有值），所以只写本地 state/mode.json 会在下一次轮询时被静默回滚。
+          let dshSynced = false;
+          try {
+            const updated = unwrap(await api.settings.update({ ns: 'qq-mode', patch: { mode: body.mode } }), 'settings.update');
+            dshSynced = updated?.ok !== false;
+            if (!dshSynced) {
+              log(`控制台：模式写穿 DSH 设置被拒（${updated?.error?.code ?? 'unknown'}），下次轮询会回滚`);
+            }
+          } catch (error) {
+            log(`控制台：模式写穿 DSH 设置失败（${error?.message ?? error}）；本次仅写本地，DSH 轮询会覆盖回滚`);
+          }
           if (currentMode === 'reserved' && body.mode !== 'reserved') {
             cleanupSocialForModeChange();
             log('控制台：模式离开一代仿真模式，清理社交状态');
@@ -1707,8 +1727,8 @@ async function main() {
             }
             log('控制台：模式进入二代仿真模式，重建有限睡眠定时器');
           }
-          log(`控制台：模式已设置为 ${body.mode}${next.closedAgentPreset ? `（closed-agent preset: ${next.closedAgentPreset}）` : ''}`);
-          sendJson({ ok: true, mode: body.mode, closedAgentPreset: next.closedAgentPreset });
+          log(`控制台：模式已设置为 ${body.mode}${next.closedAgentPreset ? `（closed-agent preset: ${next.closedAgentPreset}）` : ''}${dshSynced ? '' : ' [仅本地，DSH 未同步]'}`);
+          sendJson({ ok: true, mode: body.mode, closedAgentPreset: next.closedAgentPreset, dshSynced });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/role') {

@@ -2,8 +2,9 @@
 
 ## 运行模式（QQ 桥接四模式）
 
-模式由 DSH WebUI **设置页 → 插件设置（qq-mode）** 控制（DSH 重启后生效），
-也可回退到 `qq-bridge/state/mode.json`（`{"mode": "reserved2"}`）临时指定。
+模式由**桥接控制台**（默认 `http://127.0.0.1:3100`）顶部的模式按钮切换，也可直接改 DSH 设置的 `qq-mode` 命名空间；
+控制台会**同时**写穿到 DSH 设置与本地 `qq-bridge/state/mode.json`，两者保持一致。
+（DSH 设置页目前**没有** `qq-mode` 卡片：该插件只有 host 半，未实现浏览器半。详见 docs/DSH_SETUP.md。）
 桥接每 5 秒读取一次，切换即时生效（新会话生效，旧会话可 `/reset` 重建）。
 全新安装运行 `scripts/setup-dsh.mjs` 后，DSH 设置与本地兜底默认均为 `reserved2`；若已存在 `state/mode.json` 或 DSH 设置旧值，脚本不会覆盖。
 

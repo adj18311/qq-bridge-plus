@@ -79,8 +79,8 @@
 0. **一键自检**：`npm run verify:adaptation` —— 覆盖 preset persona schema、`~/.dsh` 同步、profile patch、桥接协议与运行中的 DSH 等 25 项断言。另有 `npm run verify:persona`（只查 persona 配置）。
    > 若你的环境禁止以管道 stdio 拉子进程，脚本内 8 项 `node --check` 语法检查会报 `spawnSync … EPERM`。那是环境限制，可用 `node --check <文件>` 手动复核。
 
-1. **DSH WebUI 设置页**：`Plugins → Plugin configuration` 里本应出现 `qq-mode` 卡片，用于切换 `chat` / `closed-agent` / `reserved` / `reserved2`。
-   > ⚠️ **该卡片目前不会渲染**：DSH 的 `settings.plugin.item` 槽位要求插件自带浏览器半（`package.json` 的 `dsh.client` + `lib/client.js`），而 `plugins/qq-mode-console` 只实现了 host 半。`qq-mode` 命名空间本身是正常注册并生效的（桥接能读到设置值），缺的是 GUI 表单。参见下方「常见问题」。
+1. **切换桥接模式**：打开桥接控制台（默认 `http://127.0.0.1:3100`），顶部的「聊天模式 / 封闭 Agent / 一代仿真模式 / 二代仿真模式」按钮即为当前生效的切换入口。控制台会同时写入 DSH 设置与本地 `state/mode.json`。
+   > ℹ️ DSH 设置页 `Plugins → Plugin configuration` 里**不会**出现 `qq-mode` 卡片：该槽位要求插件自带浏览器半（`package.json` 的 `dsh.client` + `lib/client.js`），而 `plugins/qq-mode-console` 只实现了 host 半。`qq-mode` 命名空间本身正常注册并生效（桥接能读到设置值），缺的只是那张 GUI 表单 —— 所以模式改走控制台。参见下方「常见问题」。
 2. **新建会话时**：agent preset 列表中应能看到：
    - `QQ 聊天角色`（`qq-chat`）
    - `QQ 聊天角色（二代仿真）`（`qq-chat-v2`）
@@ -89,7 +89,7 @@
 ## 常见问题
 
 - **看不到 `qq-mode` 设置卡片**：这是**已知限制**，不是配置错误。DSH 的 `settings.plugin.item` 槽位只渲染「host 已注册的命名空间 ∩ 声明了该 key 的卡片」，而卡片必须由插件的**浏览器半**（`package.json` 的 `dsh.client` + `lib/client.js`）注册；`plugins/qq-mode-console` 目前只有 host 半。反复重跑 `setup-dsh.mjs` 或重启 DSH 都不会让卡片出现。要真正修好需补一个 `lib/client.js`。
-- **改了模式却不生效 / 5 秒后被改回去**：桥接的模式有**两个来源**，且 DSH 设置优先级更高 —— `src/bridge.js` 的 `refreshMode()`（每 5 秒被 `checkDsh` 调用一次）先读 DSH 的 `qq-mode` 命名空间，只要有合法值就**直接 return，完全忽略本地 `state/mode.json`**；而插件注册时带 `base: { mode: 'reserved2' }`，所以 DSH 侧**永远有值**。结果是：控制台（`public/console.html`）的模式按钮虽然会 `POST /api/mode` 写入 `state/mode.json`，却会在 5 秒内被 DSH 的值覆盖回滚。**当前唯一可靠的改法是直接改 DSH 设置**（`~/.dsh/settings.yaml`，或对 `settings/update` 传 `{ns:'qq-mode', patch:{mode:'…'}}`，随后重启桥接）。
+- **改了模式却不生效 / 5 秒后被改回去**：**此问题已在 `src/bridge.js` 修复**（桥接需重启后生效）。历史成因：`refreshMode()` 每 5 秒被 `checkDsh` 调用一次，先读 DSH 的 `qq-mode` 命名空间，只要有合法值就**直接 return，完全忽略本地 `state/mode.json`**；而插件注册时带 `base: { mode: 'reserved2' }`，所以 DSH 侧永远有值 —— 于是控制台写本地文件会在下一次轮询被覆盖回滚。现在 `POST /api/mode` 会**写穿到 DSH 设置**（`api.settings.update({ ns: 'qq-mode', patch: { mode } })`），响应里新增 `dshSynced` 字段；若写穿失败（DSH 未运行等）会记日志并保留本地值。同源问题：`closedAgentPreset` 在 DSH schema 里不存在，原先也因这个提前 return 而失效，现已改为始终以本地 `state/mode.json` 为准。若仍看到回滚，检查桥接日志里是否有「写穿 DSH 设置失败」。
 - **MCP 工具没有出现**：确认 `cordis.patch.yml` 中三个 MCP 条目的路径指向当前仓库，并重启 DSH。
 - **preset 没有出现**：确认 `~/.dsh/.agent-presets/qq-chat` 和 `~/.dsh/.agent-presets/qq-chat-v2` 存在，并重启 DSH。
 - **启动 DSH 报 `failed to parse overlay cordis.patch.yml: YAMLException`**：多为历史版脚本残留的空数组 `[]` 引发。重新运行最新版脚本（会自动剥离）即可，或手动删除该文件里独立成行的 `[]` 后重启 DSH。
