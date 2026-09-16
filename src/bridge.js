@@ -1701,13 +1701,12 @@ async function main() {
           // 该命名空间永远有值），所以只写本地 state/mode.json 会在下一次轮询时被静默回滚。
           let dshSynced = false;
           try {
-            const updated = unwrap(await api.settings.update({ ns: 'qq-mode', patch: { mode: body.mode } }), 'settings.update');
-            dshSynced = updated?.ok !== false;
-            if (!dshSynced) {
-              log(`控制台：模式写穿 DSH 设置被拒（${updated?.error?.code ?? 'unknown'}），下次轮询会回滚`);
-            }
+            // unwrap() 在 result.ok 为 false 时直接抛错，所以能执行到下一行即代表写穿已成功
+            // （不要在这里再判断 updated?.ok —— 解包后的值恒为真，那样的分支是死代码）。
+            unwrap(await api.settings.update({ ns: 'qq-mode', patch: { mode: body.mode } }), 'settings.update');
+            dshSynced = true;
           } catch (error) {
-            log(`控制台：模式写穿 DSH 设置失败（${error?.message ?? error}）；本次仅写本地，DSH 轮询会覆盖回滚`);
+            log(`控制台：模式写穿 DSH 设置失败（${error?.message ?? error}）；本次仅写本地，下次 DSH 轮询会覆盖回滚`);
           }
           if (currentMode === 'reserved' && body.mode !== 'reserved') {
             cleanupSocialForModeChange();

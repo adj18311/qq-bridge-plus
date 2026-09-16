@@ -104,7 +104,7 @@ qq-bridge/
   docs/
     PROJECT_GUIDE.md    # detailed Chinese guide
   dsh/agent-presets/    # qq-chat / qq-chat-v2 DSH agent preset templates
-  plugins/qq-mode-console  # DSH settings qq-mode card plugin
+  plugins/qq-mode-console  # DSH plugin: registers the qq-mode settings namespace (host half only; no UI card yet)
   src/                  # bridge core and MCP servers
   public/
     console.html        # local web console

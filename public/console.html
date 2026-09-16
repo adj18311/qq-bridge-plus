@@ -997,7 +997,16 @@ async function saveMode(mode) {
   // 留空表示让桥接使用 DSH 自己声明的默认 preset。
   const preset = document.getElementById('closedPreset').value || '';
   const r = await api('/api/mode', 'POST', { mode, closedAgentPreset: preset });
-  if (r.ok) refresh(); else alert(r.error || '切换失败');
+  if (r.ok) {
+    refresh();
+    // 桥接会把模式写穿到 DSH 设置；写穿失败时本地值会在下一次 5 秒轮询被覆盖回滚。
+    // 不提示的话用户只会看到「刚切过去又自己变回来了」，无从判断原因。
+    if (r.dshSynced === false) {
+      alert('模式已写入本地，但未能同步到 DSH 设置（DSH 未运行？）——\n下一次轮询（约 5 秒）会把模式改回去。请检查 DSH 与桥接日志。');
+    }
+  } else {
+    alert(r.error || '切换失败');
+  }
   return r;
 }
 

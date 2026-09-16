@@ -74,7 +74,7 @@ qq-bridge/
 ├── dsh/
 │   └── agent-presets/          # qq-chat / qq-chat-v2 的 DSH preset 模板
 ├── plugins/
-│   └── qq-mode-console/        # DSH 设置页 qq-mode 卡片插件
+│   └── qq-mode-console/        # DSH 插件：注册 qq-mode 设置命名空间（仅 host 半，UI 卡片未实现）
 ├── assets/
 │   ├── deepseek娘.png          # AI 自我形象图（qq_get_self_image）
 │   └── project-intro.mp4       # 项目介绍视频（README 可查看）
@@ -288,7 +288,7 @@ DSH 事件流（api.events.mux → /api/remote.mux + session/follow + $events）
 - `start.bat`：守护启动（自动拉起、崩溃重启）。
 - `restart.bat`：停止旧 bridge 进程并重新拉起。
 - 控制台：`http://127.0.0.1:3100`（模式、人格、社交参数、白名单/管理员、黑话管理、控制台访问令牌、会话/挂起/日志）。
-- 模式：`state/mode.json` 或 DSH settings 的 `qq-mode`；运行 `scripts/setup-dsh.mjs` 的全新环境默认 `reserved2`。
+- 模式：在**控制台顶部模式按钮**切换（桥接会写穿到 DSH settings 的 `qq-mode`，并同时写 `state/mode.json` 作兜底）。读取时 **DSH 设置为准**，`state/mode.json` 只在 DSH 侧不可用时兜底 —— 所以别直接改本地文件。运行 `scripts/setup-dsh.mjs` 的全新环境默认 `reserved2`。
 
 ### 常用调试/测试脚本
 

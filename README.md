@@ -172,7 +172,7 @@ qq-bridge/
   docs/
     PROJECT_GUIDE.md    # 公开版项目说明书
   dsh/agent-presets/    # qq-chat / qq-chat-v2 的 DSH agent preset 模板
-  plugins/qq-mode-console  # DSH 设置页 qq-mode 卡片插件
+  plugins/qq-mode-console  # DSH 插件：注册 qq-mode 设置命名空间（仅 host 半，UI 卡片未实现）
   src/
     bridge.js           # 主程序
     dsh-client.js       # Node 版 DSH API 客户端（WS 下行）
