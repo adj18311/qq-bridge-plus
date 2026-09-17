@@ -39,10 +39,14 @@ for (const p of ['qq-chat', 'qq-chat-v2']) {
 }
 
 // ── 2. 部署侧：~/.dsh 已同步 ────────────────────────────────────────────────
+// 按「内容」比较而不是按字节：仓库 blob 存 LF，但 core.autocrlf=true 的 Windows
+// 工作区、以及 setup-dsh.mjs 写出的副本，都可能是 CRLF。换行不属于 YAML 语义，
+// 字节比较会在同一内容的两种换行之间误报（实测：一侧 CRLF 一侧 LF，归一化后同哈希）。
+const norm = (s) => s.replace(/\r\n/g, '\n');
 for (const p of ['qq-chat', 'qq-chat-v2']) {
-  const repo = fs.readFileSync(path.join(ROOT, 'dsh/agent-presets', p, 'agent.cordis.yml'), 'utf8');
+  const repo = norm(fs.readFileSync(path.join(ROOT, 'dsh/agent-presets', p, 'agent.cordis.yml'), 'utf8'));
   const inst = path.join(DSH_HOME, '.agent-presets', p, 'agent.cordis.yml');
-  const same = fs.existsSync(inst) && fs.readFileSync(inst, 'utf8') === repo;
+  const same = fs.existsSync(inst) && norm(fs.readFileSync(inst, 'utf8')) === repo;
   check(`~/.dsh/.agent-presets/${p} 与仓库一致`, same);
 }
 
