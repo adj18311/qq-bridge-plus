@@ -6,7 +6,9 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
-> ⚠️ **本分支/版本适配 DSH 0.1.5-rc.1**（已在 0.1.2-alpha.1 / 0.1.1-rc.2 上验证过同一协议）。使用 Cookie 鉴权、斜杠 RPC 和 `/api/remote.mux` 事件流；与旧版 DSH 协议不兼容。旧版请使用 `main` 分支。
+> ⚠️ **当前版本 `v0.1.5`，适配 DSH 0.1.5-rc.1**（同一协议已在 0.1.2-alpha.1 / 0.1.1-rc.2 上验证）。使用 Cookie 鉴权、斜杠 RPC 和 `/api/remote.mux` 事件流；与旧版 DSH 协议不兼容。
+>
+> 默认分支 `main` **就是**本版本，`git clone` 直接拿到，无需切换分支。未适配 0.1.5 的旧版（v0.1.0，仅支持旧 DSH 协议）保留在 tag [`v0.1.0`](releases/tag/v0.1.0)。
 
 ```
 QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──► DSH Web API (127.0.0.1:3080/api)
