@@ -13,6 +13,27 @@ import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } fr
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
+// 自测会话的清理句柄（见 cleanupSelfTestSession）。
+let selfTestApi = null;
+let selfTestSessionId = null;
+
+/**
+ * 归档自测会话。本脚本刻意不指定 agentPreset —— 它必须在跑过 setup-dsh.mjs 之前
+ * 也能用来诊断 DSH 链路；正因如此这个会话会带上 DSH 默认 preset（含 bash/文件工具），
+ * 更不能留在用户的 DSH 里累积。
+ */
+async function cleanupSelfTestSession() {
+  if (!selfTestApi || !selfTestSessionId) return;
+  const sid = selfTestSessionId;
+  selfTestSessionId = null;
+  try {
+    await selfTestApi.workspace.archiveSession({ sessionId: sid });
+    console.log('🧹 已归档自测会话:', sid);
+  } catch (error) {
+    console.log('⚠️ 自测会话归档失败（可在 DSH 里手动删除）:', sid, error?.message ?? error);
+  }
+}
+
 async function main() {
   const baseUrl = process.argv[2] ?? 'http://127.0.0.1:3080';
   let auth;
@@ -25,6 +46,7 @@ async function main() {
     };
   } catch {}
   const api = new NodeApiClient(baseUrl, undefined, auth);
+  selfTestApi = api;
   const promptText = process.argv[3] ?? '只回复两个字：收到';
 
   const desc = unwrap(await api.settings.describe({}), 'settings.describe');
@@ -35,6 +57,7 @@ async function main() {
   fs.mkdirSync(cwd, { recursive: true });
   const created = unwrap(await api.sessions.create({ cwd }), 'session.create');
   const sessionId = created.sessionId;
+  selfTestSessionId = sessionId;
   console.log('✅ 测试会话已创建:', sessionId);
 
   // 先订阅事件流（在 prompt 之前），再注入消息。
@@ -79,11 +102,13 @@ async function main() {
   console.log('✅ 回合结束 reason =', ended.reason.kind);
   console.log('🤖 agent 回复:');
   console.log(ended.text || '（无文本）');
+  await cleanupSelfTestSession();
   console.log('🎉 自测通过 —— DSH 侧链路可用');
   process.exit(0);
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   console.error('❌ 自测失败:', error?.message ?? error);
+  await cleanupSelfTestSession();
   process.exit(1);
 });

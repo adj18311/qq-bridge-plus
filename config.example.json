@@ -12,21 +12,17 @@
     "wsUrl": "ws://127.0.0.1:3001",
     "httpUrl": "http://127.0.0.1:3000",
     "accessToken": "",
-    "launcherPath": "C:\\path\\to\\SnowLuma\\launcher.bat",
-    "homeDir": "C:\\path\\to\\SnowLuma",
+    "launcherPath": "",
+    "homeDir": "",
     "allowProcessControl": false
   },
-  "ownerQQ": 123456789,
+  "ownerQQ": null,
   "sessionCwd": "",
   "agentPreset": "qq-chat",
   "workspaceTitle": "QQ 聊天",
   "allow": {
-    "private": [
-      123456789
-    ],
-    "groups": [
-      123456789
-    ]
+    "private": [],
+    "groups": []
   },
   "deny": {
     "private": [],
@@ -56,6 +52,7 @@
     "autoResearch": true
   },
   "social": {
+    "enabled": true,
     "maxReplyChars": 500,
     "mustReplyKeywords": [
       "deepseek",

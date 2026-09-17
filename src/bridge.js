@@ -1194,6 +1194,9 @@ async function main() {
 
   if (!cfg.allow.private.length && !cfg.allow.groups.length && cfg.allowAllWhenEmpty) {
     log('⚠️  白名单为空且 allowAllWhenEmpty=true：将转发所有私聊/群聊消息给 agent');
+  } else if (!cfg.allow.private.length && !cfg.allow.groups.length) {
+    // 否则这是一个「静默无响应」陷阱：消息全被丢弃，用户只看到 QQ 上毫无反应。
+    log(`⚠️  白名单为空且 allowAllWhenEmpty=false：不会响应任何 QQ 消息。请在 config.json 填 allow.private / allow.groups，或在控制台 http://127.0.0.1:${cfg.consolePort} 填写白名单`);
   }
 
   // DSH 侧
@@ -1342,20 +1345,30 @@ async function main() {
   }
 
   /**
-   * 解析一个 preset 名：在已知清单里就直接用；不在清单里时（清单尚未取到、
-   * 或用户填了已下线的名字）回退到 DSH 默认 preset，避免创建出「无 preset 会话」
-   * 而被 DSH 套上 standard（含本地工具）。
+   * 解析一个 preset 名。
+   *
+   * strict=false（closed-agent，仅 owner 私聊）：名字不可用时回退到 DSH 默认 preset ——
+   *   那里本来就用完整工具面，回退不构成提权。
+   * strict=true（chat / reserved / reserved2，会话可能属于 QQ 群）：名字不可用时返回 ''，
+   *   表示「没有可安全使用的 preset」，由调用方拒绝建会话（fail-closed）。
+   *   **绝不能回退到 DSH 默认 preset（standard）**：standard 含 bash/文件读写等本地工具，
+   *   一旦套在群聊会话上，群友即可驱动一个能操作本机的 agent（见 RULES.md「无本地工具」）。
    */
-  function resolvePresetName(name) {
+  function resolvePresetName(name, { strict = false } = {}) {
     const wanted = String(name ?? '').trim();
-    if (wanted && (dshPresetIds.length === 0 || dshPresetIds.includes(wanted))) return wanted;
-    if (wanted && !dshPresetIds.includes(wanted)) {
-      log(`⚠️ preset "${wanted}" 不在 DSH 可用清单（${dshPresetIds.join(', ') || '未知'}）中`);
+    if (!wanted) return strict ? '' : (dshDefaultPreset || '');
+    // 清单尚未取到：无法判定，按名字原样尝试（strict 下若 DSH 拒绝，调用方会拒绝建会话）
+    if (dshPresetIds.length === 0) return wanted;
+    if (dshPresetIds.includes(wanted)) return wanted;
+    log(`⚠️ preset "${wanted}" 不在 DSH 可用清单（${dshPresetIds.join(', ')}）中`);
+    if (strict) {
+      log(`⛔ 群聊/仿真会话缺少 preset "${wanted}"，拒绝回退到 DSH 默认 preset（会把本地工具暴露给 QQ 群）；请运行 node scripts/setup-dsh.mjs 并重启 DSH`);
+      return '';
     }
     return dshDefaultPreset || '';
   }
 
-  /** 当前模式下的会话预设 */
+  /** 当前模式下的会话预设；返回 undefined 表示「该模式下没有可安全使用的 preset」 */
   function modePreset(key, mode, cfg) {
     if (mode === 'closed-agent') {
       const chosen = resolvePresetName(closedAgentPreset);
@@ -1363,10 +1376,9 @@ async function main() {
       return chosen || undefined;
     }
     // 二代仿真模式优先使用 socialV2.agentPreset；未配置时回退到默认聊天预设。
-    // 全部走 resolvePresetName：即便 DSH 里 qq-chat* 还没装上，也只会回退到 DSH
-    // 自己声明的默认 preset，而不会退化成「无 preset」被 DSH 套上 standard。
-    if (mode === 'reserved2') return resolvePresetName(cfg.socialV2?.agentPreset || cfg.agentPreset) || undefined;
-    return resolvePresetName(cfg.agentPreset) || undefined;
+    // 非 closed-agent 一律 strict：宁可建不出会话，也不给群聊套上带本地工具的默认 preset。
+    const wanted = mode === 'reserved2' ? (cfg.socialV2?.agentPreset || cfg.agentPreset) : cfg.agentPreset;
+    return resolvePresetName(wanted, { strict: true }) || undefined;
   }
 
   /** 判断一个会话 key 是否仍被当前模式/白名单允许（供唤醒调度与 HTTP 路由共用）。 */
@@ -5199,13 +5211,21 @@ async function main() {
       let sessionId;
       let lastError = null;
       const preset = modePreset(key, currentMode, cfg);
+      // 非 closed-agent（chat / reserved / reserved2，会话可能属于 QQ 群）必须 fail-closed：
+      // 拿不到 qq-chat* 就拒绝建会话，绝不让 DSH 用默认 preset（standard）顶上——那会把
+      // bash/文件读写等本地工具暴露给 QQ 群里的任何人（见 RULES.md「无本地工具」）。
+      // closed-agent 仅 owner 私聊、本来就用完整工具面，回退不构成提权。
+      const strictPreset = currentMode !== 'closed-agent';
+      if (strictPreset && !preset) {
+        const wanted = currentMode === 'reserved2' ? (cfg.socialV2?.agentPreset || cfg.agentPreset) : cfg.agentPreset;
+        throw new Error(`拒绝为 ${key} 创建会话：模式 ${currentMode} 需要 preset "${wanted}"，但它不在 DSH 可用清单中（${dshPresetIds.join(', ') || '未知'}）。回退到 DSH 默认 preset 会把本地工具暴露给 QQ 群；请先运行 node scripts/setup-dsh.mjs 并重启 DSH。`);
+      }
       // 归组：所有 QQ 会话挂到同一个 workspace（幂等创建），GUI 里不再散落「未分组」
-      // 三段式创建（顺序有安全含义，不可简化为「失败就退化为无 preset 会话」）：
+      // 创建顺序有安全含义：
       //   1) workspace + agentPreset —— 正常路径；
-      //   2) workspace 无 preset     —— 仅当 preset 本身有问题时重试的降级路径；
-      //   3) 无参创建                —— 绝不使用：DSH 会用默认 preset（standard）建会话，
-      //      那会把 bash/文件读写等本地工具暴露给 QQ 群里的任何人（安全回归）。
-      for (const withPreset of [true, false]) {
+      //   2) workspace 无 preset     —— 仅 closed-agent 允许的降级（那里本就是完整工具面）；
+      //      群聊模式绝不走这一步：DSH 会给「无 preset 会话」套上默认 preset（standard）。
+      for (const withPreset of strictPreset ? [true] : [true, false]) {
         try {
           const wsValue = unwrap(await api.workspace.create({ path: dir }), 'workspace.create');
           if (wsValue.created && cfg.workspaceTitle) {

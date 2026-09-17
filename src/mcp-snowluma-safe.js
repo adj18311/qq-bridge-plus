@@ -158,7 +158,7 @@ async function authorizeRead(key, token) {
   await agentApi('/api/authorize/read', { method: 'POST', body: JSON.stringify({ key, token: token || undefined }) });
 }
 
-const server = new McpServer({ name: 'snowluma-safe', version: '0.1.0' });
+const server = new McpServer({ name: 'snowluma-safe', version: '0.1.5' });
 
 server.tool(
   'qq_status',

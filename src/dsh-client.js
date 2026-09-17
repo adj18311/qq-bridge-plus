@@ -13,7 +13,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AbstractApiClient } from '@deepseek-ai/dsh-host-apiproxy/client';
-import { muxFrameSchema, hostFrameSchema } from '@deepseek-ai/dsh-host-apiproxy/api/events.schema';
 
 /** 从 DSH guard 日志里自动发现最新的进程启动 token（新版 DSH 打印在 dsh web URL 上）。 */
 export function discoverDshLaunchToken() {
@@ -93,7 +92,9 @@ export class NodeApiClient extends AbstractApiClient {
     this.cookiePromise = null;
     this._authEpoch = 0;
     this._muxSendOpen = null;
-    this._pendingFollows = [];
+    // 期望 follow 的会话集合：**跨重连保留**。DSH 重启或 WS 中断后必须重放，
+    // 否则已有会话再也收不到 session 事件（turn/end 丢失 → QQ 上永远没有回复，且无报错）。
+    this._desiredFollows = new Set();
   }
 
   /** Node 没有 location；把 base 固定为配置的 DSH 地址（回环地址天然通过 /api 信任栅栏）。 */
@@ -234,8 +235,11 @@ export class NodeApiClient extends AbstractApiClient {
   }
 
   _followSession(sessionId) {
-    if (this._muxSendOpen) this._muxSendOpen(sessionId);
-    else if (!this._pendingFollows.includes(sessionId)) this._pendingFollows.push(sessionId);
+    if (!sessionId) return;
+    const sid = String(sessionId);
+    // 先记账再发送：即使此刻没有连接（或正处在重连窗口内），重连时也会重放。
+    this._desiredFollows.add(sid);
+    if (this._muxSendOpen) this._muxSendOpen(sid);
   }
 
   async *_remoteMuxGenerator(signal, onOpen) {
@@ -248,7 +252,6 @@ export class NodeApiClient extends AbstractApiClient {
     const inbox = [];
     let wake;
     let socketOpen = false;
-    let timer = null;
     let eventStreamId = null;
     let eventClientId = null;
     let ended = false;
@@ -266,7 +269,6 @@ export class NodeApiClient extends AbstractApiClient {
       this._muxSendOpen = null;
       // 连接断开（含鉴权失败/DSH 重启）时丢弃旧 Cookie，重连会重新 token exchange。
       this.invalidateAuth();
-      if (timer) clearInterval(timer);
       enqueue({ kind: 'end' });
     };
     const sendOpen = (sessionId) => {
@@ -311,7 +313,9 @@ export class NodeApiClient extends AbstractApiClient {
     const handleOpen = () => {
       socketOpen = true;
       this._muxSendOpen = sendOpen;
-      for (const sid of this._pendingFollows.splice(0)) sendOpen(sid);
+      // 重放**全部**期望 follow（跨重连保留），而不只是本次连接排队的那些。
+      // 少了这一步，DSH 一重启，所有已存在的 QQ 会话就会静默失联。
+      for (const sid of this._desiredFollows) sendOpen(sid);
       sendOpenEvents();
       onOpen?.();
     };
@@ -395,6 +399,9 @@ export class NodeApiClient extends AbstractApiClient {
           sessionToStream.delete(sessionId);
           streamToSession.delete(msg.streamId);
           followed.delete(sessionId);
+          // 服务端明确拒绝该会话的 follow（会话已被归档/删除）：从期望集合移除，不再重放，
+          // 否则每次重连都会为它白白产生一次错误。传输层断开不走这里，集合会保留。
+          this._desiredFollows.delete(sessionId);
           enqueue({
             kind: 'frame',
             envelope: { rpcId: msg.streamId, payload: { type: 'stream/error', error: msg.error } }
@@ -405,7 +412,6 @@ export class NodeApiClient extends AbstractApiClient {
     const handleClose = () => endStream();
     const handleError = () => endStream();
     const handleAbort = () => {
-      if (timer) clearInterval(timer);
       if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.close();
     };
     socket.addEventListener('open', handleOpen);
@@ -425,7 +431,6 @@ export class NodeApiClient extends AbstractApiClient {
       }
     } finally {
       this._muxSendOpen = null;
-      if (timer) clearInterval(timer);
       sig.removeEventListener('abort', handleAbort);
       socket.removeEventListener('open', handleOpen);
       socket.removeEventListener('message', handleMessage);

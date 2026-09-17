@@ -23,6 +23,7 @@
     "test:mcp-servers": "node scripts/test-mcp-servers-stdio.mjs",
     "test:plugin": "node scripts/test-qq-mode-plugin.mjs",
     "test:setup-idempotent": "node scripts/test-setup-dsh-idempotent.mjs",
+    "test:mux-reconnect": "node scripts/test-mux-reconnect.mjs",
     "probe:events": "node scripts/probe-events.mjs",
     "probe:tools": "node scripts/probe-tools.mjs",
     "postinstall": "node scripts/patch-snowluma-sdk.mjs"

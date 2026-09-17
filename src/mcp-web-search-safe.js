@@ -309,7 +309,7 @@ async function safeFetch(urlString) {
   throw new Error('重定向次数过多，已停止');
 }
 
-const server = new McpServer({ name: 'web-search-safe', version: '0.1.0' });
+const server = new McpServer({ name: 'web-search-safe', version: '0.1.5' });
 
 server.tool(
   'web_search',

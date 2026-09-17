@@ -19,6 +19,9 @@ config.json
 /RESEARCH_SNOWLUMA_EMOJI_STICKER.md
 /SnowLuma功能调研.md
 /真人语感策略.md
+# 花费实测档案：含个人用量数据，且未被任何公开文档引用 —— 默认不发布。
+# （如需公开，删掉这一行并挪到 docs/ 后从 README 链接，避免成为孤儿文件。）
+/TOKEN_COST.md
 
 # Local one-off dev/debug/patch scripts
 # (machine-specific paths/IDs, or bound to artifacts of a single probe run under state/)

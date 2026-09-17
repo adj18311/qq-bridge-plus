@@ -6,9 +6,9 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
-> ⚠️ **当前版本 `v0.1.5`，适配 DSH 0.1.5-rc.1**（同一协议已在 0.1.2-alpha.1 / 0.1.1-rc.2 上验证）。使用 Cookie 鉴权、斜杠 RPC 和 `/api/remote.mux` 事件流；与旧版 DSH 协议不兼容。
+> ⚠️ **当前版本 `v0.1.5`，适配 DSH 0.1.5-rc.1**（在该版本上逐项实测）。使用 Cookie 鉴权、斜杠 RPC 和 `/api/remote.mux` 事件流；这一代协议自 DSH `0.1.2-alpha.1` 起引入，与更早的点号 endpoint 协议不兼容——**DSH `0.1.1-rc.2` 及更早**请改用 tag [`v0.1.0`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0)。
 >
-> 默认分支 `main` **就是**本版本，`git clone` 直接拿到，无需切换分支。未适配 0.1.5 的旧版（v0.1.0，仅支持旧 DSH 协议）保留在 tag [`v0.1.0`](releases/tag/v0.1.0)。
+> 默认分支 `main` **就是**本版本，`git clone` 直接拿到，无需切换分支。
 
 ```
 QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──► DSH Web API (127.0.0.1:3080/api)
@@ -87,9 +87,9 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 
 > ⚠️ `allowAllWhenEmpty: true` 表示「白名单没填就全部放行」——把 agent 接入 QQ 等于把账号控制权交给了模型，建议先填白名单。
 
-### DSH 端安装（另一台设备 / 新环境）
+### DSH 端安装（必做：装 preset + 挂 MCP）
 
-桥接和控制台能跑起来还不够，DSH 端还需要安装两个聊天 preset（`qq-chat` / `qq-chat-v2`）并挂载 MCP：
+桥接和控制台能跑起来还不够，DSH 端还需要安装两个聊天 preset（`qq-chat` / `qq-chat-v2`）并挂载 MCP。**单机新装同样必须执行这一步**（不是只有「另一台设备」才需要），装完还要**重启 DSH**：
 
 ```bash
 node scripts/setup-dsh.mjs
@@ -101,37 +101,53 @@ node scripts/setup-dsh.mjs
 
 ## 完整启动流程（从零开始）
 
-共 5 步，DSH 和桥接都已就绪，缺的只是 SnowLuma 本体：
+共 6 步。DSH 已安装并运行，缺的是 SnowLuma 本体 + 桥接侧的 DSH 端安装（**第 2、3 步最容易漏，漏了 QQ 上会毫无反应**）：
 
 1. **DSH**（已运行，无需操作）
    确认 `http://127.0.0.1:3080` 能打开即可。
 
-2. **下载并解压 SnowLuma**
+2. **装桥接并复制配置**
+   ```bash
+   git clone https://github.com/Derpyu520/qq-bridge.git
+   cd qq-bridge
+   npm install
+   ```
+   Windows CMD 用 `copy config.example.json config.json`，其他平台用 `cp config.example.json config.json`。
+   **示例模板里 `allow.private` / `allow.groups` 是空数组**——空白名单 + `allowAllWhenEmpty: false` 时桥接不响应任何消息（这是刻意的 fail-closed 默认值）。白名单在第 5 步填。
+
+3. **装 DSH 端（preset + MCP），然后重启 DSH**
+   ```bash
+   node scripts/setup-dsh.mjs
+   ```
+   装完**必须重启 DSH**——preset 与 MCP 只在 DSH 启动时加载。
+   跳过这步桥接不会崩，但群聊会话拿不到 `qq-chat` preset，桥接会**拒绝建会话**（有意的安全设计：绝不回退到带 bash/文件工具的默认 preset），表现同样是 QQ 上没反应。
+
+4. **下载并解压 SnowLuma**
    - 下载：<https://github.com/SnowLuma/SnowLuma/releases/latest> 选 `SnowLuma-v<版本>-win-x64.zip`（完整版，自带 Node 运行时；Lite 版需本机 Node 22.13+）
    - 解压到任意目录（例如 `C:\SnowLuma`），双击 `launcher.bat`
 
-3. **首次引导（WebUI）**
+5. **首次引导（WebUI）+ 填写桥接配置**
    - 打开启动日志里的 WebUI 地址（README 写的是 `http://localhost:5099`，以你启动日志里实际打印的为准）
    - 用**启动日志中的初始密码**登录，按引导：同意条款 → 设置密码 → 接入 QQ 进程（扫码登录）
    - 在 WebUI 里配置 OneBot 连接：开启 **WebSocket 服务端** 和 **HTTP API**，分别记下**端口**（默认 WS `3001`、HTTP `3000`）和 **accessToken**（若配置了）
+   - 回到 `config.json` 填好 `snowluma` 段，并把 `allow.private` / `allow.groups` 换成**你自己的 QQ 号 / 群号**：
 
-4. **填写桥接配置**（`config.json`）
-   ```json
-   "snowluma": {
-     "wsUrl": "ws://127.0.0.1:3001",
-     "httpUrl": "http://127.0.0.1:3000",
-     "accessToken": "你在 WebUI 里配置的 token（没配置就留空）"
-   }
-   ```
+     ```json
+     "snowluma": {
+       "wsUrl": "ws://127.0.0.1:3001",
+       "httpUrl": "http://127.0.0.1:3000",
+       "accessToken": "你在 WebUI 里配置的 token（没配置就留空）"
+     }
+     ```
+
    `wsUrl` 是 OneBot **WebSocket** 端口，`httpUrl` 是 OneBot **HTTP API** 端口（不要填成同一个 WS 端口，否则 MCP 工具会报 HTTP 426）。
-   建议顺手把 `allow.private` / `allow.groups` 白名单填上。
 
-5. **启动桥接**
+6. **启动桥接**
    ```bash
-   cd qq-bridge
-   npm start          # 或双击 start.bat
+   npm start          # 前台运行（崩溃不自动重启）
    ```
    看到 `SnowLuma 已连接` 即成功；然后 QQ 上给机器人账号发条消息测试。
+   Windows 想要「崩溃自动重启」请改用 `start.bat`（见下节）。
 
 ## 运行与运维
 
@@ -153,7 +169,6 @@ npm start          # 或双击 start.bat（守护模式：崩溃自动重启，�
 12:00:02 [bridge] 新会话 private:12345678 -> sess_xxxx
 12:00:02 [bridge] 已投递 private:12345678: 你好
 12:00:20 [bridge] agent 回复 (private:12345678) 42 字
-```
 ```
 
 ## 自测（不需要 SnowLuma / QQ）
