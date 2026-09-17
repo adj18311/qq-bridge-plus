@@ -3,6 +3,8 @@
 **English**: [README.en.md](README.en.md) | **中文**: [README.md](README.md)
 
 > 📘 详细内外核说明书见 **[docs/PROJECT_GUIDE.md](docs/PROJECT_GUIDE.md)**（架构、数据流、配置全解、调试与改进指南）。
+>
+> 🔒 QQ 会话的权限边界与安全承诺见 **[RULES.md](RULES.md)**。
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
@@ -18,9 +20,9 @@ QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──�
 
 ## 项目展示
 
-📽️ [AI 仿真群友 - 项目介绍视频](assets/project-intro.mp4)
+📽️ [AI 仿真群友 - 项目介绍视频](https://github.com/Derpyu520/qq-bridge/releases/download/v0.1.5/project-intro.mp4)（约 11 MB）
 
-> 视频文件位于 `assets/project-intro.mp4`，可直接下载观看。
+> 视频改由 **Release 附件**托管，不在仓库里——只想安装桥接的人不必再下载这 11 MB（它此前占整个仓库体积的 88%）。
 
 ## 架构
 

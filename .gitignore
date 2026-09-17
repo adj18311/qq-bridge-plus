@@ -23,6 +23,14 @@ config.json
 # （如需公开，删掉这一行并挪到 docs/ 后从 README 链接，避免成为孤儿文件。）
 /TOKEN_COST.md
 
+# 本地模型选型 / 硬件配置调研（内部笔记，无任何公开文档引用）
+/LOCAL_MODEL_SIZING.md
+
+# 大体积演示视频（10.93 MB）：改由 Release 附件托管，README 有链接。
+# 注意：移除只影响此后提交、--depth 1 克隆与 Release 的 Source zip；
+# 历史中的旧 blob 仍在，完整 clone 的体积要等历史重写后才会下降。
+/assets/project-intro.mp4
+
 # Local one-off dev/debug/patch scripts
 # (machine-specific paths/IDs, or bound to artifacts of a single probe run under state/)
 /scripts/cleanup-probe-sessions.mjs

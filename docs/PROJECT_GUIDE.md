@@ -76,8 +76,8 @@ qq-bridge/
 ├── plugins/
 │   └── qq-mode-console/        # DSH 插件：注册 qq-mode 设置命名空间（仅 host 半，UI 卡片未实现）
 ├── assets/
-│   ├── deepseek娘.png          # AI 自我形象图（qq_get_self_image）
-│   └── project-intro.mp4       # 项目介绍视频（README 可查看）
+│   └── deepseek娘.png          # AI 自我形象图（qq_get_self_image）
+│                               # 项目介绍视频不进仓库，改由 Release 附件托管（README 有链接）
 ├── scripts/                    # 通用测试/辅助脚本（含 setup-dsh.mjs）
 ├── config.example.json         # 配置模板（占位符，不含真实凭据）
 ├── package.json
