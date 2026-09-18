@@ -74,14 +74,14 @@ P1 表示可能破坏主要权限或可用性边界、应优先修复；P2 表�
 
 | 编号 | 优先级 | 原问题、触发条件与影响 | 修复 |
 | --- | --- | --- | --- |
-| B1 | P1 | `ensureSession()` 只按 QQ key 复用 DSH session。管理员从 `closed-agent` 切回 `chat` 后仍可能继续使用带本地工具的旧 preset，违反 RULES 的降权承诺。 | 持久化权限元数据；模式/preset/准入变化时撤销旧映射、取消待处理交互、轮换二代 token、清理调度；在 DSH 清理该会话待处理消息、取消当前回合并归档。下次消息创建合适的 session。 |
-| B2 | P1 | preset 清单未知时 strict 仍返回配置名；学习会话也没有同等校验。DSH 接受未知 preset 并应用默认配置时可能形成权限降级失败。 | strict 在清单未知/缺少目标时拒绝使用；黑话学习会话同样检查，持久化 preset 身份，不复用没有元数据的旧学习映射。 |
+| B1 | P1 | `ensureSession()` 只按 QQ key 复用 DSH session。管理员从 `closed-agent` 切回 `chat` 后仍可能继续使用带本地工具的旧 preset，违反 RULES 的降权承诺。 | 持久化权限元数据；模式/preset/准入变化时撤销旧映射、取消待处理交互、轮换二代 token、清理调度；走 `retireSession` 的路径会在 DSH 清理该会话待处理消息、取消当前回合并归档（重置路径的同等处理见 §3.5）。下次消息创建合适的 session。 |
+| B2 | P1 | preset 清单未知时 strict 仍返回配置名；学习会话也没有同等校验。DSH 接受未知 preset 并应用默认配置时可能形成权限降级失败。 | strict 在清单未知/缺少目标时拒绝使用；黑话学习会话同样检查，持久化 preset 身份，不复用没有元数据的旧学习映射。复核时对照本机 DSH 源码（`presets.resolve()` 对未知 preset 返回 `agent-preset/not-found`），本机版本其实会拒绝未知 preset，因此这里是纵深防御与更清晰的报错；代价见 §7.8。 |
 | B3 | P2 | 创建会话、选择模型或解析图片期间发生 reset/切模式，旧异步操作仍可能返回/投递到过期 session。 | 在异步边界后复核代际、权限策略、映射和准入；旧事件、提问和审批不再当成当前会话处理。 |
 | B4 | P2 | 消息进入发送队列后撤销白名单或切换模式，已排队内容仍会发送。 | 普通回复、一代分条、二代消息、表情与收藏动作在实际发出前复核；过期发送取消并记录原因。已经进入网关的请求无法撤回。 |
 | B5 | P2 | reset 后旧 prompt 的 `finally` 无条件删除相同 key 的队列，可能删掉新队列，导致顺序失控或后续等待挂起。 | 只有 map 中仍是原 entry 时，旧任务才可继续处理或删除它。 |
 | B6 | P2 | 控制台在 handler 的保护范围外解析 URL。`http://[` 等畸形 request target 导致未处理拒绝；生产处理器虽会记录，却不会正常回应请求。 | 捕获 URL 解析错误并返回 HTTP 400、关闭连接；无需令牌也能触发的异常路径已被覆盖。 |
 
-最初五项桥接回归在旧代码上全部失败：跨模式复用、清单未知放行、创建期间模式改变、撤销白名单后仍发送、旧队列删除新队列。修复后这些场景及追加的历史映射、模型选择 reset、畸形 HTTP、表情字节发送场景全部通过。
+最初五项桥接回归在旧代码上全部失败：跨模式复用、清单未知放行、创建期间模式改变、撤销白名单后仍发送、旧队列删除新队列。修复后这些场景及追加的历史映射、模型选择 reset、畸形 HTTP、控制台重置清理、表情字节发送场景全部通过。
 
 ### 3.2 DSH 鉴权与事件恢复
 
@@ -91,7 +91,7 @@ P1 表示可能破坏主要权限或可用性边界、应优先修复；P2 表�
 | D2 | P2 | 多个旧 Cookie 请求同时返回 401，相互使已经开始的新鉴权失效。 | 以鉴权代际判断是否仍需失效，复用同一次刷新；释放废弃响应正文。 |
 | D3 | P2 | token 交换没有独立时限，调用方取消不能及时结束等待；预取消事件流仍可能开 socket。 | 换票使用有界时限；调用方可以独立取消等待而不破坏其他共享调用；建 socket 前检查取消状态。 |
 | D4 | P2 | follow 发送失败仍保留“已订阅”状态；`$events` 单独结束或报错后不恢复；临时 follow 错误被当成永久消失。 | 发送失败撤销记录并结束传输；提问/审批流失效触发整条 mux 重连；只有 `session/not-found` 永久移除订阅，临时错误保留后重试。 |
-| D5 | P1（支撑 B1） | DSH `session/cancel` 保留 inbox，`archiveSession` 仅归档显示，二者单独使用不能终止已经排队的高权限工作。 | 新增有界 `stopSessionWork()`：读取 `session/control` baseline，仅删除目标 session 的 itemId，然后 cancel；独立 socket 在正常、失败、超时路径关闭。默认总时限 8 秒，失败明确记录。 |
+| D5 | P1（支撑 B1） | DSH `session/cancel` 保留 inbox，`archiveSession` 仅归档显示，二者单独使用不能终止已经排队的高权限工作。 | 新增有界 `stopSessionWork()`：读取 `session/control` baseline，仅删除目标 session 的 itemId，然后 cancel；独立 socket 在正常、失败、超时路径关闭。默认总时限 8 秒，失败明确记录。**该清理是尽力而为，不是服务端原子事务**：`stopSessionWork` 失败时归档仍会继续，已在执行的工具副作用不能撤回；重置路径的同等处理见 §3.5。 |
 
 RPC 的 `session/cancel` / `session/updateQueue` 参数和 `session/control` baseline 形状对照了本机 DSH 类型与实现，并使用模拟 socket/RPC 验证。该流程并非服务端原子事务；已执行工具的副作用不能撤回。
 
@@ -122,6 +122,23 @@ RPC 的 `session/cancel` / `session/updateQueue` 参数和 `session/control` bas
 
 YAML 结构化序列化会调整格式并移除原文注释；`.qq-bridge.bak` 保留首次改写前的原文。备份不是持续历史版本管理，也不能替代用户自己的 DSH 配置备份。
 
+### 3.5 复核轮追加修复（重置路径）
+
+第一轮修复把 DSH 侧的「清队列 + cancel」只接在 `retireSession()` 上（模式/preset/准入变化与代际失效走这里）。独立复核发现三条重置路径绕过了它：`/api/session/reset`、管理员 `/reset` 命令、`/api/workspace/reset`。它们会 `delete state.sessions[key]`（或整体清空 `state.sessions`），却**不删除 `state.sessionPolicies`**，也不调用 `stopSessionWork`，结果：
+
+- 权限元数据永久残留在 `state/sessions.json`（孤儿条目，且会误导后续排查）；
+- 旧会话只被归档。归档只隐藏会话，DSH 侧排队的消息与正在执行的回合都还在——正是 D5 要解决的问题，于是「重置」并没有真正停掉旧工作。
+
+| 编号 | 优先级 | 问题 | 修复 |
+| --- | --- | --- | --- |
+| B7 | P2 | 三条重置路径孤儿化 `sessionPolicies`，且不终止旧会话在 DSH 侧的工作。 | 三条路径都删除对应（或全部）`sessionPolicies` 条目；归档前改为先 `stopSessionWork(oldSessionId)`，失败记明确告警并提示在 DSH 检查；工作区重置额外统计并返回 `stoppedCount`。 |
+| B8 | P3 | `_readSessionQueue` 在 `signal.aborted` 检查之前就 `ensureAuth` 并新建 WebSocket，已取消的等待仍会开一条连接。 | 建 socket 前先 `signal.throwIfAborted()`（与 `_remoteMuxGenerator` 一致）。 |
+
+新增回归 `test-audit-bridge.mjs` 的「控制台重置清理」场景：先建会话，再 POST `/api/session/reset`，断言映射与权限元数据都被清掉、且 `stopSessionWork` 确实被调用。该断言在修复前的代码上失败（`policy must not be orphaned by reset`），修复后通过——即它验证的是本次修复的行为，不是既有行为。
+
+仍未处理（已知边界，非本轮目标）：`captureSendGuard` 是策略快照而非会话身份校验，入队时若尚无映射，同一 key 在相同策略下重建不会被该守卫识别（白名单与模式变化仍会拦截，不构成越权）；`stopSessionWork` 失败时归档照常进行，已在执行的工具副作用无法撤回。
+
+
 ## 4. 双轴审查结果
 
 ### Standards（规则与可维护性）
@@ -148,7 +165,7 @@ npm run test:audit
 
 | 验证 | 结果与内容 |
 | --- | --- |
-| `test-audit-bridge.mjs` | 9 个场景：权限降级、未知 preset、创建竞态、撤销发送、队列替换、历史映射、模型选择 reset、HTTP 400、表情字节发送。 |
+| `test-audit-bridge.mjs` | 10 个场景：权限降级、未知 preset、创建竞态、撤销发送、队列替换、历史映射、模型选择 reset、HTTP 400、控制台重置清理、表情字节发送。 |
 | `test-audit-protocol.mjs` | 13 个场景：取消 RPC 形状、鉴权拒绝/并发/取消/时限、目标队列清理、control 超时/失败关闭、订阅恢复。 |
 | `test-audit-protocol-helpers.mjs` | 5 个场景：表情精确匹配、签名 URL、截断列表保留、分段上限、转发元数据。 |
 | `test-audit-security.mjs` | 11 个场景：审计、IPv6、DNS、IP 固定/Host/SNI、重定向、读取上限、总时限、中断和无效参数。 |
@@ -188,6 +205,8 @@ npm run test:audit
 5. **控制台令牌体验**：多个并发 401 响应可能反复弹出输入框。建议将登录流程集中管理，取消后暂停自动重试；本轮未修改界面交互。
 6. **架构和 IO**：逐步提取会话生命周期、统一授权层、出站队列、HTTP 路由和状态仓库；同步读写文件/日志在消息高峰会阻塞事件循环。应先测量再做异步化，避免改变时序后引入竞态。
 7. **运维与依赖**：未做依赖漏洞数据库联网扫描、真实 QQ/DSH 压测、网关兼容性验收。尤其图片改为 base64 后，应在维护窗口用管理员测试会话验证网关接受格式。
+8. **preset 清单获取失败时的可用性代价**：B2 改为 fail-closed 后，若 `agentPresets/list` 调用失败，`dshPresetIds` 会保持为空，此时非 `closed-agent` 模式的建会话一律拒绝，直到下一次 5 秒轮询成功——即该窗口内群聊不可用。这是有意的取舍（宁可拒绝也不套用未知 preset），但升级说明应写明：DSH 刚重启或鉴权异常时，QQ 侧可能短暂无响应，并伴随「缺少已验证的安全 preset」类日志。
+9. **`captureSendGuard` 的身份粒度**：它是「策略快照」而不是「会话身份」校验。入队时若该 key 还没有映射（`sessionId` 为空），同一 key 在相同策略下重建的会话不会被它识别为过期。白名单移除与模式/preset 变化仍会被拦截，因此不构成越权；若要严格化，应比较发送时刻的实时映射而非快照。
 
 本次已修复项以报告中的回归证据为准；以上架构边界和未执行的线上验证没有被宣称为已解决。
 
@@ -196,5 +215,9 @@ npm run test:audit
 28 个代码、测试和文档文件已写回指定原项目，逐文件核对 SHA-256。新增的两个依赖已补齐，本次没有创建 Git 提交。
 
 写回后在原项目再次执行 `node scripts/test-audit.mjs`，结果仍为 **10/10 脚本通过**。新增测试全部使用隔离夹具；实际 `config.json`、`state/` 与已安装的 DSH preset 没有被这些测试修改。在线桥接、MCP 和 DSH 进程尚未重新加载本轮修改。
+
+### 8.1 复核轮（追加）
+
+上述 28 个文件随后作为一个提交发布到公开仓库。发布前的独立复核对照本机 DSH 源码逐条核对了 B1–B6 / D1–D5，确认两项 P1 声明（B1 权限继承、B2 fail-closed）在真实代码中成立、改动行没有引入权限缺口或 fail-open 路径；同时发现并修复了 §3.5 的重置路径问题（B7/B8），并追加了对应的回归场景。核对数据：`npm run test:audit` **10/10**；`verify-dsh-015-adaptation` 37 通过 / 8 失败，8 项全部是 §5 所述的 `spawnSync … EPERM` 管道环境限制；68 个 JS/MJS 文件 `node --check` 全部通过。
 
 修改前的源文件备份与清单：`D:\LWQ\Agent Workspace\Codex\qq-bridge-audit-backup-20260918`。其中 `manifest.json` 记录哪些文件原先存在及修改前哈希；恢复时应只还原列出的源文件，并单独处理本轮新增文件，避免覆盖运行状态。

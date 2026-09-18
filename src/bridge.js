@@ -4446,6 +4446,8 @@ async function main() {
           sessionEpoch++;
           const oldSessionId = state.sessions[key];
           delete state.sessions[key];
+          // 权限元数据必须与映射一起删除，否则会永久残留在 sessions.json 里。
+          delete state.sessionPolicies[key];
           reverse.delete(oldSessionId);
           collectors.delete(oldSessionId);
           sendToolSucceededSessions.delete(oldSessionId);
@@ -4484,14 +4486,18 @@ async function main() {
           seenForwardIds.delete(key);
           saveSocialV2State();
           saveState();
+          // 归档只隐藏会话，不终止 DSH 侧排队的工作；先清队列并取消当前回合。
+          try { await api.stopSessionWork(oldSessionId); }
+          catch (error) { log(`⚠️ 停止旧会话失败 ${key}：${error?.message ?? error}；请在 DSH 检查旧任务`); }
           try { await api.workspace.archiveSession({ sessionId: oldSessionId }); } catch {}
-          log(`控制台：已清除会话上下文 ${key}（旧会话 ${oldSessionId} 已归档）`);
+          log(`控制台：已清除会话上下文 ${key}（旧会话 ${oldSessionId} 已停止并归档）`);
           sendJson({ ok: true, key, archived: oldSessionId });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/workspace/reset') {
           sessionEpoch++;
           let archivedCount = 0;
+          let stoppedCount = 0;
           try {
             // 新版 DSH 不再提供 workspace.list；改为扫描本桥接创建的会话目录并归档。
             // 只处理 cwd 位于 qq-bridge state/ 下的根会话；子代理会话由父会话管理，不能误归档。
@@ -4506,6 +4512,9 @@ async function main() {
               if (item.origin === 'subagent' || item.parentSessionId) continue;
               const cwd = normPath(item.cwd);
               if (isUnderState(cwd)) {
+                // 归档只隐藏会话；必须先把 DSH 侧排队的工作清掉并取消当前回合。
+                try { await api.stopSessionWork(item.sessionId); stoppedCount += 1; }
+                catch (error) { log(`⚠️ 停止旧会话失败 ${item.sessionId}：${error?.message ?? error}；请在 DSH 检查旧任务`); }
                 try { await api.workspace.archiveSession({ sessionId: item.sessionId }); archivedCount += 1; } catch {}
               }
             }
@@ -4538,6 +4547,7 @@ async function main() {
           socialV2.conversations.clear();
           saveSocialV2State();
           state.sessions = {};
+          state.sessionPolicies = {};
           reverse.clear();
           collectors.clear();
           sendToolSucceededSessions.clear();
@@ -4546,8 +4556,8 @@ async function main() {
           toolCallNames.clear();
           saveState();
           try { fs.writeFileSync(ACTIVITY_LOG, ''); } catch {}
-          log(`控制台：已清空 QQ 聊天工作区（归档 ${archivedCount} 个会话，映射与活动日志已清空）`);
-          sendJson({ ok: true, archivedCount });
+          log(`控制台：已清空 QQ 聊天工作区（停止 ${stoppedCount} 个、归档 ${archivedCount} 个会话，映射与活动日志已清空）`);
+          sendJson({ ok: true, archivedCount, stoppedCount });
           return;
         }
         // ── 重启桥接（守护模式下 5 秒后自动拉起） ──────────────────────────────
@@ -7411,6 +7421,7 @@ async function main() {
         if (old) {
           sessionEpoch++;
           delete state.sessions[key];
+          delete state.sessionPolicies[key];
           reverse.delete(old);
           collectors.delete(old);
           sendToolSucceededSessions.delete(old);
@@ -7449,6 +7460,10 @@ async function main() {
           seenForwardIds.delete(key);
           saveSocialV2State();
           saveState();
+          // 与 retireSession 一致：先终止 DSH 侧排队的工作，再归档（归档只隐藏会话）。
+          try { await api.stopSessionWork(old); }
+          catch (error) { log(`⚠️ 停止旧会话失败 ${key}：${error?.message ?? error}；请在 DSH 检查旧任务`); }
+          try { await api.workspace.archiveSession({ sessionId: old }); } catch {}
           await sendToQQ(key, '已重置会话，下次消息将开新上下文');
         }
         return;

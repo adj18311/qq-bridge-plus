@@ -92,6 +92,32 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     assert.equal(status, 400);
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
+{ // 控制台重置路径必须与 retireSession 一样：清掉权限元数据并终止 DSH 侧排队的工作。
+  const h = await bridgeHarness();
+  const server = h.startConsoleServer();
+  try {
+    if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
+    const sessionId = await h.ensureSession('private:123');
+    assert.ok(h.state.sessionPolicies['private:123'], 'policy should exist before reset');
+    h.calls.cancelled.length = 0;
+    const status = await new Promise((resolve, reject) => {
+      const request = http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/session/reset?token=fixture-console-token', method: 'POST',
+        headers: { 'content-type': 'application/json' } }, (response) => {
+        response.resume();
+        response.on('end', () => resolve(response.statusCode));
+      });
+      request.on('error', reject);
+      request.setTimeout(3000, () => request.destroy(new Error('reset request hung')));
+      request.end(JSON.stringify({ key: 'private:123' }));
+    });
+    assert.equal(status, 200);
+    assert.equal(h.state.sessions['private:123'], undefined);
+    assert.equal(h.state.sessionPolicies['private:123'], undefined, 'policy must not be orphaned by reset');
+    assert.ok(h.calls.cancelled.includes(sessionId), 'reset must stop the retired DSH session');
+    console.log('PASS console reset drops the session policy and stops the retired DSH session');
+  } catch (error) { failures++; console.error('FAIL console reset cleanup:', error.message); }
+  finally { await new Promise((resolve) => server.close(resolve)); await h.close(); }
+}
 {
   const image = Buffer.from('89504e470d0a1a0a00000000', 'hex');
   let body;

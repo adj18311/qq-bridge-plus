@@ -198,6 +198,7 @@ export class NodeApiClient extends AbstractApiClient {
 
   async _readSessionQueue(sessionId, signal) {
     await this.ensureAuth(signal);
+    // 建 socket 前先检查取消状态：已经取消的等待不应该再开一条连接。
     signal.throwIfAborted();
     const url = new URL('/api/remote.mux', this.baseUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
