@@ -4,7 +4,7 @@
 // - 禁止 localhost / .local / 私有 IP / 环回 / 链路本地 / CGNAT 等内网地址
 // - 域名先 DNS 解析并检查全部解析结果，避免 DNS rebinding
 // - 手动跟随重定向，每一跳重新校验
-// - 响应体按字符数限量读取，避免超大响应拖垮进程
+// - 响应体限量读取，每次请求有包含响应体的总时限
 import dns from 'node:dns';
 import net from 'node:net';
 import http from 'node:http';
@@ -64,10 +64,11 @@ function parseEmbeddedIpv4(h) {
 }
 
 export function isPrivateIp(ip) {
-  const h = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (!h) return true;
-  const embedded = h.includes(':') ? parseEmbeddedIpv4(h) : null;
-  if (embedded) return isPrivateIp(embedded);
+  let h = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const family = net.isIP(h);
+  // DNS 返回值也必须是有效 IP；不能把非法地址当成公网地址。
+  if (!family || h.includes('%')) return true;
+  if (family === 6) h = new URL(`http://[${h}]/`).hostname.slice(1, -1);
 
   if (net.isIP(h) === 4) {
     const parts = h.split('.').map(Number);
@@ -89,6 +90,10 @@ export function isPrivateIp(ip) {
     if (h.startsWith('fc') || h.startsWith('fd')) return true;
     if (/^fe[89ab]/.test(h)) return true;
     if (h.startsWith('fec') || h.startsWith('fed') || h.startsWith('fee') || h.startsWith('fef')) return true;
+    // 本地 NAT64 前缀的 IPv4 位布局不等同 /96；整个本地前缀均不可供公网抓取。
+    if (h.startsWith('64:ff9b:1:')) return true;
+    const embedded = parseEmbeddedIpv4(h);
+    if (embedded) return isPrivateIp(embedded);
     if (h.startsWith('2001:db8')) return true;
     if (h.startsWith('2001:2:') || h.startsWith('2001:10:') || h.startsWith('2001:20:')) return true;
     const sixth4 = h.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4}):/i);
@@ -101,11 +106,11 @@ export function isPrivateIp(ip) {
     return false;
   }
 
-  return false;
+  return true;
 }
 
 export async function resolveSafeHost(hostname) {
-  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (!h) throw new Error('主机名为空');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) {
     throw new Error('禁止访问内网/本机地址');
@@ -142,76 +147,115 @@ export async function validateFetchUrl(raw) {
   return { url, ip };
 }
 
-function sliceByCodePoints(s, max) {
-  if (s.length <= max) return s;
-  return Array.from(s).slice(0, max).join('');
+const REQUEST_TIMEOUT_MS = 20000;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function validateLimit(value, name) {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} 必须为正整数`);
 }
 
-function readBoundedText(res, maxChars) {
+// 使用已校验的 IP 发起请求，保留原始 Host/SNI，禁止重新解析 DNS。
+// 总时限包含 TCP/TLS、响应头和响应体；仅 socket idle timeout 无法阻止慢速滴流。
+function requestOnce(url, ip, limit, binary = false) {
   return new Promise((resolve, reject) => {
-    const decoder = new StringDecoder('utf8');
-    let text = '';
     let settled = false;
-    const finish = (fn, val) => {
+    let req;
+    let response;
+    const finish = (error, result) => {
       if (settled) return;
       settled = true;
-      fn(val);
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(result);
     };
-    res.on('data', (chunk) => {
-      if (settled) return;
-      text += decoder.write(chunk);
-      if (text.length >= maxChars) {
-        text = sliceByCodePoints(text, maxChars);
-        try { res.destroy(); } catch {}
-        finish(resolve, text);
-      }
-    });
-    res.on('end', () => {
-      if (!settled) {
-        text += decoder.end();
-        finish(resolve, sliceByCodePoints(text, maxChars));
-      }
-    });
-    res.on('error', (err) => finish(reject, err));
-  });
-}
-
-function requestOnce(url, ip, maxChars = 50000) {
-  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error(`请求超时：${url.hostname}`);
+      finish(error);
+      req?.destroy(error);
+      response?.destroy();
+    }, REQUEST_TIMEOUT_MS);
     const mod = url.protocol === 'https:' ? https : http;
-    const port = url.port || (url.protocol === 'https:' ? 443 : 80);
-    const req = mod.request({
-      hostname: ip,
-      port,
-      path: url.pathname + url.search,
-      method: 'GET',
-      headers: {
-        host: url.host,
-        'user-agent': 'Mozilla/5.0',
-        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'accept-language': 'zh-CN,zh;q=0.9',
-      },
-      servername: url.protocol === 'https:' ? url.hostname : undefined,
-      rejectUnauthorized: url.protocol === 'https:',
-      timeout: 20000,
-    }, (res) => {
-      const statusCode = res.statusCode || 0;
-      if ([301, 302, 303, 307, 308].includes(statusCode)) {
-        res.resume();
-        resolve({ statusCode, redirect: String(res.headers.location || '') });
-        return;
-      }
-      readBoundedText(res, maxChars)
-        .then((body) => resolve({ statusCode, body }))
-        .catch(reject);
-    });
-    req.on('timeout', () => req.destroy(new Error(`请求超时：${url.hostname}`)));
-    req.on('error', reject);
-    req.end();
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    try {
+      req = mod.request({
+        hostname: ip,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname + url.search,
+        method: 'GET',
+        headers: {
+          host: url.host,
+          'user-agent': 'Mozilla/5.0',
+          accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'accept-language': 'zh-CN,zh;q=0.9',
+        },
+        servername: url.protocol === 'https:' && !net.isIP(hostname) ? hostname : undefined,
+        rejectUnauthorized: url.protocol === 'https:',
+        timeout: REQUEST_TIMEOUT_MS,
+      }, (res) => {
+        response = res;
+        res.on('error', (error) => finish(error));
+        res.on('aborted', () => finish(new Error('响应体读取中断')));
+        res.on('close', () => {
+          if (!res.complete) finish(new Error('响应体读取中断'));
+        });
+        if (settled) { res.destroy(); return; }
+        const statusCode = res.statusCode || 0;
+        if (REDIRECT_STATUSES.has(statusCode)) {
+          finish(null, { statusCode, redirect: String(res.headers.location || '') });
+          // 不下载重定向正文：攻击者可以发送无限正文消耗连接和带宽。
+          res.destroy();
+          return;
+        }
+        const chunks = [];
+        const decoder = binary ? null : new StringDecoder('utf8');
+        let size = 0;
+        const appendText = (text) => {
+          const points = Array.from(text);
+          const remaining = limit - size;
+          chunks.push(points.slice(0, remaining).join(''));
+          size += Math.min(points.length, remaining);
+          if (size >= limit) {
+            finish(null, { statusCode, body: chunks.join(''), truncated: true });
+            res.destroy();
+          }
+        };
+        res.on('data', (chunk) => {
+          if (settled) return;
+          if (!binary) { appendText(decoder.write(chunk)); return; }
+          size += chunk.length;
+          if (size > limit) {
+            finish(new Error(`图片超过大小限制（${limit} 字节）`));
+            res.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => {
+          if (settled) return;
+          if (binary) finish(null, { statusCode, buffer: Buffer.concat(chunks) });
+          else {
+            appendText(decoder.end());
+            finish(null, { statusCode, body: chunks.join(''), truncated: false });
+          }
+        });
+      });
+      req.on('timeout', () => {
+        const error = new Error(`请求超时：${url.hostname}`);
+        finish(error);
+        req.destroy(error);
+        response?.destroy();
+      });
+      req.on('error', (error) => finish(error));
+      req.end();
+    } catch (error) {
+      finish(error);
+      req?.destroy();
+    }
   });
 }
 
 export async function safeFetch(urlString, maxChars = 50000) {
+  validateLimit(maxChars, 'maxChars');
   const MAX_REDIRECTS = 5;
   let { url, ip } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
@@ -226,7 +270,7 @@ export async function safeFetch(urlString, maxChars = 50000) {
     return {
       url: url.toString(),
       statusCode: result.statusCode,
-      truncated: body.length >= maxChars,
+      truncated: result.truncated,
       body,
     };
   }
@@ -245,10 +289,11 @@ export function looksLikeImageBuffer(buf) {
 
 /** 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。 */
 export async function safeFetchBuffer(urlString, maxBytes = 4 * 1024 * 1024) {
+  validateLimit(maxBytes, 'maxBytes');
   const MAX_REDIRECTS = 5;
   let { url, ip } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnceBuffer(url, ip, maxBytes);
+    const result = await requestOnce(url, ip, maxBytes, true);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
@@ -264,60 +309,4 @@ export async function safeFetchBuffer(urlString, maxBytes = 4 * 1024 * 1024) {
     return { url: url.toString(), statusCode: result.statusCode, buffer: result.buffer };
   }
   throw new Error('重定向次数过多，已停止');
-}
-
-function requestOnceBuffer(url, ip, maxBytes) {
-  return new Promise((resolve, reject) => {
-    const mod = url.protocol === 'https:' ? https : http;
-    const port = url.port || (url.protocol === 'https:' ? 443 : 80);
-    const req = mod.request({
-      hostname: ip,
-      port,
-      path: url.pathname + url.search,
-      method: 'GET',
-      headers: {
-        host: url.host,
-        'user-agent': 'Mozilla/5.0',
-        accept: 'image/*,*/*;q=0.8',
-        'accept-language': 'zh-CN,zh;q=0.9',
-      },
-      servername: url.protocol === 'https:' ? url.hostname : undefined,
-      rejectUnauthorized: url.protocol === 'https:',
-      timeout: 20000,
-    }, (res) => {
-      const statusCode = res.statusCode || 0;
-      if ([301, 302, 303, 307, 308].includes(statusCode)) {
-        res.resume();
-        resolve({ statusCode, redirect: String(res.headers.location || '') });
-        return;
-      }
-      const chunks = [];
-      let size = 0;
-      let settled = false;
-      res.on('data', (chunk) => {
-        if (settled) return;
-        size += chunk.length;
-        if (size > maxBytes) {
-          settled = true;
-          try { res.destroy(); } catch {}
-          reject(new Error(`图片超过大小限制（${maxBytes} 字节）`));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      res.on('end', () => {
-        if (settled) return;
-        settled = true;
-        resolve({ statusCode, buffer: Buffer.concat(chunks) });
-      });
-      res.on('error', (err) => {
-        if (settled) return;
-        settled = true;
-        reject(err);
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error(`请求超时：${url.hostname}`)));
-    req.on('error', reject);
-    req.end();
-  });
 }

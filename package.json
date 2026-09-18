@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node src/bridge.js",
+    "test:audit": "node scripts/test-audit.mjs",
     "self-test": "node src/self-test.js",
     "test-md": "node scripts/test-md-to-plain.mjs",
     "test-wait": "node scripts/test-v2-wait.mjs",
@@ -34,6 +35,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@snowluma/mcp": "^1.14.10",
     "@snowluma/sdk": "^1.14.0",
+    "js-yaml": "^4.3.2",
     "zod": "^4.4.3"
   }
 }

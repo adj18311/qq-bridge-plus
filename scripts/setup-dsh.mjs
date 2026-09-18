@@ -16,11 +16,18 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import yaml from 'js-yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const PROFILE = process.argv[2] || 'web';
+
+// A profile is a directory name, never a path (same boundary as DSH itself).
+if (PROFILE === '.' || PROFILE === '..' || PROFILE === 'node_modules'
+    || /[\\/\x00-\x1f<>:"|?*]/.test(PROFILE) || /[. ]$/.test(PROFILE)) {
+  fatal(`invalid profile name: ${JSON.stringify(PROFILE)}`);
+}
 
 function log(msg) {
   console.log(`[setup-dsh] ${msg}`);
@@ -77,70 +84,57 @@ function mcpEntries() {
   return out;
 }
 
-/**
- * 按「条目 id」从 patch 文本里删掉桥接托管的 MCP 条目（含其 insert: 行）。
- * 比之前「先找 BEGIN/END 标记」更稳：历史版本装的补丁没有标记，旧逻辑会直接跳过，
- * 导致升级后缺条目（例如 mcp-web-search-safe 永远装不上）。
- */
-function stripManagedMcpEntries(text) {
-  const lines = text.split(/\r?\n/);
-  const kept = [];
-  let removed = 0;
-  for (let i = 0; i < lines.length; i += 1) {
-    const m = /^\s*-\s*id:\s*(\S+)\s*$/.exec(lines[i]);
-    if (m && MANAGED_MCP_IDS.includes(m[1])) {
-      // 回退掉紧邻其上的 `- insert:` 行（如果存在且未被消费）
-      const prev = kept[kept.length - 1];
-      if (prev !== undefined && /^\s*-\s*insert:\s*$/.test(prev)) kept.pop();
-      removed += 1;
-      // 跳过该条目自身的续行（比 id 行缩进更深的行）
-      const idIndent = lines[i].length - lines[i].trimStart().length;
-      let j = i + 1;
-      while (j < lines.length) {
-        const line = lines[j];
-        if (line.trim() === '') { j += 1; continue; }
-        const indent = line.length - line.trimStart().length;
-        if (indent > idIndent) { j += 1; continue; }
-        break;
-      }
-      i = j - 1;
-      continue;
-    }
-    kept.push(lines[i]);
-  }
-  return { text: kept.join('\n'), removed };
-}
-
-function patchCordis() {
+function prepareCordisPatch() {
   const profileDir = path.join(DSH_HOME, 'profiles', PROFILE);
   const patchFile = path.join(profileDir, 'cordis.patch.yml');
-  ensureDir(profileDir);
-  let text = '';
-  if (fs.existsSync(patchFile)) {
-    text = fs.readFileSync(patchFile, 'utf8');
+  const original = fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8') : '';
+  const lines = original.replace(/^\uFEFF/, '').split(/\r?\n/);
+  // Repair only the historical invalid *root* [] followed by block operations.
+  // A nested [] or a line inside a literal scalar is user data and must survive.
+  const first = lines.findIndex((line) => line.trim() && !line.trimStart().startsWith('#'));
+  if (first >= 0 && lines[first].trim() === '[]'
+      && lines.slice(first + 1).some((line) => /^-\s/.test(line))) {
+    lines.splice(first, 1);
   }
-  const beginMarker = '# === qq-bridge MCP BEGIN ===';
-  const endMarker = '# === qq-bridge MCP END ===';
-
-  // 1) 先删掉旧的托管条目（含历史版本无标记时写入的条目），避免 id 重复导致 DSH 启动失败
-  const stripped = stripManagedMcpEntries(text);
-  text = stripped.text;
-  // 2) 再删掉旧的标记区块（如果还残留）
-  if (text.includes(beginMarker) && text.includes(endMarker)) {
-    text = text.replace(
-      new RegExp(`${beginMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${endMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`),
-      '',
-    );
+  let doc;
+  try { doc = yaml.load(lines.join('\n')) ?? []; }
+  catch (error) { fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`); }
+  if (!Array.isArray(doc)) fatal(`${patchFile} must contain a YAML array; file unchanged`);
+  let removed = 0;
+  const kept = [];
+  for (const operation of doc) {
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+      fatal(`invalid patch operation in ${patchFile}; file unchanged`);
+    }
+    if (!Object.hasOwn(operation, 'insert')) { kept.push(operation); continue; }
+    if (!Array.isArray(operation.insert)) fatal(`insert must be an array in ${patchFile}; file unchanged`);
+    const entries = operation.insert.filter((entry) => {
+      if (!MANAGED_MCP_IDS.includes(entry?.id)) return true;
+      removed++;
+      return false;
+    });
+    // Retain shared insert parents and their selectors/other operation fields.
+    if (entries.length || Object.keys(operation).length > 1) kept.push({ ...operation, insert: entries });
   }
-  // 3) 清掉「独立成行的空数组 []」——它们会和追加的 block 组成两个 YAML 根节点，
-  //    DSH 启动时报 “end of the stream or a document separator is expected”。
-  text = text.replace(/^[ \t]*\[\][ \t]*(?:\r?\n|$)/gm, '');
-  text = text.replace(/\n{3,}/g, '\n\n').trim();
+  const text = (kept.length ? `${yaml.dump(kept, { lineWidth: -1, noRefs: true })}\n` : '') + mcpEntries();
+  return { patchFile, original, text, removed };
+}
 
-  const block = mcpEntries();
-  text = text.trim().length > 0 ? `${text}\n\n${block}` : block;
-  fs.writeFileSync(patchFile, text, 'utf8');
-  log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${stripped.removed} 条，写入 ${MANAGED_MCP_IDS.length} 条）`);
+function patchCordis({ patchFile, original, text, removed }) {
+  ensureDir(path.dirname(patchFile));
+  // Parsing/serialization normalizes formatting; keep the original text (including comments).
+  if (original && original !== text) {
+    try { fs.writeFileSync(`${patchFile}.qq-bridge.bak`, original, { encoding: 'utf8', flag: 'wx' }); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  }
+  const temporary = `${patchFile}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(temporary, text, 'utf8');
+    fs.renameSync(temporary, patchFile);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+  log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${removed} 条，写入 ${MANAGED_MCP_IDS.length} 条）`);
 }
 
 function ensurePluginLink() {
@@ -238,13 +232,27 @@ function ensureLocalModeFile() {
 // qq-mode-console 以 link: 依赖注册进 profile package.json 后，DSH 首次启动需要先安装一次
 // 才能解析该 bundle（否则 cold start 报 "cannot resolve profile bundle"）。dsh CLI 可用时自动执行。
 function autoInstallProfileBundles() {
-  const cmd = process.platform === 'win32' ? 'dsh.cmd' : 'dsh';
-  const r = spawnSync(cmd, ['plugin', '--profile', PROFILE, 'install'], {
+  if (process.env.QQ_BRIDGE_SKIP_DSH_INSTALL === '1') {
+    log('auto-install skipped: QQ_BRIDGE_SKIP_DSH_INSTALL=1');
+    return;
+  }
+  const windows = process.platform === 'win32';
+  // Node cannot spawn npm's .cmd shim directly. Keep the shell command constant;
+  // the validated (no quotes/control chars) profile travels through one quoted
+  // environment expansion, with delayed expansion disabled to preserve '!'.
+  const cmd = windows ? (process.env.ComSpec || 'cmd.exe') : 'dsh';
+  const args = windows
+    ? ['/d', '/v:off', '/s', '/c', 'dsh.cmd plugin --profile "%QQ_BRIDGE_SETUP_PROFILE%" install']
+    : ['plugin', '--profile', PROFILE, 'install'];
+  const r = spawnSync(cmd, args, {
     encoding: 'utf8',
     timeout: 120000,
+    windowsHide: true,
+    windowsVerbatimArguments: windows,
+    ...(windows ? { env: { ...process.env, QQ_BRIDGE_SETUP_PROFILE: PROFILE } } : {}),
   });
   if (r.error) {
-    log(`auto-install skipped: dsh CLI 未找到（${r.error.code || r.error.message}）。`);
+    log(`auto-install failed to start/complete（${r.error.code || r.error.message}）。`);
     log(`若 DSH 启动报“cannot resolve profile bundle \\"qq-mode-console\\"”，请手动执行：dsh plugin --profile ${PROFILE} install`);
     return;
   }
@@ -255,9 +263,11 @@ function autoInstallProfileBundles() {
   }
 }
 
+// Validate the existing YAML before changing any presets or configuration.
+const cordisPatch = prepareCordisPatch();
 copyPreset('qq-chat');
 copyPreset('qq-chat-v2');
-patchCordis();
+patchCordis(cordisPatch);
 const pluginLink = ensurePluginLink();
 patchProfilePackage(pluginLink);
 ensureLocalModeFile();

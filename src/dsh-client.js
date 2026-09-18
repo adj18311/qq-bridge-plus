@@ -46,6 +46,7 @@ const METHOD_ARG_WRAPPERS = {
   'session/list': '_request',
   'session/create': 'request',
   'session/prompt': 'request',
+  'session/cancel': 'request',
   'session/selectModel': 'request',
   'session/rename': 'request',
   'session/fork': 'request',
@@ -82,6 +83,20 @@ function wrapArgs(method, payload) {
   return { args: { [wrapper]: body } };
 }
 
+// 鉴权交换供多个 RPC 共用；取消一个调用只停止它自己的等待，不中断其他调用。
+function waitWithSignal(promise, signal) {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener('abort', abort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', abort); reject(error); }
+    );
+  });
+}
+
 export class NodeApiClient extends AbstractApiClient {
   constructor(baseUrl, timeoutMs, auth) {
     super(timeoutMs);
@@ -112,10 +127,11 @@ export class NodeApiClient extends AbstractApiClient {
   }
 
   /** 新版 DSH 要求先用 launch token 换 Cookie，之后所有请求带 Cookie。 */
-  async ensureAuth() {
+  async ensureAuth(signal) {
+    signal?.throwIfAborted();
     if (this.cookie) return this.cookie;
     if (!this.launchToken) throw new Error('DSH auth token missing: set dsh.authToken in config.json (or let auto-discovery read it from DSH guard logs)');
-    if (this.cookiePromise) return this.cookiePromise;
+    if (this.cookiePromise) return waitWithSignal(this.cookiePromise, signal);
     const promise = (async () => {
       const epoch = this._authEpoch;
       const url = new URL(this.baseUrl);
@@ -123,41 +139,135 @@ export class NodeApiClient extends AbstractApiClient {
       url.search = '';
       url.hash = '';
       url.searchParams.set('token', this.launchToken);
-      const res = await fetch(url, { redirect: 'manual' });
+      const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(this.timeoutMs) });
       const setCookie = res.headers.get('set-cookie');
+      await res.body?.cancel();
       if (!setCookie) throw new Error(`DSH token exchange failed: HTTP ${res.status}`);
       if (epoch !== this._authEpoch) throw new Error('DSH auth session invalidated during token exchange');
       this.cookie = setCookie.split(';')[0];
       return this.cookie;
     })();
     this.cookiePromise = promise;
-    promise.finally(() => {
+    const clearPromise = () => {
       if (this.cookiePromise === promise) this.cookiePromise = null;
-    });
-    return promise;
+    };
+    // 不丢弃 finally 返回的 rejected Promise，否则调用方已 catch 仍会触发进程级未处理拒绝。
+    promise.then(clearPromise, clearPromise);
+    return waitWithSignal(promise, signal);
   }
 
   async doFetch(input, init) {
     return this._doFetchWithAuth(input, init, false);
   }
 
+  /**
+   * 退役会话前先移除 pending inbox，再取消正在运行的 turn。
+   * DSH 的 session/cancel 保留 inbox，archiveSession 只隐藏会话，均不能代替清队列。
+   */
+  async stopSessionWork(sessionId, { signal, timeoutMs = 8000 } = {}) {
+    if (typeof sessionId !== 'string' || !sessionId) throw new Error('sessionId is required');
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const sig = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    let removed = 0;
+    let failure;
+    try {
+      // 为取消当前 turn 留出时间，即使 control 流没有及时返回 baseline。
+      const queueSignal = AbortSignal.any([sig, AbortSignal.timeout(Math.min(5000, timeoutMs))]);
+      const items = await this._readSessionQueue(sessionId, queueSignal);
+      for (const itemId of new Set(items.map((item) => item?.id))) {
+        if (typeof itemId !== 'string' || !itemId) throw new Error('invalid session/control queue item');
+        const response = await this.callUnary('session/updateQueue', {
+          sessionId, itemId, action: { kind: 'remove' }
+        }, sig);
+        if (response.result?.ok) removed += 1;
+        else if (response.result?.error?.code !== 'session/queue-item-not-found') unwrap(response, 'session/updateQueue');
+        // 已被 agent 取走的队列项不再存在；接下来的 cancel 会取消当前 turn。
+      }
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      const response = await this.callUnary('session/cancel', { sessionId }, sig);
+      if (!response.result?.ok && response.result?.error?.code !== 'session/not-found') unwrap(response, 'session/cancel');
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure) throw failure;
+    return { removed };
+  }
+
+  async _readSessionQueue(sessionId, signal) {
+    await this.ensureAuth(signal);
+    signal.throwIfAborted();
+    const url = new URL('/api/remote.mux', this.baseUrl);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url, { headers: { cookie: this.cookie } });
+    const streamId = randomUUID();
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error, items) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', abort);
+        socket.removeEventListener('open', open);
+        socket.removeEventListener('message', message);
+        socket.removeEventListener('error', failed);
+        socket.removeEventListener('close', failed);
+        if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.close();
+        if (error) reject(error); else resolve(items);
+      };
+      const abort = () => finish(signal.reason);
+      const failed = () => finish(new Error('session/control connection closed before baseline'));
+      const open = () => {
+        try { socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/control', payload: { args: {} } })); }
+        catch (error) { finish(error); }
+      };
+      const message = (event) => {
+        try {
+          const frame = JSON.parse(event.data);
+          if (frame.streamId !== streamId) return;
+          if (frame.type === 'error' || frame.type === 'end') {
+            finish(new Error(`session/control ended before baseline${frame.error?.code ? ` (${frame.error.code})` : ''}`));
+          } else if (frame.type === 'item' && frame.value?.type === 'baseline') {
+            const queues = frame.value.value?.queues;
+            if (!queues || typeof queues !== 'object' || Array.isArray(queues)) throw new Error('invalid session/control baseline');
+            const items = Object.hasOwn(queues, sessionId) ? queues[sessionId] : [];
+            if (!Array.isArray(items)) throw new Error('invalid session/control queue');
+            finish(null, items);
+          }
+        } catch (error) { finish(error); }
+      };
+      socket.addEventListener('open', open);
+      socket.addEventListener('message', message);
+      socket.addEventListener('error', failed);
+      socket.addEventListener('close', failed);
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+    });
+  }
+
   async _doFetchWithAuth(input, init, isRetry) {
+    const authEpoch = this._authEpoch;
+    init?.signal?.throwIfAborted();
     const headers = new Headers(init?.headers);
     if (this.launchToken) {
       try {
-        const cookie = await this.ensureAuth();
+        const cookie = await this.ensureAuth(init?.signal);
         headers.set('cookie', cookie);
       } catch (error) {
         if (!isRetry && this.launchToken && /token exchange failed|invalidated during token exchange/i.test(error?.message ?? '')) {
-          this.invalidateAuth();
+          if (authEpoch === this._authEpoch) this.invalidateAuth();
           return this._doFetchWithAuth(input, init, true);
         }
         throw error;
       }
     }
+    init?.signal?.throwIfAborted();
     const response = await fetch(input, { ...init, headers });
     if (!isRetry && response.status === 401 && this.launchToken) {
-      this.invalidateAuth();
+      await response.body?.cancel();
+      // 同一旧 Cookie 的并发 401 只能触发一次换票，不能使已开始的新换票失效。
+      if (authEpoch === this._authEpoch) this.invalidateAuth();
       return this._doFetchWithAuth(input, init, true);
     }
     return response;
@@ -245,7 +355,9 @@ export class NodeApiClient extends AbstractApiClient {
   async *_remoteMuxGenerator(signal, onOpen) {
     const own = signal === undefined ? new AbortController() : undefined;
     const sig = signal ?? own.signal;
-    await this.ensureAuth();
+    sig.throwIfAborted();
+    await this.ensureAuth(sig);
+    sig.throwIfAborted();
     const url = new URL('/api/remote.mux', this.baseUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { cookie: this.cookie } });
@@ -266,13 +378,13 @@ export class NodeApiClient extends AbstractApiClient {
     const endStream = () => {
       if (ended) return;
       ended = true;
-      this._muxSendOpen = null;
+      if (this._muxSendOpen === sendOpen) this._muxSendOpen = null;
       // 连接断开（含鉴权失败/DSH 重启）时丢弃旧 Cookie，重连会重新 token exchange。
-      this.invalidateAuth();
+      if (!sig.aborted) this.invalidateAuth();
       enqueue({ kind: 'end' });
     };
     const sendOpen = (sessionId) => {
-      if (!socketOpen || sessionToStream.has(sessionId) || followed.has(sessionId)) return;
+      if (ended || !socketOpen || sessionToStream.has(sessionId) || followed.has(sessionId)) return;
       const streamId = randomUUID();
       streamToSession.set(streamId, sessionId);
       sessionToStream.set(sessionId, streamId);
@@ -292,10 +404,15 @@ export class NodeApiClient extends AbstractApiClient {
         }));
       } catch (error) {
         console.error('[dsh-client] failed to open session/follow:', error?.message ?? error);
+        // 发送失败时不能把该会话永久记为已订阅；结束传输，让上层重连并重放。
+        sessionToStream.delete(sessionId);
+        streamToSession.delete(streamId);
+        followed.delete(sessionId);
+        endStream();
       }
     };
     const sendOpenEvents = () => {
-      if (!socketOpen || eventStreamId) return;
+      if (ended || !socketOpen || eventStreamId) return;
       const streamId = randomUUID();
       eventStreamId = streamId;
       try {
@@ -308,16 +425,18 @@ export class NodeApiClient extends AbstractApiClient {
       } catch (error) {
         console.error('[dsh-client] failed to open $events stream:', error?.message ?? error);
         eventStreamId = null;
+        endStream();
       }
     };
     const handleOpen = () => {
+      if (ended || sig.aborted) return;
       socketOpen = true;
       this._muxSendOpen = sendOpen;
       // 重放**全部**期望 follow（跨重连保留），而不只是本次连接排队的那些。
       // 少了这一步，DSH 一重启，所有已存在的 QQ 会话就会静默失联。
       for (const sid of this._desiredFollows) sendOpen(sid);
       sendOpenEvents();
-      onOpen?.();
+      if (!ended) onOpen?.();
     };
     const handleMessage = (event) => {
       let msg;
@@ -385,6 +504,8 @@ export class NodeApiClient extends AbstractApiClient {
         if (isEventStream) {
           eventStreamId = null;
           eventClientId = null;
+          // 仅清掉 id 会让提问/审批通道永久失联；结束 mux 由桥接重连并重开。
+          endStream();
         } else if (sessionId) {
           sessionToStream.delete(sessionId);
           streamToSession.delete(msg.streamId);
@@ -392,26 +513,28 @@ export class NodeApiClient extends AbstractApiClient {
         }
       } else if (msg.type === 'error') {
         if (isEventStream) {
-          // $events 是附加的 Remote Event 流；它失败不应拖垮 session/follow 主事件流。
+          console.error('[dsh-client] $events stream failed:', msg.error?.code || 'unknown error');
           eventStreamId = null;
           eventClientId = null;
+          endStream();
         } else if (sessionId) {
           sessionToStream.delete(sessionId);
           streamToSession.delete(msg.streamId);
           followed.delete(sessionId);
-          // 服务端明确拒绝该会话的 follow（会话已被归档/删除）：从期望集合移除，不再重放，
-          // 否则每次重连都会为它白白产生一次错误。传输层断开不走这里，集合会保留。
-          this._desiredFollows.delete(sessionId);
+          // 只有已不存在的会话才永久取消订阅；临时服务错误必须在重连后重试。
+          if (msg.error?.code === 'session/not-found') this._desiredFollows.delete(sessionId);
           enqueue({
             kind: 'frame',
             envelope: { rpcId: msg.streamId, payload: { type: 'stream/error', error: msg.error } }
           });
+          if (msg.error?.code !== 'session/not-found') endStream();
         }
       }
     };
     const handleClose = () => endStream();
     const handleError = () => endStream();
     const handleAbort = () => {
+      endStream();
       if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.close();
     };
     socket.addEventListener('open', handleOpen);
@@ -430,7 +553,7 @@ export class NodeApiClient extends AbstractApiClient {
         await new Promise((resolve) => { wake = resolve; });
       }
     } finally {
-      this._muxSendOpen = null;
+      if (this._muxSendOpen === sendOpen) this._muxSendOpen = null;
       sig.removeEventListener('abort', handleAbort);
       socket.removeEventListener('open', handleOpen);
       socket.removeEventListener('message', handleMessage);

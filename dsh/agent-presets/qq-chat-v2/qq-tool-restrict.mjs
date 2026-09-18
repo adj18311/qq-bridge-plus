@@ -42,8 +42,6 @@ const SAFE_PREFIXES = [
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
-  'web_search',
-  'web_fetch',
 ])
 
 export function apply(ctx) {
@@ -63,7 +61,7 @@ export function apply(ctx) {
   // 2) 执行期白名单：任何不在允许范围内的工具调用都会被拒绝。
   ctx.tools.guard((exec) => {
     const name = exec?.name
-    if (typeof name !== 'string' || name.length === 0) return
+    if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
     if (SAFE_EXACT.has(name)) return
     if (SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) return
     return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`

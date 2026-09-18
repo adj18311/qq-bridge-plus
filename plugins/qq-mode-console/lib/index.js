@@ -1,9 +1,9 @@
 // QQ 桥接模式控制台（host 插件，仅注册 settings 命名空间）。
 //
 // 通过 DSH 官方用户设置扩展点（ctx.settings.register）暴露一个
-// `qq-mode` 命名空间。WebUI 的设置页会自动渲染该命名空间的配置卡片，
-// 用户在那里切换桥接模式（chat / closed-agent / 仿真模式，内部标识 reserved），
-// 桥接进程通过 DSH settings API 轮询读取。本插件不修改任何 WebUI 内核。
+// `qq-mode` 命名空间。本插件没有 browser/client 半，不会自动生成 WebUI 设置卡片。
+// 用户通过桥接控制台切换模式，桥接进程通过 DSH settings API 轮询读取。
+// 本插件不修改任何 WebUI 内核。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -118,6 +118,10 @@ qq-bridge/
 
 ## Testing
 
+`npm run test:audit` runs isolated regression tests without production credentials, DSH, or QQ messages. The detailed audit is in [docs/AUDIT_REPORT_2026-09-18.md](docs/AUDIT_REPORT_2026-09-18.md) (Chinese).
+
+After upgrading, legacy QQ session mappings without permission metadata are recreated once. Mode or preset changes also retire the old mapping and recreate the session on the next message; DSH history is retained.
+
 ```bash
 npm run self-test       # DSH-side link test, no QQ/SnowLuma required
 npm run test-md

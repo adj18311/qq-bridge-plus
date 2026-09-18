@@ -66,7 +66,7 @@ export function saveStickerStore(file, entries) {
 // 把 SnowLuma 返回的 QQ 收藏表情详情合并进本地库。
 // 保留本地 AI 认知字段（localNote/tags/usage/useCount/lastUsedAt/lastContext），
 // 只更新 QQ 侧字段（id/resId/url/md5/desc）。
-export function mergeStickerLibrary(existing, fetched) {
+export function mergeStickerLibrary(existing, fetched, { complete = true } = {}) {
   const out = existing.map(normalizeStickerEntry).filter(Boolean);
   const byId = new Map(out.map((e) => [e.id, e]));
   const fetchedIds = new Set();
@@ -103,27 +103,40 @@ export function mergeStickerLibrary(existing, fetched) {
     } else {
       const idx = out.findIndex((e) => e.id === id);
       if (idx >= 0) out[idx] = merged;
+      byId.set(id, merged);
     }
   }
   // 清理已被 QQ 端删除的收藏表情（保留手动/本地新增的非 qq 来源条目）。
-  return out.filter((e) => e.source !== 'qq' || fetchedIds.has(e.id));
+  // count 限制导致的部分结果不能证明其他表情已被删除。
+  return out.filter((e) => !complete || e.source !== 'qq' || fetchedIds.has(e.id));
 }
 
-// 通过 emoji_id / md5 / url（支持模糊：去掉大小写、尾斜杠、URL 查询）查找。
+function stickerUrlKey(value) {
+  const raw = String(value || '').trim();
+  if (!/^https?:\/\//i.test(raw) && !/^[^\s/]+\/[^\s]*$/.test(raw)) return '';
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';
+    return `${url.host.toLowerCase()}${url.pathname.replace(/\/+$/, '')}`;
+  } catch { return ''; }
+}
+
+// id/md5 精确匹配优先；URL 只忽略协议、尾斜杠与查询参数，不做任意子串匹配。
 export function findSticker(entries, ref) {
   const raw = String(ref ?? '').trim();
   if (!raw) return null;
   const id = raw;
   const md5 = raw.toUpperCase();
-  const urlNormalized = raw.replace(/\/+$/, '').replace(/^https?:\/\//i, '');
-  return (Array.isArray(entries) ? entries : []).find((e) => {
+  const list = Array.isArray(entries) ? entries : [];
+  const exact = list.find((e) => {
     if (!e) return false;
     if (e.id === id || e.resId === id) return true;
     if (e.md5 && e.md5 === md5) return true;
-    const eUrl = String(e.url || '').replace(/\/+$/, '').replace(/^https?:\/\//i, '');
-    if (eUrl && urlNormalized && (eUrl === urlNormalized || eUrl.includes(urlNormalized) || urlNormalized.includes(eUrl))) return true;
     return false;
-  }) || null;
+  });
+  if (exact) return exact;
+  const urlNormalized = stickerUrlKey(raw);
+  return (urlNormalized && list.find((e) => e && stickerUrlKey(e.url) === urlNormalized)) || null;
 }
 
 // 格式化给 AI 看的表情列表；query 会匹配 desc/localNote/tags/usage/id/md5。

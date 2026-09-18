@@ -127,6 +127,13 @@ function nodeContent(node) {
   const dataContent = data.message ?? data.content ?? data.text;
   const content = Array.isArray(topContent) ? topContent : Array.isArray(dataContent) ? dataContent : null;
   if (content) return content;
+  // 与 contentToText 保持一致：单个消息段也可能承载图片或嵌套转发。
+  for (const candidate of [topContent, dataContent]) {
+    if (candidate && typeof candidate === 'object') {
+      if (candidate.type) return [candidate];
+      if (Array.isArray(candidate.content)) return candidate.content;
+    }
+  }
   // 字符串内容没有可提取的媒体/嵌套转发
   return [];
 }

@@ -35,7 +35,7 @@ export function splitForQQ(text, max = 4000) {
   const parts = [];
   let rest = text;
   while (rest.length > safeMax) {
-    let cut = rest.lastIndexOf('\n', safeMax);
+    let cut = rest.lastIndexOf('\n', safeMax - 1);
     let eat = 0;
     if (cut <= 0) {
       cut = safeMax; // 硬切
