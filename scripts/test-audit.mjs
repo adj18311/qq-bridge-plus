@@ -31,6 +31,11 @@ const tests = [
   'test-encoding.mjs',
   // 控制台乱码机制（UTF-8 字节被按 GBK 解码）+ chcp 修复
   'test-console-encoding.mjs',
+  // 🔴 铁律 L7（仿真会话不得拥有本地执行能力）：注册期断言——
+  //    preset 挂了守卫、守卫的 restrict 名单覆盖全部已知本地工具、且执行期一律拒绝。
+  //    这是唯一挡住"绕过桥接直连 OneBot HTTP"的东西（见 QSH_PLAN.md §0.1/§5.2），
+  //    所以必须在每次回归里跑，而不是一次性验收。
+  'test-preset-local-tools.mjs',
 ];
 let failed = 0;
 for (const test of tests) {

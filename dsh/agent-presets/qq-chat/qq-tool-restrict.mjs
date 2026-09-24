@@ -1,13 +1,51 @@
 // QQ 桥接安全硬边界：只允许 QQ MCP 工具与少量无害模型侧工具。
 // 本文件是 agent preset 内相对插件，随 preset 装载进每个 QQ agent 的 scope。
 // 作用：
-//  1) 用 tools.restrict 把已知的开发/管理工具从工具列表隐藏；
-//  2) 用 tools.guard 白名单兜底：即使未来新增 dev_* 工具，也会在执行时被拒绝。
+//  1) 用 tools.restrict 把本地执行/文件类工具与开发工具从**工具清单**里隐藏（注册期）；
+//  2) 用 tools.guard 白名单兜底：任何不在允许范围内的工具，执行时一律拒绝。
+//
+// ⚠️ 第 1 条是铁律 L7 的落点，不是"附注"：仿真会话的 preset 永不包含本地工具。
+//    `tools.guard` 只能拒绝**执行**，工具名仍会出现在模型的 schema 里——
+//    那既不满足"仿真会话不得拥有本地执行能力"的注册期要求，也会诱导模型去调它。
+//    所以本地工具必须同时出现在下面的 restrict 名单里。
 export const name = 'qq-tool-restrict'
 
 export const inject = ['tools']
 
+/**
+ * 本地执行 / 文件访问 / 进程控制类工具：仿真会话**不得**拥有。
+ *
+ * 名字取自 DSH 0.1.5-rc.1 实际发布的工具包（`@deepseek-ai/dsh-tool-*`），
+ * 而不是凭印象列举——每个名字后面标了来源包：
+ *   dsh-tool-pwsh / dsh-tool-pwsh-persistent → pwsh
+ *   dsh-tool-bash / dsh-tool-bash-persistent → bash
+ *   dsh-tool-fs                              → read / read_image / write / edit
+ *   dsh-tool-fs-search                       → glob / grep
+ *   dsh-tool-str-replace-editor              → str_replace_editor
+ *   dsh-tool-subagent / -control             → subagent / subagent_fork / send_message / interrupt_agent / list_agents
+ *   dsh-tool-workflow / dsh-tool-ralph       → workflow / ralph
+ *   dsh-tool-cordis                          → cordis 运行时工具
+ *   dsh-tool-jobs / dsh-tool-skill / dsh-tool-present / dsh-tool-goal → 会话/交付面
+ * 新增本地能力时必须同步这里，并跑 test-preset-local-tools.mjs（它会断言本名单生效）。
+ */
+const LOCAL_EXECUTION_TOOLS = [
+  // shell / 进程
+  'pwsh', 'bash', 'pwsh_persistent', 'bash_persistent',
+  // 文件读写
+  'read', 'read_image', 'write', 'edit', 'str_replace_editor',
+  // 文件检索
+  'glob', 'grep',
+  // 派生 agent 与编排（都能间接拿到 shell）
+  'subagent', 'subagent_fork', 'send_message', 'interrupt_agent', 'list_agents',
+  'workflow', 'ralph', 'cordis',
+  // 会话/交付/任务面
+  'job_list', 'job_output', 'job_kill', 'skill', 'present',
+  'goal_write', 'goal_read',
+]
+
 const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
+  // 本地执行面（见上）
+  ...LOCAL_EXECUTION_TOOLS,
   // dsh-super-injector / 开发注入器（当前 DSH 0.1.1-rc.2 实际注册的全局工具）
   'dev_build_plugin',
   'dev_clear_routes',
