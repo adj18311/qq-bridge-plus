@@ -213,7 +213,7 @@ await test('malformed HTTP request targets return 400 without hanging', async (h
     //    resolveVoicePathForV2 允许绝对路径的"文件名形态"由 allowAbsolutePath 管；
     //    这里直接喂一个**看起来就像本机路径**的名字，验证审计层会拦下来。
     await assert.rejects(
-      () => h.sendVoiceForV2('group:456', 'C:\\Users\\ASUS\\secret-voice.mp3', { readback: false }),
+      () => h.sendVoiceForV2('group:456', 'C:\\Users\\somebody\\secret-voice.mp3', { readback: false }),
       /敏感信息|语音库|绝对路径/,
       '文件名含本机路径特征被审计/来源校验拦截'
     );
