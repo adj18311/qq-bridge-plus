@@ -35,18 +35,127 @@ const SIMULATION_PRESETS = ['qq-chat', 'qq-chat-v2'];
 const CLOSED_AGENT_PRESETS = ['qsh-closed'];
 
 /**
- * 本地执行能力清单。名字取自 DSH 0.1.5-rc.1 实际发布的 `@deepseek-ai/dsh-tool-*`
- * 工具包，而不是凭印象：pwsh/bash（含 persistent 变体）、read/read_image/write/
- * edit/str_replace_editor、glob/grep、以及能间接拿到 shell 的派生 agent 与编排类。
- * 若 DSH 新增本地工具，这里应当补上——这正是本测试存在的意义。
+ * 本地执行能力清单。
+ *
+ * ⚠️ 这里**必须**含每一个能执行本地命令、读写本地文件或派生 agent 的工具名。
+ * 名字取自 DSH 0.1.5-rc.1 实际注册的工具（见 qq-tool-restrict.mjs 的注释）。
+ *
+ * 两类失败模式，本文件都要防：
+ *   ① **漏**（本地工具不在守卫名单里 ⇒ 留在 schema）——由 test 3 对账 RESTRICTED_TOOL_NAMES 防；
+ *   ② **拼错假名**（名字根本不存在 ⇒ `tools.restrict` 抛错被吞 ⇒ 静默失效）——
+ *      由 test 6 用「假 restrict 会对未知名字抛错」来防。
  */
 const LOCAL_EXECUTION_TOOLS = [
-  'pwsh', 'bash', 'pwsh_persistent', 'bash_persistent',
+  'pwsh', 'bash',
   'read', 'read_image', 'write', 'edit', 'str_replace_editor',
   'glob', 'grep',
   'subagent', 'subagent_fork', 'send_message', 'interrupt_agent', 'list_agents',
-  'workflow', 'ralph', 'cordis',
+  'workflow', 'ralph',
+  'cordis_define', 'cordis_undefine', 'cordis_run', 'cordis_stop',
+  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
+  'job_list', 'job_output', 'job_kill', 'skill', 'present',
+  'get_goal', 'create_goal', 'update_goal',
+  'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
 ];
+
+/**
+ * 工具名 → 真实存在与否。从已安装的 DSH 包里抽取，用来抓"拼错的假名"。
+ * 找不到 DSH 安装时返回 null，相关断言改为跳过（并明确打印跳过原因），
+ * 而不是假装通过。
+ */
+function collectDshToolNames() {
+  const home = process.env.DSH_HOME
+    || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, '.dsh') : null);
+  const roots = [
+    process.env.DSH_TOOL_PACKAGES,
+    // DSH 自带的工具包
+    process.env.USERPROFILE
+      ? path.join(process.env.USERPROFILE, 'dsh-latest', 'node_modules', '@deepseek-ai')
+      : null,
+    // 本机安装的第三方插件也注册工具（dsh-plugin-guard 的 dsh_snapshot/dsh_rollback
+    // 就在这里）。不扫这个目录会把**真实名字误判成假名**——本测试最初就是这样
+    // 误报了 dsh_snapshot/dsh_rollback。
+    home ? path.join(home, 'plugins') : null,
+  ].filter((p) => p && fs.existsSync(p));
+
+  const DSH_PKG_ROOT = process.env.USERPROFILE
+    ? path.join(process.env.USERPROFILE, 'dsh-latest', 'node_modules', '@deepseek-ai')
+    : null;
+
+  const found = new Set();
+  let scanned = 0;
+  for (const root of roots) {
+    const dirs = fs.readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+    // 工具来自 dsh-tool-*，以及若干非 dsh-tool 前缀的注册方
+    // （plan-mode/schedule/tools）；插件目录下则全部扫。
+    // 工具来自 dsh-tool-*，但**名字**大量声明在别处的 patch 里：
+    //   dsh-base/cordis.patch.yml        → toolName: subagent / subagent_fork / workflow …
+    //   dsh-web-app/cordis.patch.yml     → disabled 行
+    // 只筛 dsh-tool-* 会漏掉这些，从而把真实名字误判成假名——初版就是这样把
+    // subagent/workflow 报成假名的。所以这里必须把 base/web-app 也纳入。
+    const isDshPkgRoot = DSH_PKG_ROOT !== null && path.resolve(root) === path.resolve(DSH_PKG_ROOT);
+    const interesting = isDshPkgRoot
+      ? dirs.filter((n) => /^dsh-(tool-|plugin-|mode-|schedule|plan-mode|tools|base|web-app)/.test(n))
+      : dirs.filter((n) => !n.startsWith('.'));
+    for (const d of interesting) {
+      const pkgDir = path.join(root, d);
+      const files = [];
+      const walk = (dir, depth) => {
+        if (depth > 3) return;
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+          if (e.name === 'node_modules' || e.name === '.git') continue;
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) walk(full, depth + 1);
+          else if (/\.(js|mjs|cjs)$/.test(e.name)) files.push(full);
+        }
+      };
+      walk(pkgDir, 0);
+      for (const f of files) {
+        let text = '';
+        try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
+        scanned++;
+        for (const m of text.matchAll(/\bname:\s*['"]([a-z][a-z0-9_]{2,40})['"]/g)) found.add(m[1]);
+        for (const m of text.matchAll(/\btoolName:\s*['"]([a-z][a-z0-9_]{2,40})['"]/g)) found.add(m[1]);
+        // 名字也可能藏在 schema 默认值里。dsh-tool-workflow 就是这样声明的：
+        //   toolName: z.string().default("workflow")
+        // 只看字面量会漏掉它，从而把真实名字误判成假名（本测试踩过）。
+        for (const m of text.matchAll(/\btoolName:\s*[^;\n]*?\.default\(\s*['"]([a-z][a-z0-9_]{2,40})['"]/g)) {
+          found.add(m[1]);
+        }
+        // 以及简写属性 `name,`（即 name: name）。
+        if (/\bdefineTool\(\{[\s\S]{0,200}?\bname,\s*\n/.test(text)) {
+          const nm = /\bname:\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\n/.exec(text);
+          if (nm) found.add(nm[1]);
+        }
+      }
+      // 名字也大量出现在 YAML patch 里，只读 .js 会漏掉它们，从而把**真实名字
+      // 误判成假名**——本测试自己踩过：subagent/workflow/dsh_snapshot 最初就是这样
+      // 被误报的。注意 id 常带连字符（tool-subagent-fork），所以字符类要放宽，
+      // 再用"不含 / 和 @"把包名排除掉。
+      for (const yml of ['cordis.patch.yml', 'cordis.patch.yaml']) {
+        const p = path.join(pkgDir, yml);
+        if (!fs.existsSync(p)) continue;
+        let text = '';
+        try { text = fs.readFileSync(p, 'utf8'); } catch { continue; }
+        scanned++;
+        for (const m of text.matchAll(/^\s*(?:-\s*)?(?:id|name|toolName):\s*([^\s#]+)\s*$/gm)) {
+          const v = m[1].replace(/^['"]|['"]$/g, '');
+          if (!v || /[/@]/.test(v)) continue;      // 包名，不是工具名
+          if (!/^[a-z][a-z0-9_-]{1,40}$/.test(v)) continue;
+          found.add(v);
+        }
+      }
+    }
+  }
+  return scanned === 0 ? null : found;
+}
+
+/** 允许出现在名单里、但不属于"本地执行"语义的名字（开发/注入器）。 */
+const DEV_TOOL_PREFIX = /^dev_/;
 
 /** 允许出现的 MCP 命名空间前缀（QQ 动作面）。 */
 const EXPECTED_SAFE_PREFIXES = [
@@ -95,20 +204,14 @@ test('守卫的 restrict 名单覆盖每一个已知本地执行工具', async (
 
     // 用假 tools 服务调用真实守卫，捕获它实际下发的 restrict 请求。
     const restricted = new Set();
-    const violations = [];
     const fakeTools = {
       restrict({ deny }) { for (const n of deny ?? []) restricted.add(n); },
-      guard(fn) {
-        // 记录守卫，稍后逐个探测本地工具名是否被拒。
-        this._guard = fn;
-      },
+      guard(fn) { this._guard = fn; },
     };
     const mod = await import(pathToFileURL(guardPath).href);
     mod.apply({ tools: fakeTools });
 
-    for (const tool of LOCAL_EXECUTION_TOOLS) {
-      if (!restricted.has(tool)) violations.push(tool);
-    }
+    const violations = LOCAL_EXECUTION_TOOLS.filter((t) => !restricted.has(t));
     assert.deepEqual(
       violations, [],
       `${id}: 以下本地执行工具未出现在 restrict 名单里，会留在模型的工具清单中：`
@@ -124,6 +227,48 @@ test('守卫的 restrict 名单覆盖每一个已知本地执行工具', async (
         `${id}: 本地工具 "${tool}" 必须在执行期被拒绝，实际返回 ${JSON.stringify(verdict)}`,
       );
     }
+  }
+});
+
+test('守卫导出的名单与本测试的清单一致（防两份名单各自漂移）', async () => {
+  // 先前这个测试只是"复制"名单的前 19 个名字，导致守卫里多出的 7 个名字
+  // 从来没被断言过。现在改为**导入**守卫自己导出的数组，两边不可能漂移。
+  for (const id of SIMULATION_PRESETS) {
+    const { dir } = readPreset(id);
+    const mod = await import(pathToFileURL(path.join(dir, 'qq-tool-restrict.mjs')).href);
+    assert.ok(
+      Array.isArray(mod.RESTRICTED_TOOL_NAMES) && mod.RESTRICTED_TOOL_NAMES.length > 0,
+      `${id}: 守卫必须导出 RESTRICTED_TOOL_NAMES，供测试对账`,
+    );
+    const missing = LOCAL_EXECUTION_TOOLS.filter((t) => !mod.RESTRICTED_TOOL_NAMES.includes(t));
+    assert.deepEqual(missing, [],
+      `${id}: 守卫导出的名单缺少本地执行工具：${missing.join(', ')}`);
+    // 反向：名单里不该混入"允许的无害工具"。
+    for (const allowed of ['ask_user_question', 'todo_write']) {
+      assert.ok(!mod.RESTRICTED_TOOL_NAMES.includes(allowed),
+        `${id}: ${allowed} 是无害模型侧工具，不应出现在 restrict 名单里（会与 SAFE_EXACT 自相矛盾）`);
+    }
+  }
+});
+
+test('守卫名单里的每个名字都是 DSH 真实注册的工具（防拼错假名静默失效）', async () => {
+  // 为什么必须测：`tools.restrict()` 对未知名字会**抛错**，而守卫逐个 try/catch
+  // 只打日志 ⇒ 拼错的名字 = **静默 no-op**。这正是本名单初版的真实缺陷：
+  // pwsh_persistent / bash_persistent / cordis / goal_write / goal_read 五个假名
+  // 让整批限制悄悄少生效，而套件当时全绿。
+  const dshNames = collectDshToolNames();
+  if (dshNames === null) {
+    console.log('  ⏭  跳过：未找到 DSH 工具包（设 DSH_TOOL_PACKAGES 指向 @deepseek-ai 目录即可启用）');
+    return;
+  }
+  for (const id of SIMULATION_PRESETS) {
+    const { dir } = readPreset(id);
+    const mod = await import(pathToFileURL(path.join(dir, 'qq-tool-restrict.mjs')).href);
+    const fabricated = mod.RESTRICTED_TOOL_NAMES
+      .filter((n) => !DEV_TOOL_PREFIX.test(n) && !dshNames.has(n));
+    assert.deepEqual(fabricated, [],
+      `${id}: 以下名字在 DSH 已安装的工具包里找不到 ⇒ restrict 会抛错并被吞掉，`
+      + `限制静默失效：${fabricated.join(', ')}`);
   }
 });
 
@@ -154,14 +299,30 @@ test('守卫仍放行 QQ MCP 命名空间与无害模型侧工具', async () => 
   }
 });
 
-test('封闭 agent 的预设（若已安装）允许完整本地工具面', () => {
-  // qsh-closed 由 ADR 0003 定义为**故意**拥有完整本地工具面：
-  // 它的隔离只负责"哪些 QQ 动作可见"，不负责"本地工具权限边界"。
-  // 尚未创建时不失败，但一旦创建就必须与仿真 preset 明确区分。
-  for (const id of CLOSED_AGENT_PRESETS) {
-    const dir = path.join(PRESETS_DIR, id);
-    if (!fs.existsSync(dir)) continue;
-    const yml = fs.readFileSync(path.join(dir, 'agent.cordis.yml'), 'utf8');
+test('封闭 agent 的预设在创建后必须与仿真 preset 明确区分', () => {
+  // qsh-closed 由 ADR 0003 定义为**故意**拥有完整本地工具面：它的守卫只负责
+  // "哪些 QQ 动作可见"，不负责"本地工具权限边界"。
+  //
+  // ⚠️ 这条断言初版是**恒真**的：qsh-closed 还不存在，`if (!exists) continue`
+  // 直接跳过整个函数体，永远不会失败——一个永远不会失败的测试不如没有。
+  // 现在改为显式记录"尚未创建"，并且一旦创建就执行真实断言。
+  const present = CLOSED_AGENT_PRESETS.filter((id) => fs.existsSync(path.join(PRESETS_DIR, id)));
+  if (present.length === 0) {
+    // 不是失败，但必须让人看见"这条闸门还没被真正覆盖"。
+    console.log('  ⏭  qsh-closed 尚未创建（ADR 0003 待落地）；此项覆盖暂为空，不是通过。');
+    return;
+  }
+  for (const id of present) {
+    const yml = fs.readFileSync(path.join(PRESETS_DIR, id, 'agent.cordis.yml'), 'utf8');
     assert.match(yml, /qq-tool-restrict/, `${id} 也应挂守卫（用于 QQ 动作可见性）`);
+    // 与仿真 preset 的关键区别：封闭 agent 必须能拿到本地工具 ⇒
+    // 它的守卫不得把本地执行工具写进 restrict 名单。
+    const guard = fs.readFileSync(path.join(PRESETS_DIR, id, 'qq-tool-restrict.mjs'), 'utf8');
+    for (const tool of ['pwsh', 'read', 'write']) {
+      assert.ok(
+        !new RegExp(`['"]${tool}['"]`).test(guard),
+        `${id}: 封闭 agent 需要本地工具，守卫不应把 "${tool}" 列入 restrict`,
+      );
+    }
   }
 });

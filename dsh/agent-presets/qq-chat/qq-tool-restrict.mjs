@@ -15,32 +15,58 @@ export const inject = ['tools']
 /**
  * 本地执行 / 文件访问 / 进程控制类工具：仿真会话**不得**拥有。
  *
- * 名字取自 DSH 0.1.5-rc.1 实际发布的工具包（`@deepseek-ai/dsh-tool-*`），
- * 而不是凭印象列举——每个名字后面标了来源包：
- *   dsh-tool-pwsh / dsh-tool-pwsh-persistent → pwsh
- *   dsh-tool-bash / dsh-tool-bash-persistent → bash
- *   dsh-tool-fs                              → read / read_image / write / edit
- *   dsh-tool-fs-search                       → glob / grep
- *   dsh-tool-str-replace-editor              → str_replace_editor
- *   dsh-tool-subagent / -control             → subagent / subagent_fork / send_message / interrupt_agent / list_agents
- *   dsh-tool-workflow / dsh-tool-ralph       → workflow / ralph
- *   dsh-tool-cordis                          → cordis 运行时工具
- *   dsh-tool-jobs / dsh-tool-skill / dsh-tool-present / dsh-tool-goal → 会话/交付面
- * 新增本地能力时必须同步这里，并跑 test-preset-local-tools.mjs（它会断言本名单生效）。
+ * 名字**逐个核对过** DSH 0.1.5-rc.1 实际注册的工具名（来源包见每条注释），
+ * 不是凭印象列举。教训：本名单初版把 `pwsh_persistent`/`bash_persistent`/
+ * `cordis`/`goal_write`/`goal_read` 当成工具名，这五个**根本不存在**——
+ * 而 `tools.restrict()` 对未知名字会抛错、被下面的 try/catch 逐个吞掉，
+ * 于是坏名字**静默失效**。`test-preset-local-tools.mjs` 现在会把本数组与
+ * DSH 真实工具名集合求差，专门防这类拼写假名。
+ *
+ * 来源包：
+ *   dsh-tool-pwsh / -pwsh-persistent   → pwsh（persistent 变体注册的就是 "pwsh"）
+ *   dsh-tool-bash / -bash-persistent   → bash（同上）
+ *   dsh-tool-fs                        → read / read_image / write / edit
+ *   dsh-tool-fs-search                 → glob / grep
+ *   dsh-tool-str-replace-editor        → str_replace_editor
+ *   dsh-tool-subagent                  → subagent / subagent_fork
+ *   dsh-tool-subagent-control          → send_message / interrupt_agent / list_agents
+ *   dsh-tool-workflow / -ralph         → workflow / ralph
+ *   dsh-tool-jobs                      → job_list / job_output / job_kill
+ *   dsh-tool-todo / -skill / -present  → todo_write / skill / present
+ *   dsh-tool-goal                      → get_goal / create_goal / update_goal
+ *   dsh-tool-cordis                    → cordis_define / _undefine / _run / _stop
+ *                                        （装载模型写的插件 ⇒ 等价任意代码执行）
+ *   dsh-plugin-guard（web profile bundle）→ dsh_snapshot / dsh_rollback / incident_resolved
+ *                                        （读写 package.json/lockfile/patch 并 **spawn pnpm**）
+ *   dsh-mode-boost（已装插件，当前未进 bundles）→ dev_mode_set / _status / _subagent
+ *                                        （dev_mode_subagent 会派生 agent）
+ *
+ * ⚠️ 硬证据：2026-08-29 的一次 **qq-chat-v2 仿真会话**记录下来的工具清单里，
+ * 除了 MCP 工具就只有 `ask_user_question`、`todo_write`、`dev_mode_*`、
+ * `dsh_rollback`、`dsh_snapshot`、`incident_resolved`。也就是说
+ * **`dsh_snapshot`/`dsh_rollback` 真的进过仿真会话的 schema**——本名单初版漏了它们。
  */
 const LOCAL_EXECUTION_TOOLS = [
   // shell / 进程
-  'pwsh', 'bash', 'pwsh_persistent', 'bash_persistent',
+  'pwsh', 'bash',
   // 文件读写
   'read', 'read_image', 'write', 'edit', 'str_replace_editor',
   // 文件检索
   'glob', 'grep',
   // 派生 agent 与编排（都能间接拿到 shell）
   'subagent', 'subagent_fork', 'send_message', 'interrupt_agent', 'list_agents',
-  'workflow', 'ralph', 'cordis',
+  'workflow', 'ralph',
+  // 插件装载：等价任意代码执行
+  'cordis_define', 'cordis_undefine', 'cordis_run', 'cordis_stop',
+  // 本机文件 + 进程：plugin-guard 会改写配置并 spawn pnpm
+  'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
   // 会话/交付/任务面
+  // 注意：`todo_write` 与 `ask_user_question` **故意不在**此名单——它们是下面
+  // SAFE_EXACT 允许的无害模型侧工具，两边不能自相矛盾。
   'job_list', 'job_output', 'job_kill', 'skill', 'present',
-  'goal_write', 'goal_read',
+  'get_goal', 'create_goal', 'update_goal',
+  // 已装但当前未进 bundles 的插件（一旦加回就是新口子）
+  'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
 ]
 
 const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
@@ -66,6 +92,9 @@ const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
   'dev_stage_promote',
   'dev_uninject_plugin',
 ]
+
+// 供 test-preset-local-tools.mjs 导入并与 DSH 真实工具名对账，避免两份名单漂移。
+export const RESTRICTED_TOOL_NAMES = Object.freeze([...KNOWN_DANGEROUS_GLOBAL_TOOLS])
 
 // 执行期白名单：不在这些范围内的工具一律拒绝。
 // 前缀覆盖 DSH MCP client 暴露的命名空间工具。
