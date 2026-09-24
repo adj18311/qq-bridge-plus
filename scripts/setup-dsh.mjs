@@ -42,13 +42,46 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+/**
+ * 备份一个即将被覆盖的文件。
+ *
+ * 为什么不用 `flag: 'wx'`（写一次就永不更新）：那样第一次安装会留下一个备份，
+ * 之后每次 setup 都静默跳过 —— 用户后来手工改过的内容再被覆盖时，桌上那份备份
+ * 早已过期，等于「有备份但救不回来」。改为每次覆盖前打时间戳快照，只保留最近 N 份。
+ */
+function backupBeforeOverwrite(file, keep = 5) {
+  if (!fs.existsSync(file)) return null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const dest = `${file}.bak-${stamp}`;
+  try {
+    fs.copyFileSync(file, dest);
+  } catch (error) {
+    log(`⚠️ 备份失败（${file}）：${error?.message ?? error}；继续但请自行确认原内容`);
+    return null;
+  }
+  try {
+    const dir = path.dirname(file);
+    const prefix = `${path.basename(file)}.bak-`;
+    const snaps = fs.readdirSync(dir).filter((f) => f.startsWith(prefix)).sort();
+    // 时间戳升序 ⇒ 前面的是最旧的，只保留最后 keep 份
+    for (const f of snaps.slice(0, Math.max(0, snaps.length - keep))) {
+      fs.rmSync(path.join(dir, f), { force: true });
+    }
+  } catch {}
+  return dest;
+}
+
 function copyPreset(name) {
   const src = path.join(REPO_ROOT, 'dsh', 'agent-presets', name);
   const dest = path.join(DSH_HOME, '.agent-presets', name);
   if (!fs.existsSync(src)) fatal(`preset source not found: ${src}`);
   ensureDir(path.dirname(dest));
+  // 覆盖前先给**已安装**的那份留快照：用户可能手工改过它，而控制台的「一键还原」
+  // 只管仓库里的源文件，救不回被覆盖的安装副本。
+  const installedYaml = path.join(dest, 'agent.cordis.yml');
+  const backup = backupBeforeOverwrite(installedYaml);
   fs.cpSync(src, dest, { recursive: true, force: true });
-  log(`preset installed: ${name}`);
+  log(`preset installed: ${name}${backup ? `（覆盖前已备份到 ${path.basename(backup)}）` : ''}`);
 }
 
 function yamlSingleQuote(s) {
@@ -124,8 +157,7 @@ function patchCordis({ patchFile, original, text, removed }) {
   ensureDir(path.dirname(patchFile));
   // Parsing/serialization normalizes formatting; keep the original text (including comments).
   if (original && original !== text) {
-    try { fs.writeFileSync(`${patchFile}.qq-bridge.bak`, original, { encoding: 'utf8', flag: 'wx' }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    backupBeforeOverwrite(patchFile);
   }
   const temporary = `${patchFile}.${process.pid}.tmp`;
   try {

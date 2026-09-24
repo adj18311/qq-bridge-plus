@@ -43,7 +43,7 @@ try {
   }
 
   // 白名单外发送：应被拒绝（isError）
-  const denied = await client.callTool({ name: 'qq_send_group_message', arguments: { groupId: 987654321, message: '测试' } });
+  const denied = await client.callTool({ name: 'qq_send_group_message', arguments: { groupId: 100003, message: '测试' } });
   console.log('🚫 白名单外发送结果:', denied.isError ? '被拒绝 ✓' : '⚠️ 未被拒绝（异常！）', denied.content?.[0]?.text?.slice(0, 120));
 
   // 新能力：发送工具应暴露可选 replyToMessageId
@@ -71,7 +71,7 @@ try {
   // 真实 QQ 消息 id 可能是负数；负数应通过参数校验（这里用白名单外群，应被白名单拦截而非参数拦截）
   const negativeReply = await client.callTool({
     name: 'qq_send_group_message',
-    arguments: { groupId: 987654321, message: '测试', replyToMessageId: -123456789 }
+    arguments: { groupId: 100003, message: '测试', replyToMessageId: -123456789 }
   });
   const negText = negativeReply.content?.[0]?.text ?? '';
   console.log('🚫 负 id + 白名单外 结果:', negativeReply.isError ? '被拒绝 ✓' : '⚠️ 未被拒绝（异常！）', negText.slice(0, 120), '| 校验阶段:', negText.includes('白名单') ? '白名单（参数已通过）' : (RESERVED2 ? 'token/模式（reserved2 要求 agent token）' : '参数'));
@@ -79,7 +79,7 @@ try {
   // 专用引用工具 qq_reply：白名单外 + 负 id 应被白名单拦截（参数已通过）
   const replyDenied = await client.callTool({
     name: 'qq_reply',
-    arguments: { groupId: 987654321, replyToMessageId: -123456789, message: '测试' }
+    arguments: { groupId: 100003, replyToMessageId: -123456789, message: '测试' }
   });
   const replyText = replyDenied.content?.[0]?.text ?? '';
   console.log('🚫 qq_reply 白名单外 结果:', replyDenied.isError ? '被拒绝 ✓' : '⚠️ 未被拒绝（异常！）', replyText.slice(0, 120), '| 校验阶段:', replyText.includes('白名单') ? '白名单（参数已通过）' : (RESERVED2 ? 'token/模式（reserved2 要求 agent token）' : '参数'));

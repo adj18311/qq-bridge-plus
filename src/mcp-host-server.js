@@ -1,18 +1,30 @@
-// SnowLuma 进程管理 MCP server（stdio）。
-// 由 DSH 的 MCP 客户端 spawn（cordis.patch.yml 里 mcp-snowluma-host 行），
-// 给 agent 提供 SnowLuma 网关的状态查询与启停工具。
+// SnowLuma 网关状态查询 MCP server（stdio）。
+// 由 DSH 的 MCP 客户端 spawn（cordis.patch.yml 里 mcp-snowluma-host 行）。
 //
 // 工具：
-//   snowluma_status   —— 检查网关是否在线（HTTP get_login_info）
-//   start_snowluma    —— 未运行时启动 launcher.bat 并等待网关就绪（最长 90s）
-//   stop_snowluma     —— 停止 SnowLuma（按安装目录匹配进程）
+//   snowluma_status   —— 检查网关是否在线（只读：HTTP get_login_info）与账号信息
+//
+// ── 为什么这里**没有**启停 SnowLuma 的工具（2026-09-20 移除，不要加回来）────────────
+//
+// 曾经有 `start_snowluma` / `stop_snowluma`（`spawn launcher.bat` / `taskkill`），默认关闭、
+// 需要 `snowluma.allowProcessControl: true` 才注册。它们被移除，理由不是"危险"，而是**许可**：
+//
+//   SnowLuma EULA §5.4（中文为准）：「除事先取得著作权人的书面授权外，您仅可为 LICENSE 允许的
+//   非商业用途，以专有组件随本软件提供的形式运行该组件；不得复制、修改、单独再分发或再许可该组件。
+//   **将其并入第三方安装包或 Docker 镜像、通过自动化脚本部署**，或者将其用于任何商业用途，
+//   均须事先取得书面授权。」
+//
+// 原生组件是**专有组件**；由本程序**程序化启动/结束**它，落在"通过自动化脚本部署"的射程内。
+// 即便是"用户已装好、我们帮忙拉起"，也不值得为这点便利去踩一条需要书面授权的条款。
+//
+// 设计不变量 L6（见规划集 QSH_PLAN.md §6.0）：**QSH 只探测、不部署**——
+// 永不安装、复制、打包或自动部署 SnowLuma 及其原生组件，也不程序化启停其进程。
+// 用户在 QQ 侧不可用时得到的应该是**可操作的提示**（"请自行启动 SnowLuma"），而不是被代劳。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, execFileSync } from 'node:child_process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { z } from 'zod';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -34,57 +46,9 @@ function getConfig() {
 function getHostConfig() {
   const c = getConfig();
   const httpUrl = (c.snowluma?.httpUrl ?? 'http://127.0.0.1:3000').replace(/\/+$/, '');
-  const launcher = c.snowluma?.launcherPath ?? '';
-  return {
-    httpUrl,
-    httpPort: new URL(httpUrl).port || '80',
-    token: c.snowluma?.accessToken ?? '',
-    launcher,
-    homeDir: c.snowluma?.homeDir ?? (launcher ? path.dirname(launcher) : ''),
-    // 进程控制默认关闭：只有 config.json 显式设置 snowluma.allowProcessControl=true 才允许启停
-    allowProcessControl: c.snowluma?.allowProcessControl === true
-  };
+  const homeDir = c.snowluma?.homeDir ?? (c.snowluma?.launcherPath ? path.dirname(c.snowluma.launcherPath) : '');
+  return { httpUrl, homeDir, token: c.snowluma?.accessToken ?? '' };
 }
-
-function getConsolePort() {
-  try {
-    const c = getConfig();
-    return Number(c.consolePort) || 3100;
-  } catch {
-    return 3100;
-  }
-}
-
-function readConsoleToken() {
-  try {
-    const c = getConfig();
-    if (c.consoleToken) return String(c.consoleToken);
-  } catch {}
-  try {
-    const tokenFile = path.join(ROOT, 'state', 'console-token');
-    return fs.readFileSync(tokenFile, 'utf8').trim();
-  } catch {
-    return '';
-  }
-}
-
-// 进程控制只允许在 closed-agent（仅管理员私聊）模式下使用，防止 chat/reserved 的 agent 被群友诱导启停 SnowLuma。
-async function bridgeModeAllowsProcessControl() {
-  try {
-    const token = readConsoleToken();
-    const res = await fetch(`http://127.0.0.1:${getConsolePort()}/api/status`, {
-      headers: token ? { 'x-console-token': token } : {},
-      signal: AbortSignal.timeout(5000)
-    });
-    if (!res.ok) return false;
-    const body = await res.json();
-    return body?.mode === 'closed-agent';
-  } catch {
-    return false;
-  }
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function gatewayInfo() {
   const { httpUrl, token } = getHostConfig();
@@ -107,120 +71,23 @@ async function gatewayInfo() {
   }
 }
 
-function findSnowLumaPids() {
-  // 先按 OneBot HTTP 端口找监听进程，再用安装目录过滤命令行，
-  // 避免误杀恰好占用同一端口的其他进程。
-  const { httpPort, homeDir } = getHostConfig();
-  const portNum = Number(httpPort);
-  if (!Number.isInteger(portNum) || portNum <= 0 || portNum > 65535) return [];
-  const pids = new Set();
-  try {
-    const byPort = `Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq ${portNum} } | Select-Object -ExpandProperty OwningProcess -Unique`;
-    const out = execFileSync('powershell.exe', ['-NoProfile', '-Command', byPort], { timeout: 15000, windowsHide: true, encoding: 'utf8' });
-    for (const s of out.split(/\s+/)) {
-      const n = Number(s.trim());
-      if (Number.isInteger(n) && n > 0) pids.add(n);
-    }
-  } catch {}
-  const home = String(homeDir || '').toLowerCase().replace(/\\/g, '/');
-  const result = [];
-  for (const pid of pids) {
-    try {
-      const cmd = execFileSync('powershell.exe', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { timeout: 10000, windowsHide: true, encoding: 'utf8' }).trim();
-      const cmdLower = String(cmd || '').toLowerCase().replace(/\\/g, '/');
-      if (home && cmdLower.includes(home)) result.push(pid);
-    } catch {
-      // 拿不到命令行时宁可不杀，避免误伤
-    }
-  }
-  return result;
-}
-
 const server = new McpServer({ name: 'snowluma-host', version: '0.1.5' });
 
 server.tool(
   'snowluma_status',
-  '检查 SnowLuma OneBot 网关是否在线（HTTP 探活 get_login_info）。返回网关可达性、QQ 在线状态与账号信息。',
+  '检查 SnowLuma OneBot 网关是否在线（只读探活 get_login_info）。返回网关可达性、QQ 在线状态与账号信息。网关不可达时返回可操作的提示（本程序不会代你启动 SnowLuma）。',
   {},
   async () => {
     const hc = getHostConfig();
     const info = await gatewayInfo();
-    // 只有显式开启进程控制且当前为 closed-agent 时，才暴露本机路径/PID 这类敏感信息。
-    const admin = hc.allowProcessControl && await bridgeModeAllowsProcessControl();
-    const extra = admin ? { launcher: hc.launcher, homeDir: hc.homeDir, processPids: findSnowLumaPids() } : {};
-    return {
-      content: [{ type: 'text', text: JSON.stringify({ ...info, ...extra }, null, 2) }]
-    };
+    // 只读工具：不再暴露本机路径/PID（那需要进程控制能力，而该能力已被移除）。
+    const payload = { ...info };
+    if (info.reachable === false) {
+      payload.hint = 'SnowLuma 网关不可达。请自行启动 SnowLuma（本程序不代装、不代启，原因见项目文档的合规说明 L6）。'
+        + (hc.homeDir ? '' : ' 若 config.json 的 snowluma.httpUrl 与实际端口不一致，也请一并检查。');
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
   }
 );
-
-if (getHostConfig().allowProcessControl) {
-  server.tool(
-    'start_snowluma',
-    '启动 SnowLuma（launcher.bat，独立窗口）并等待 OneBot 网关就绪，最长 90 秒。已在运行时直接返回当前状态。',
-    {},
-    async () => {
-      const hc = getHostConfig();
-      if (!hc.launcher) {
-        return { content: [{ type: 'text', text: '拒绝：未配置 snowluma.launcherPath。' }], isError: true };
-      }
-      if (!hc.allowProcessControl) {
-        return { content: [{ type: 'text', text: '拒绝：进程控制未开启（config.json 需设置 snowluma.allowProcessControl=true）。' }], isError: true };
-      }
-      if (!(await bridgeModeAllowsProcessControl())) {
-        return { content: [{ type: 'text', text: '拒绝：进程控制仅允许在 closed-agent（管理员私聊）模式下使用。' }], isError: true };
-      }
-      const before = await gatewayInfo();
-      if (before.reachable && before.online) {
-        return { content: [{ type: 'text', text: JSON.stringify({ started: false, alreadyOnline: true, info: before }) }] };
-      }
-      let spawnError = null;
-      const child = spawn('cmd.exe', ['/c', 'start', '', `"${hc.launcher}"`], { detached: true, stdio: 'ignore', windowsHide: true });
-      child.on('error', (err) => { spawnError = err; });
-      child.unref();
-      let info = null;
-      for (let i = 0; i < 45; i += 1) {
-        if (spawnError) {
-          return { content: [{ type: 'text', text: `启动失败：${spawnError?.message ?? spawnError}` }], isError: true };
-        }
-        await sleep(2000);
-        info = await gatewayInfo();
-        if (info.reachable && info.online) {
-          return { content: [{ type: 'text', text: JSON.stringify({ started: true, readyAfterMs: (i + 1) * 2000, info }) }] };
-        }
-      }
-      return { content: [{ type: 'text', text: JSON.stringify({ started: false, timeout: true, lastInfo: info ?? before }) }] };
-    }
-  );
-
-  server.tool(
-    'stop_snowluma',
-    '停止 SnowLuma 进程（按安装目录匹配 node 进程后 taskkill）。谨慎使用：会断开当前 QQ 连接。',
-    {},
-    async () => {
-      const hc = getHostConfig();
-      if (!hc.allowProcessControl) {
-        return { content: [{ type: 'text', text: '拒绝：进程控制未开启（config.json 需设置 snowluma.allowProcessControl=true）。' }], isError: true };
-      }
-      if (!(await bridgeModeAllowsProcessControl())) {
-        return { content: [{ type: 'text', text: '拒绝：进程控制仅允许在 closed-agent（管理员私聊）模式下使用。' }], isError: true };
-      }
-      const pids = findSnowLumaPids();
-      if (pids.length === 0) {
-        return { content: [{ type: 'text', text: JSON.stringify({ stopped: false, reason: 'no process found' }) }] };
-      }
-      const killed = [];
-      for (const pid of pids) {
-        try {
-          execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10000, windowsHide: true, stdio: 'ignore' });
-          killed.push(pid);
-        } catch (error) {
-          // 进程可能已退出
-        }
-      }
-      return { content: [{ type: 'text', text: JSON.stringify({ stopped: true, killed }) }] };
-    }
-  );
-}
 
 await server.connect(new StdioServerTransport());

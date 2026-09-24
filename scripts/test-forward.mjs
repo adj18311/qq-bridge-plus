@@ -54,9 +54,9 @@ check('extractForwardIds 非数组返回空', JSON.stringify(extractForwardIds(n
 // 3. formatForwardResponse / nodeText
 const data = {
   messages: [
-    { sender: { nickname: '张三', user_id: 10001 }, time: 1700000000, message: [{ type: 'text', data: { text: '第一句' } }, { type: 'image', data: { url: 'https://example.com/a.jpg' } }, { type: 'forward', data: { id: 'nested_001' } }] },
-    { sender: '李四', time: 1700000001, message: '第二句' },
-    { sender: { card: '王五', user_id: 10003 }, time: 1700000002, content: [{ type: 'at', data: { qq: 10001 } }, { type: 'text', data: { text: ' 你好' } }] }
+    { sender: { nickname: '张三', user_id: 10001 }, time: 100006, message: [{ type: 'text', data: { text: '第一句' } }, { type: 'image', data: { url: 'https://example.com/a.jpg' } }, { type: 'forward', data: { id: 'nested_001' } }] },
+    { sender: '李四', time: 100007, message: '第二句' },
+    { sender: { card: '王五', user_id: 10003 }, time: 100008, content: [{ type: 'at', data: { qq: 10001 } }, { type: 'text', data: { text: ' 你好' } }] }
   ]
 };
 const fmt = formatForwardResponse(data);
@@ -79,9 +79,9 @@ check('formatForwardResponse 空 messages', empty.total === 0 && empty.truncated
 const senderFallback = formatForwardResponse({ messages: [{ sender: { nickname: '', card: '王五', user_id: 10003 }, message: 'x' }] });
 check('sender 空 nickname 回退到 card', senderFallback.messages[0].sender === '王五');
 
-const nodeData = { messages: [{ type: 'node', data: { name: '张三', uin: '10001', time: 1700000000, content: [{ type: 'text', data: { text: '你好' } }] } }] };
+const nodeData = { messages: [{ type: 'node', data: { name: '张三', uin: '10001', time: 100006, content: [{ type: 'text', data: { text: '你好' } }] } }] };
 const fmtNode = formatForwardResponse(nodeData);
-check('formatForwardResponse 兼容标准 node.data 结构', fmtNode.messages[0].sender === '张三' && fmtNode.messages[0].text === '你好' && fmtNode.messages[0].userId === '10001' && fmtNode.messages[0].time === 1700000000);
+check('formatForwardResponse 兼容标准 node.data 结构', fmtNode.messages[0].sender === '张三' && fmtNode.messages[0].text === '你好' && fmtNode.messages[0].userId === '10001' && fmtNode.messages[0].time === 100006);
 
 check('nodeText 清洗 CQ 字符串', nodeText({ message: '[CQ:image,file=x]' }) === '[媒体]');
 

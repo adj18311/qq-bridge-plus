@@ -34,7 +34,7 @@ const ok = (name, cond, extra = '') => {
 // 1. 页面
 const page = await fetch(BASE + '/', { headers: authHeaders });
 const html = await page.text();
-ok('页面加载', page.status === 200 && html.includes('白名单 / 管理员') && html.includes('人格（角色扮演）') && html.includes('测试发送'), `长度 ${html.length}`);
+ok('页面加载', page.status === 200 && html.includes('白名单 / 管理员') && html.includes('人格与角色') && html.includes('仿真提示词') && html.includes('测试发送'), `长度 ${html.length}`);
 
 // 2. 角色列表
 let r = await api('/api/roles');
@@ -92,7 +92,7 @@ ok('测试发送群消息', r.body.ok === true || snowlumaDown,
 await api('/api/whitelist', 'POST', { allow: origAllow, deny: { private: [], groups: [] } });
 
 // 9. 测试发送到非白名单（应拒绝）
-r = await api('/api/test-send', 'POST', { kind: 'group', id: '987654321', message: 'x' });
+r = await api('/api/test-send', 'POST', { kind: 'group', id: '100003', message: 'x' });
 ok('非白名单发送被拒', r.body.ok === false && r.status === 403, JSON.stringify(r.body));
 
 // 10. 清理测试人格（用绝对路径，不依赖运行目录）

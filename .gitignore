@@ -43,3 +43,7 @@ config.json
 /scripts/patch-qq-chat-v2-presleep.mjs
 /scripts/patch-qq-chat-v2-stickers.mjs
 /scripts/patch-web-mcp-timeout.mjs
+
+
+# 本机专用的隐私扫描规则（含真实 QQ 号/路径，不入库）
+/scripts/privacy-rules.json

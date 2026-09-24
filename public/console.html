@@ -2,298 +2,1886 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>QQ 桥接控制台</title>
+<script>
+// 主题引导：须在样式表之前执行，避免首屏闪一下浅色。
+(function () {
+  var theme;
+  try {
+    var saved = localStorage.getItem('qq-console-theme');
+    theme = saved === 'dark' || saved === 'light' ? saved : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  } catch (error) {
+    theme = 'light';
+  }
+  document.documentElement.dataset.theme = theme;
+})();
+</script>
 <style>
-  :root {
-    --bg: #0f1115;
-    --card: #1a1d24;
-    --card-border: #2a2f3a;
-    --text: #e5e7eb;
-    --muted: #9ca3af;
-    --accent: #2563eb;
-    --accent-border: #3b82f6;
-    --danger: #7f1d1d;
-    --danger-border: #991b1b;
-    --ok: #34d399;
-    --err: #f87171;
-    --pill-blue-bg: #1e3a5f;
-    --pill-blue-fg: #7dd3fc;
-    --pill-green-bg: #1a3a2a;
-    --pill-green-fg: #86efac;
-    --pill-red-bg: #3f1d2e;
-    --pill-red-fg: #f9a8d4;
+:root {
+  /* 基础面 */
+  --bg:#f7f8fb;
+  --surface:#fff;
+  --surface-subtle:#fafbfe;
+  --surface-sunken:#f8f9fc;
+  --surface-hover:#f5f6fa;
+  --surface-chip:#f6f8fc;
+  --surface-chip-strong:#e9edf5;
+  --surface-open:#fafbff;
+  --card:#fff;
+  --topbar-bg:rgba(255,255,255,.96);
+  --save-bar-bg:#f3f6fff5;
+  --overlay:#202e4966;
+  /* 边框 */
+  --card-border:#e4e9f1;
+  --border:#dfe4ed;
+  --border-input:#dce2ec;
+  --border-chip:#e1e6ef;
+  --border-strong:#d1d8e5;
+  --border-dashed:#e0e6ef;
+  --border-subtle:#edf0f5;
+  /* 文字 */
+  --text:#202635;
+  --text-strong:#293044;
+  --text-input:#283347;
+  --text-secondary:#5f6a7d;
+  --label:#566174;
+  --muted:#5d6878;
+  --muted-soft:#828da1;
+  --placeholder:#929bad;
+  --icon:#77839a;
+  --eyebrow:#8995af;
+  --code-fg:#596b92;
+  --code-fg-strong:#455b8b;
+  --pre-fg:#626f83;
+  /* 品牌强调色 */
+  --accent:#4d6bfe;
+  --accent-hover:#405de5;
+  --accent-border:#4d6bfe;
+  --accent-soft-bg:#edf1ff;
+  --accent-soft-bg-active:#f2f5ff;
+  --accent-soft-fg:#405ee6;
+  --accent-soft-fg-muted:#687cb9;
+  --accent-border-soft:#c8d4ff;
+  --accent-border-soft-hover:#bdc8e9;
+  --accent-border-active:#7c92ff;
+  --accent-border-hover:#98aaff;
+  --accent-border-focus:#7e96ff;
+  --accent-ring:#4d6bfe0c;
+  /* 语义状态 */
+  --danger:#fff5f4;
+  --danger-border:#f1d4d1;
+  --danger-hover-bg:#ffebe8;
+  --err:#bd3b3b;
+  --ok:#168467;
+  --pill-blue-bg:#edf1ff;
+  --pill-blue-fg:#435de0;
+  --pill-green-bg:#eaf7f1;
+  --pill-green-fg:#22775f;
+  --pill-red-bg:#fff0ed;
+  --pill-red-fg:#b64a3e;
+  --warn-bg:#fff8ee;
+  --warn-border:#f3d6ad;
+  --warn-fg:#8e652a;
+  --warn-fg-strong:#b47720;
+  --dot-idle:#86a19a;
+  --dot-offline:#a1aab9;
+  /* 其它 */
+  --focus-ring:#a7b5ff;
+  --focus-ring-modal:#b4c3ff;
+  --toast-bg:#27334a;
+  --toast-fg:#fff;
+  --shadow-card:0 1px 2px #172d5108,0 10px 28px #172d5108;
+  --shadow-md:0 4px 15px #293b7410;
+  --shadow-pop:0 15px 45px #26366b1c;
+  --shadow-modal:0 24px 80px #172d5133;
+  --shadow-log:0 6px 30px #23365a26;
+  /* 背景点缀 */
+  --decor-a:#4d6bfe14;
+  --decor-b:#7c5cff0f;
+  --radius:16px;
+  color-scheme:light
+}
+* {
+  box-sizing:border-box
+}
+html {
+  scroll-behavior:smooth;
+  scroll-padding-top:90px
+}
+body {
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  font-size:14px;
+  line-height:1.65
+}
+button,input,textarea,select {
+  font:inherit
+}
+button,a,input,textarea,select,summary {
+  -webkit-tap-highlight-color:transparent
+}
+button {
+  cursor:pointer
+}
+button:disabled {
+  opacity:.5;
+  cursor:not-allowed
+}
+button,a,input,textarea,select,summary {
+  outline-offset:4px
+}
+:focus-visible {
+  outline:3px solid var(--focus-ring)
+}
+[hidden] {
+  display:none!important
+}
+a {
+  color:var(--accent);
+  text-decoration:none
+}
+p {
+  margin:0
+}
+button {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:9px;
+  color:var(--text);
+  padding:9px 15px;
+  transition:background .15s,border-color .15s,color .15s
+}
+button:hover {
+  background:var(--surface-hover);
+  border-color:var(--accent-border-soft-hover)
+}
+button.active,.primary {
+  background:var(--accent);
+  border-color:var(--accent);
+  color:#fff
+}
+button.danger {
+  background:var(--danger);
+  border-color:var(--danger-border);
+  color:var(--err)
+}
+button.danger:hover {
+  background:var(--danger-hover-bg)
+}
+button.small {
+  font-size:12px;
+  padding:7px 11px
+}
+button.planned {
+  border-style:dashed;
+  color:var(--muted)
+}
+.sidebar {
+  position:fixed;
+  inset:0 auto 0 0;
+  width:234px;
+  background:var(--surface);
+  border-right:1px solid var(--card-border);
+  padding:32px 18px 20px;
+  display:flex;
+  flex-direction:column;
+  z-index:20;
+  overflow-y:auto
+}
+.brand {
+  display:flex;
+  align-items:center;
+  gap:11px;
+  padding:0 10px 24px;
+  color:var(--text-strong);
+  font-size:21px;
+  letter-spacing:-.6px;
+  font-weight:700;
+  line-height:1.3
+}
+.brand small {
+  display:block;
+  color:var(--muted);
+  font-size:10px;
+  font-weight:400;
+  letter-spacing:.2px;
+  margin-top:5px
+}
+.brand-mark {
+  position:relative;
+  font-size:35px;
+  color:var(--accent);
+  font-weight:650;
+  line-height:1;
+  letter-spacing:-6px;
+  width:32px
+}
+.brand-mark span {
+  font-size:20px;
+  position:absolute;
+  right:0;
+  top:0
+}
+.nav-label {
+  font-size:10px;
+  letter-spacing:1.2px;
+  color:var(--muted-soft);
+  margin:22px 14px 8px
+}
+.sidebar>.nav-label {
+  margin-top:10px
+}
+.nav-item {
+  border:0;
+  background:transparent;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  width:100%;
+  padding:11px 14px;
+  margin:3px 0;
+  text-align:left;
+  font-size:13px;
+  border-radius:9px;
+  color:var(--text-secondary);
+  white-space:nowrap
+}
+.nav-item:hover {
+  background:var(--surface-hover)
+}
+.nav-item.active {
+  background:var(--accent-soft-bg);
+  color:var(--accent-soft-fg);
+  font-weight:600
+}
+.nav-icon {
+  width:18px;
+  text-align:center;
+  font-size:19px;
+  line-height:1;
+  font-weight:400
+}
+.nav-count,.nav-note {
+  margin-left:auto;
+  font-size:10px;
+  color:var(--muted-soft)
+}
+.nav-count {
+  background:var(--surface-chip-strong);
+  padding:0 6px;
+  border-radius:5px;
+  min-width:20px;
+  text-align:center
+}
+.sidebar-bottom {
+  border-top:1px solid var(--card-border);
+  margin:30px 10px 0;
+  padding-top:20px;
+  font-size:12px;
+  color:var(--text-secondary);
+  margin-top:auto
+}
+.sidebar-bottom small {
+  display:block;
+  font-size:10px;
+  color:var(--muted-soft);
+  margin:4px 0 0 14px
+}
+.local-dot {
+  display:inline-block;
+  width:6px;
+  height:6px;
+  background:var(--dot-idle);
+  border-radius:50%;
+  margin-right:8px
+}
+.workspace {
+  margin-left:234px;
+  min-width:0
+}
+.topbar {
+  height:76px;
+  border-bottom:1px solid var(--card-border);
+  background:var(--topbar-bg);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 40px;
+  gap:16px
+}
+.breadcrumb {
+  font-size:12px;
+  color:var(--muted-soft);
+  display:flex;
+  gap:13px
+}
+.breadcrumb span:last-child {
+  color:var(--text-secondary)
+}
+.topbar-actions {
+  display:flex;
+  align-items:center;
+  gap:14px
+}
+.status-badge {
+  font-size:12px;
+  color:var(--muted);
+  display:flex;
+  align-items:center;
+  gap:7px
+}
+.status-badge:before {
+  content:"";
+  width:6px;
+  height:6px;
+  background:var(--dot-offline);
+  border-radius:50%
+}
+.status-badge.online:before {
+  background:var(--ok)
+}
+.status-badge.offline:before {
+  background:var(--err)
+}
+.icon-button {
+  font-size:23px;
+  border:1px solid var(--card-border);
+  width:34px;
+  height:34px;
+  padding:0;
+  line-height:1;
+  border-radius:9px;
+  color:var(--icon)
+}
+main {
+  padding:38px 40px 20px;
+  max-width:1514px;
+  margin:auto
+}
+.page-heading {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:24px;
+  margin-bottom:30px
+}
+.eyebrow {
+  color:var(--eyebrow);
+  font-size:10px;
+  letter-spacing:2px;
+  font-weight:600;
+  margin-bottom:10px
+}
+h1 {
+  font-size:29px;
+  font-weight:600;
+  letter-spacing:-.9px;
+  line-height:1.4;
+  margin:0 0 9px
+}
+.page-heading p {
+  font-size:13px;
+  color:var(--muted)
+}
+.search-wrap {
+  position:relative;
+  flex:0 0 238px
+}
+.search-wrap input {
+  background:var(--surface);
+  padding:10px 14px;
+  border-radius:10px;
+  font-size:12px
+}
+.search-results {
+  position:absolute;
+  right:0;
+  top:48px;
+  width:360px;
+  max-width:80vw;
+  max-height:420px;
+  overflow:auto;
+  background:var(--surface);
+  border:1px solid var(--card-border);
+  padding:7px;
+  border-radius:12px;
+  box-shadow:var(--shadow-pop);
+  z-index:50
+}
+.search-results button {
+  display:block;
+  text-align:left;
+  width:100%;
+  border:0;
+  font-size:12px;
+  padding:10px
+}
+.search-results button small {
+  display:block;
+  color:var(--muted);
+  font-size:11px
+}
+.search-results p {
+  padding:15px;
+  color:var(--muted);
+  font-size:12px
+}
+.overview-summary {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:0;
+  background:var(--surface);
+  border:1px solid var(--card-border);
+  border-radius:var(--radius);
+  margin-bottom:24px;
+  padding:23px 0
+}
+.metric {
+  padding:0 26px;
+  border:0;
+  border-right:1px solid var(--card-border);
+  background:transparent;
+  border-radius:0;
+  text-align:left;
+  min-width:0
+}
+.metric:last-child {
+  border:0
+}
+.metric>span {
+  font-size:12px;
+  color:var(--muted);
+  display:block
+}
+.metric strong {
+  display:block;
+  font-size:25px;
+  line-height:1.5;
+  margin:8px 0 3px;
+  font-weight:600;
+  letter-spacing:-.5px
+}
+.metric small {
+  display:block;
+  font-size:11px;
+  color:var(--muted-soft)
+}
+.metric-link:hover {
+  background:var(--surface-hover)
+}
+.metric-link small span {
+  float:right;
+  color:var(--accent)
+}
+#metricMode {
+  font-size:22px
+}
+.grid {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:22px;
+  align-items:start
+}
+.card {
+  background:var(--card);
+  border:1px solid var(--card-border);
+  border-radius:var(--radius);
+  padding:26px;
+  min-width:0;
+  overflow-wrap:anywhere
+}
+.span-all {
+  grid-column:1/-1
+}
+.card h2 {
+  font-size:16px;
+  font-weight:600;
+  margin:0 0 20px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  letter-spacing:-.2px
+}
+.card h2:after {
+  content:attr(data-note);
+  font-size:11px;
+  font-weight:400;
+  margin-left:auto;
+  color:var(--muted)
+}
+.card h3 {
+  font-size:14px
+}
+.mode-row {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:12px
+}
+.mode-row button {
+  display:flex;
+  flex-direction:column;
+  position:relative;
+  padding:18px 16px;
+  text-align:left;
+  min-height:99px;
+  border-radius:12px;
+  background:var(--surface);
+  border-color:var(--border)
+}
+.mode-row strong {
+  font-weight:600;
+  font-size:14px;
+  line-height:1.6
+}
+.mode-row small {
+  font-size:11px;
+  color:var(--muted);
+  margin-top:6px;
+  line-height:1.5
+}
+.mode-row button.active {
+  background:var(--accent-soft-bg-active);
+  border-color:var(--accent-border-active);
+  color:var(--accent-soft-fg)
+}
+.mode-row button.active small {
+  color:var(--accent-soft-fg-muted)
+}
+.mode-indicator {
+  position:absolute;
+  right:12px;
+  top:14px;
+  width:12px;
+  height:12px;
+  border:1px solid var(--border-strong);
+  border-radius:50%
+}
+.active .mode-indicator {
+  border:4px solid var(--accent);
+  background:var(--surface)
+}
+.mode-row button:hover {
+  border-color:var(--accent-border-hover)
+}
+.row {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:10px;
+  min-width:0
+}
+.row>* {
+  min-width:0;
+  max-width:100%
+}
+.row label {
+  margin:6px 0
+}
+.row input[type=text],.row input[type=search] {
+  flex:1 1 180px
+}
+.row select {
+  flex-shrink:1
+}
+.meta,.inline-tip {
+  font-size:12px;
+  color:var(--muted);
+  line-height:1.8
+}
+.meta {
+  margin-top:8px
+}
+.ok {
+  color:var(--ok)
+}
+.err {
+  color:var(--err)
+}
+label {
+  display:block;
+  font-size:12px;
+  color:var(--label);
+  margin:17px 0 7px
+}
+input[type=text],input[type=search],input[type=password],input[type=number],textarea,select {
+  background:var(--surface);
+  border:1px solid var(--border-input);
+  border-radius:8px;
+  padding:9px 11px;
+  color:var(--text-input);
+  width:100%;
+  max-width:100%;
+  font-size:13px;
+  min-width:0;
+  transition:border-color .15s,box-shadow .15s
+}
+input:focus,textarea:focus,select:focus {
+  border-color:var(--accent-border-focus);
+  box-shadow:0 0 0 3px var(--accent-ring)
+}
+input::placeholder,textarea::placeholder {
+  color:var(--placeholder)
+}
+textarea {
+  resize:vertical;
+  min-height:100px;
+  line-height:1.7;
+  font-family:inherit
+}
+input[type=checkbox] {
+  accent-color:var(--accent);
+  width:16px;
+  height:16px;
+  flex-shrink:0;
+  cursor:pointer
+}
+input[type=number] {
+  font-variant-numeric:tabular-nums
+}
+code {
+  font-family:Consolas,"SFMono-Regular",monospace;
+  font-size:.94em;
+  color:var(--code-fg)
+}
+pre {
+  background:var(--surface-sunken);
+  border:1px solid var(--border-subtle);
+  border-radius:10px;
+  padding:16px;
+  font-family:Consolas,"Microsoft YaHei",monospace;
+  font-size:12px;
+  line-height:1.8;
+  max-height:300px;
+  overflow:auto;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  margin:8px 0 0;
+  color:var(--pre-fg)
+}
+#activity {
+  min-height:154px;
+  max-height:260px;
+  margin:0
+}
+#section-activity {
+  grid-column:1/-1;
+  order:3
+}
+#section-mode {
+  order:0
+}
+#section-silent {
+  grid-column:1/-1;
+  order:2;
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:8px 20px;
+  padding-top:20px;
+  padding-bottom:20px
+}
+#section-silent h2 {
+  margin:0;
+  align-self:center
+}
+#section-silent .meta {
+  grid-column:1/-1;
+  margin:0
+}
+#section-silent .row {
+  grid-column:2;
+  grid-row:1
+}
+.tag {
+  display:inline-block;
+  background:var(--surface-chip);
+  border:1px solid var(--border-chip);
+  border-radius:30px;
+  padding:8px 18px;
+  margin:4px;
+  cursor:pointer;
+  font-size:13px
+}
+.tag.active {
+  background:var(--accent-soft-bg);
+  border-color:var(--accent-border-soft);
+  color:var(--accent-soft-fg)
+}
+.divider {
+  border-top:1px solid var(--card-border);
+  margin:24px 0
+}
+.settings-group {
+  border:1px solid var(--card-border);
+  border-radius:11px;
+  margin-top:14px;
+  background:var(--surface)
+}
+.settings-group summary {
+  padding:16px 18px;
+  color:var(--text-secondary);
+  font-size:13px;
+  font-weight:500;
+  cursor:pointer
+}
+.settings-group[open] summary {
+  border-bottom:1px solid var(--card-border);
+  background:var(--surface-open);
+  border-radius:11px 11px 0 0
+}
+.settings-content {
+  padding:8px 20px 20px
+}
+.settings-content>.row {
+  padding:10px 0;
+  border-bottom:1px solid var(--border-subtle)
+}
+.settings-content>.row:last-child {
+  border-bottom:0
+}
+.settings-content>.row label {
+  flex-basis:100px!important
+}
+.settings-content>.row>.meta {
+  flex-basis:180px!important
+}
+.settings-content>.row input[type=number] {
+  min-width:80px
+}
+summary {
+  cursor:pointer
+}
+.save-bar {
+  position:sticky;
+  bottom:12px;
+  margin-top:20px;
+  padding:12px 18px;
+  background:var(--save-bar-bg);
+  border:1px solid var(--accent-border-soft);
+  border-radius:12px;
+  z-index:5;
+  box-shadow:var(--shadow-md)
+}
+.save-bar .row {
+  margin-top:0!important
+}
+.save-bar .meta {
+  font-size:11px
+}
+.v2-tool-list {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(min(265px,100%),1fr));
+  gap:10px;
+  margin-top:12px
+}
+.v2-tool-item {
+  display:flex;
+  align-items:flex-start;
+  gap:9px;
+  padding:12px;
+  margin:0;
+  background:var(--surface-subtle);
+  border:1px solid var(--border-subtle);
+  border-radius:10px;
+  font-size:12px;
+  min-width:0
+}
+.v2-tool-item input {
+  margin-top:4px
+}
+.v2-tool-item .meta {
+  display:block;
+  font-size:11px;
+  margin-top:3px
+}
+.v2-tool-item b {
+  font-family:Consolas,monospace;
+  font-size:12px;
+  font-weight:500;
+  color:var(--code-fg-strong)
+}
+table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:12px;
+  margin-top:10px;
+  text-align:left
+}
+th {
+  color:var(--muted-soft);
+  font-size:11px;
+  font-weight:500;
+  background:var(--surface-sunken)
+}
+th,td {
+  padding:13px 12px;
+  border-bottom:1px solid var(--card-border);
+  vertical-align:top;
+  overflow-wrap:anywhere
+}
+td {
+  color:var(--text-secondary)
+}
+tr:last-child td {
+  border-bottom:0
+}
+.pill {
+  display:inline-block;
+  white-space:nowrap;
+  padding:3px 8px;
+  border-radius:6px;
+  font-size:10px
+}
+.pill.b {
+  background:var(--pill-blue-bg);
+  color:var(--pill-blue-fg)
+}
+.pill.g {
+  background:var(--pill-green-bg);
+  color:var(--pill-green-fg)
+}
+.pill.r {
+  background:var(--pill-red-bg);
+  color:var(--pill-red-fg)
+}
+#sessionList,#pendingList {
+  overflow:auto
+}
+.tool-log-table,.slang-scroll {
+  overflow:auto;
+  border:1px solid var(--card-border);
+  border-radius:10px;
+  margin-top:12px;
+  max-height:500px
+}
+.tool-log-table table {
+  min-width:1000px;
+  table-layout:fixed
+}
+.slang-scroll table {
+  min-width:900px
+}
+.tool-log-table thead th,.slang-scroll thead th {
+  position:sticky;
+  top:0;
+  background:var(--surface-hover);
+  z-index:1
+}
+.tool-log-cell {
+  display:inline-block;
+  max-width:320px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  vertical-align:top;
+  cursor:pointer
+}
+.tool-log-cell.expanded {
+  white-space:pre-wrap;
+  overflow-wrap:anywhere
+}
+.slang-tabs {
+  display:flex;
+  gap:5px;
+  border-bottom:1px solid var(--card-border);
+  margin:22px 0 18px
+}
+.slang-tab {
+  border:0;
+  border-radius:0;
+  background:transparent;
+  padding:10px 18px;
+  color:var(--muted);
+  font-size:13px
+}
+.slang-tab.active {
+  color:var(--accent);
+  border-bottom:2px solid var(--accent);
+  background:transparent
+}
+.slang-panel {
+  display:none
+}
+.slang-panel.active {
+  display:block
+}
+.empty-state {
+  padding:38px 20px;
+  text-align:center;
+  border:1px dashed var(--border-dashed);
+  border-radius:12px;
+  color:var(--muted-soft);
+  font-size:12px
+}
+.empty-state strong {
+  color:var(--text-secondary);
+  display:block;
+  font-weight:500;
+  font-size:14px;
+  margin-bottom:6px
+}
+.modal-overlay {
+  position:fixed;
+  inset:0;
+  background:var(--overlay);
+  backdrop-filter:blur(3px);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  z-index:1000
+}
+.modal-overlay.open {
+  display:flex
+}
+.modal {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:18px;
+  width:min(680px,92vw);
+  max-height:86vh;
+  overflow:auto;
+  padding:28px;
+  box-shadow:var(--shadow-modal)
+}
+.modal h3 {
+  margin:0 0 12px;
+  font-size:18px
+}
+.modal label {
+  margin-top:14px
+}
+.modal .row {
+  margin-top:20px
+}
+.overview-footnote {
+  margin-top:18px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  font-size:12px;
+  color:var(--muted);
+  gap:12px
+}
+.text-button {
+  border:0;
+  color:var(--accent);
+  padding:5px 0;
+  background:transparent;
+  font-size:12px
+}
+.page-footer {
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  font-size:10px;
+  color:var(--muted-soft);
+  margin-top:38px;
+  border-top:1px solid var(--card-border);
+  padding-top:18px
+}
+.connection-alert {
+  border:1px solid var(--warn-border);
+  background:var(--warn-bg);
+  color:var(--warn-fg);
+  padding:14px 18px;
+  border-radius:10px;
+  margin-bottom:20px;
+  font-size:13px
+}
+.toast {
+  position:fixed;
+  bottom:24px;
+  left:50%;
+  transform:translateX(-50%);
+  max-width:calc(100vw - 40px);
+  padding:12px 22px;
+  background:var(--toast-bg);
+  color:var(--toast-fg);
+  box-shadow:var(--shadow-log);
+  border-radius:12px;
+  z-index:1100;
+  font-size:13px
+}
+.sr-only {
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0
+}
+.skip-link {
+  position:fixed;
+  top:-100px;
+  left:20px;
+  z-index:2000;
+  background:var(--surface);
+  padding:12px 20px;
+  border:2px solid var(--accent);
+  border-radius:10px
+}
+.skip-link:focus {
+  top:10px
+}
+.search-highlight {
+  outline:3px solid var(--focus-ring-modal)!important;
+  outline-offset:5px
+}
+.dirty-hint {
+  font-size:11px;
+  color:var(--warn-fg-strong);
+  margin-left:auto
+}
+@media(min-width:1500px) {
+  main {
+    padding-top:46px
   }
-  * { box-sizing: border-box; }
-  body {
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    margin: 0;
-    padding: 24px;
-  }
-  .topbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    max-width: 1440px;
-    margin: 0 auto 20px;
-  }
-  h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: var(--muted); font-size: 13px; }
-  .status-badge {
-    background: var(--card);
-    border: 1px solid var(--card-border);
-    border-radius: 10px;
-    padding: 8px 14px;
-    font-size: 13px;
-    color: var(--muted);
-    max-width: 720px;
-    white-space: normal;
-    word-break: break-word;
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-    gap: 16px;
-    max-width: 1440px;
-    margin: 0 auto;
+  .mode-row button {
+    padding:22px;
+    min-height:112px
   }
   .card {
-    background: var(--card);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 18px;
-    min-width: 0;
+    padding:30px
+  }
+}
+@media(max-width:1180px) {
+  .sidebar {
+    width:210px;
+    padding-left:12px;
+    padding-right:12px
+  }
+  .workspace {
+    margin-left:210px
+  }
+  .topbar {
+    padding:0 26px
+  }
+  main {
+    padding:28px 26px 20px
+  }
+  .page-heading {
+    align-items:flex-start;
+    flex-direction:column;
+    gap:18px
+  }
+  .search-wrap {
+    flex:none;
+    width:100%;
+    max-width:420px
+  }
+  .search-results {
+    left:0;
+    width:100%
+  }
+  .mode-row {
+    grid-template-columns:repeat(2,minmax(0,1fr))
+  }
+  .metric {
+    padding:0 17px
+  }
+  .metric strong {
+    font-size:23px
+  }
+  #metricMode {
+    font-size:18px
+  }
+  .card {
+    padding:22px
+  }
+  .sidebar-bottom {
+    padding-top:15px
+  }
+}
+@media(max-width:760px) {
+  .sidebar {
+    position:relative;
+    width:100%;
+    padding:18px 16px 8px;
+    border-right:0;
+    border-bottom:1px solid var(--card-border);
+    overflow:visible;
+    display:block
+  }
+  .brand {
+    padding:0 4px 14px;
+    font-size:20px
+  }
+  .brand small {
+    font-size:10px
+  }
+  .brand-mark {
+    font-size:30px
+  }
+  #mainNav {
+    display:flex;
+    gap:5px;
+    overflow-x:auto;
+    padding-bottom:6px
+  }
+  .nav-label,.sidebar-bottom,.nav-icon,.nav-note,.nav-count {
+    display:none
+  }
+  .nav-item {
+    width:auto;
+    flex:none;
+    padding:9px 12px;
+    font-size:12px;
+    margin:0
+  }
+  .workspace {
+    margin-left:0
+  }
+  .topbar {
+    height:54px;
+    padding:0 20px
+  }
+  .breadcrumb {
+    font-size:11px
+  }
+  .status-badge {
+    font-size:10px
+  }
+  .topbar-actions {
+    gap:8px
+  }
+  .icon-button {
+    width:28px;
+    height:28px;
+    font-size:20px
+  }
+  main {
+    padding:26px 18px 18px
+  }
+  .page-heading {
+    margin-bottom:24px
+  }
+  h1 {
+    font-size:25px
+  }
+  .page-heading p {
+    font-size:12px
+  }
+  .eyebrow {
+    font-size:9px
+  }
+  .search-wrap {
+    max-width:none
+  }
+  .overview-summary {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    padding:0;
+    margin-bottom:18px
+  }
+  .metric {
+    padding:18px;
+    border-bottom:1px solid var(--card-border);
+    min-height:122px
+  }
+  .metric:nth-child(2) {
+    border-right:0
+  }
+  .metric:nth-child(3) {
+    border-bottom:0
+  }
+  .metric strong {
+    font-size:24px;
+    margin:5px 0 2px
+  }
+  #metricMode {
+    font-size:20px
+  }
+  .metric small {
+    font-size:10px
+  }
+  .grid {
+    grid-template-columns:1fr;
+    gap:18px
+  }
+  .card {
+    padding:20px;
+    border-radius:14px
   }
   .card h2 {
-    font-size: 14px;
-    margin: 0 0 12px;
-    color: #d1d5db;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border-bottom: 1px solid #232833;
-    padding-bottom: 10px;
+    font-size:15px;
+    margin-bottom:16px
   }
-  .sec-no {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 24px;
-    height: 20px;
-    padding: 0 6px;
-    background: #232833;
-    border: 1px solid #343b49;
-    border-radius: 6px;
-    font-size: 11px;
-    color: var(--muted);
+  .mode-row {
+    gap:10px
   }
-  .span-all { grid-column: 1 / -1; }
-  .mode-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  button {
-    background: #232833;
-    color: var(--text);
-    border: 1px solid #343b49;
-    border-radius: 8px;
-    padding: 8px 14px;
-    cursor: pointer;
-    font-size: 13px;
-    transition: background 0.15s ease, border-color 0.15s ease;
+  .mode-row button {
+    padding:15px 12px;
+    min-height:93px
   }
-  button:hover { background: #2b313d; }
-  button.active { background: var(--accent); border-color: var(--accent-border); color: #fff; }
-  button.danger { background: var(--danger); border-color: var(--danger-border); }
-  button.small { padding: 4px 10px; font-size: 12px; }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
-  button.planned {
-    background: transparent;
-    border-style: dashed;
-    border-color: #4b5563;
-    color: var(--muted);
-    cursor: not-allowed;
+  .mode-row strong {
+    font-size:13px
   }
-  input[type=text], textarea, select {
-    background: var(--bg);
-    border: 1px solid #343b49;
-    border-radius: 8px;
-    color: var(--text);
-    padding: 8px 10px;
-    font-size: 13px;
-    width: 100%;
-    box-sizing: border-box;
+  .mode-row small {
+    font-size:10px
   }
-  textarea { resize: vertical; min-height: 80px; font-family: monospace; }
-  input[type=number] { background: var(--bg); border: 1px solid #343b49; border-radius: 8px; color: var(--text); padding: 6px 8px; font-size: 13px; }
-  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  pre {
-    background: var(--bg);
-    border: 1px solid var(--card-border);
-    border-radius: 8px;
-    padding: 10px;
-    font-size: 12px;
-    max-height: 220px;
-    overflow: auto;
-    white-space: pre-wrap;
-    margin: 8px 0 0;
+  .mode-indicator {
+    right:8px;
+    top:9px;
+    width:10px;
+    height:10px
   }
-  .meta { font-size: 12px; color: var(--muted); margin-top: 8px; }
-  .ok { color: var(--ok); }
-  .err { color: var(--err); }
-  .tag {
-    display: inline-block;
-    background: #232833;
-    border: 1px solid #343b49;
-    border-radius: 20px;
-    padding: 4px 12px;
-    margin: 3px;
-    cursor: pointer;
-    font-size: 12px;
+  .active .mode-indicator {
+    border-width:3px
   }
-  .tag.active { background: var(--accent); border-color: var(--accent-border); }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--card-border); vertical-align: top; }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
-  .pill.b { background: var(--pill-blue-bg); color: var(--pill-blue-fg); }
-  .pill.g { background: var(--pill-green-bg); color: var(--pill-green-fg); }
-  .pill.r { background: var(--pill-red-bg); color: var(--pill-red-fg); }
-  .placeholder {
-    border: 1px dashed #4b5563;
-    border-radius: 10px;
-    padding: 16px;
-    color: var(--muted);
-    background: rgba(255, 255, 255, 0.02);
+  #section-silent {
+    display:block
   }
-  .placeholder h3 { margin: 0 0 8px; font-size: 14px; color: #d1d5db; }
-  .placeholder p { margin: 4px 0; font-size: 13px; line-height: 1.6; }
-  .divider { margin: 14px 0; border-top: 1px solid #232833; }
-  .inline-tip { font-size: 12px; color: var(--muted); }
-  .v2-tool-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; margin-top: 6px; }
-  .v2-tool-item { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 8px; background: var(--bg); border: 1px solid var(--card-border); border-radius: 8px; font-size: 13px; }
-  .v2-tool-item .meta { display: block; margin: 2px 0 0; }
-  .tool-log-table { margin-top: 8px; max-height: 420px; overflow: auto; border: 1px solid var(--card-border); border-radius: 8px; }
-  .tool-log-table table { min-width: 1100px; table-layout: fixed; border-collapse: collapse; }
-  .tool-log-table thead th { position: sticky; top: 0; background: #1b1f27; z-index: 1; }
-  .tool-log-table th, .tool-log-table td { overflow-wrap: anywhere; padding: 6px 8px; border-bottom: 1px solid #232833; }
-  .tool-log-cell {
-    display: inline-block;
-    max-width: 320px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    vertical-align: top;
-    cursor: pointer;
+  #section-silent h2 {
+    margin-bottom:14px
   }
-  .tool-log-cell.expanded { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .slang-tabs { display: flex; gap: 6px; margin: 10px 0 4px; flex-wrap: wrap; }
+  #section-silent .meta {
+    margin-top:10px
+  }
+  .row {
+    gap:8px
+  }
+  .row>.meta {
+    flex-basis:100%!important
+  }
+  .row>label[style*="flex:1"] {
+    flex-basis:130px!important
+  }
+  .settings-content {
+    padding:8px 12px 16px
+  }
+  .settings-group summary {
+    padding:14px;
+    font-size:12px
+  }
+  .settings-content>.row {
+    gap:10px
+  }
+  .settings-content>.row label {
+    flex-basis:130px!important
+  }
+  .save-bar {
+    position:static;
+    padding:12px
+  }
+  .save-bar .meta {
+    font-size:11px
+  }
+  .overview-footnote {
+    align-items:flex-start;
+    flex-direction:column;
+    gap:4px
+  }
+  .page-footer {
+    margin-top:26px;
+    font-size:9px;
+    flex-wrap:wrap
+  }
+  th,td {
+    padding:10px
+  }
+  #sessionList table {
+    min-width:540px
+  }
+  #pendingList table {
+    min-width:420px
+  }
+  .slang-tabs {
+    gap:0
+  }
   .slang-tab {
-    background: #232833;
-    border: 1px solid #343b49;
-    border-radius: 8px;
-    padding: 6px 14px;
-    cursor: pointer;
-    font-size: 13px;
-    color: var(--muted);
+    padding:10px 14px
   }
-  .slang-tab.active { background: var(--accent); border-color: var(--accent-border); color: #fff; }
-  .slang-panel { display: none; }
-  .slang-panel.active { display: block; }
-  .slang-scroll {
-    max-height: 420px;
-    overflow-y: auto;
-    border: 1px solid var(--card-border);
-    border-radius: 8px;
-    margin-top: 8px;
-  }
-  .slang-scroll table { min-width: 900px; border-collapse: collapse; }
-  .slang-scroll thead th { position: sticky; top: 0; background: #1b1f27; z-index: 1; }
-  .slang-scroll th, .slang-scroll td { overflow-wrap: anywhere; }
-  .modal-overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-    display: none; align-items: center; justify-content: center; z-index: 1000;
-  }
-  .modal-overlay.open { display: flex; }
   .modal {
-    background: #161a22; border: 1px solid #343b49; border-radius: 12px;
-    width: min(680px, 92vw); max-height: 86vh; overflow: auto; padding: 18px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    padding:22px
   }
-  .modal h3 { margin: 0 0 12px; }
-  .modal label { margin-top: 10px; }
-  .modal .row { margin-top: 12px; }
+  .search-results {
+    max-width:100%
+  }
+  .tool-log-cell {
+    max-width:100%
+  }
+}
+@media(prefers-reduced-motion:reduce) {
+  html {
+    scroll-behavior:auto
+  }
+  * {
+    transition:none!important
+  }
+}
+.primary:hover {
+  background:var(--accent-hover);
+  border-color:var(--accent-hover);
+  color:#fff
+}
+[data-theme="dark"] {
+  --bg:#0d1016;
+  --surface:#161b24;
+  --surface-subtle:#191f29;
+  --surface-sunken:#12161e;
+  --surface-hover:#1e2532;
+  --surface-chip:#1c222d;
+  --surface-chip-strong:#242b39;
+  --surface-open:#1a2029;
+  --card:#161b24;
+  --topbar-bg:rgba(17,22,30,.9);
+  --save-bar-bg:rgba(23,29,42,.92);
+  --overlay:#04070ccc;
+  --card-border:#252d3c;
+  --border:#2a3342;
+  --border-input:#2e3748;
+  --border-chip:#282f3e;
+  --border-strong:#3b465c;
+  --border-dashed:#2c3444;
+  --border-subtle:#212836;
+  --text:#e7ebf3;
+  --text-strong:#f3f6fb;
+  --text-input:#e3e8f2;
+  --text-secondary:#aeb8ca;
+  --label:#9ca7ba;
+  --muted:#8d98ac;
+  --muted-soft:#7e8899;
+  --placeholder:#6d7789;
+  --icon:#95a1b6;
+  --eyebrow:#7f8ca4;
+  --code-fg:#9fb2da;
+  --code-fg-strong:#adc0e8;
+  --pre-fg:#9ca8bd;
+  --accent:#6b86ff;
+  --accent-hover:#8098ff;
+  --accent-border:#6b86ff;
+  --accent-soft-bg:#1b2440;
+  --accent-soft-bg-active:#212b4c;
+  --accent-soft-fg:#aabaff;
+  --accent-soft-fg-muted:#8b9bd4;
+  --accent-border-soft:#35426e;
+  --accent-border-soft-hover:#3d4b7d;
+  --accent-border-active:#5468c9;
+  --accent-border-hover:#6274d6;
+  --accent-border-focus:#6b86ff;
+  --accent-ring:#6b86ff1f;
+  --danger:#2b1a1c;
+  --danger-border:#4b2b2e;
+  --danger-hover-bg:#3a2120;
+  --err:#ff8f84;
+  --ok:#4fd1a5;
+  --pill-blue-bg:#1b2440;
+  --pill-blue-fg:#aabaff;
+  --pill-green-bg:#12291f;
+  --pill-green-fg:#5fd8ad;
+  --pill-red-bg:#2c1a1a;
+  --pill-red-fg:#ff9a91;
+  --warn-bg:#2a2113;
+  --warn-border:#4d3c1c;
+  --warn-fg:#e9b96c;
+  --warn-fg-strong:#f2c67a;
+  --dot-idle:#4c5a57;
+  --dot-offline:#4b5466;
+  --focus-ring:#5f7cff;
+  --focus-ring-modal:#8098ff;
+  --toast-bg:#e9edf6;
+  --toast-fg:#111623;
+  --shadow-card:0 1px 2px #0006,0 14px 34px #00000047;
+  --shadow-md:0 4px 18px #00000059;
+  --shadow-pop:0 18px 50px #00000073;
+  --shadow-modal:0 28px 90px #000000a6;
+  --shadow-log:0 8px 34px #0000006b;
+  --decor-a:#4d6bfe33;
+  --decor-b:#7c5cff29;
+  color-scheme:dark
+}
+
+/* ================= 背景动效（纯装饰，不参与布局） ================= */
+.bg-decor {
+  position:fixed;
+  inset:0;
+  z-index:0;
+  overflow:hidden;
+  pointer-events:none
+}
+.bg-decor::before,
+.bg-decor::after {
+  content:"";
+  position:absolute;
+  border-radius:50%
+}
+.bg-decor::before {
+  width:58vmax;
+  height:58vmax;
+  left:-16vmax;
+  top:-20vmax;
+  background:radial-gradient(circle at 50% 50%,var(--decor-a),transparent 68%);
+  animation:decorDriftA 46s ease-in-out infinite alternate
+}
+.bg-decor::after {
+  width:50vmax;
+  height:50vmax;
+  right:-18vmax;
+  top:-10vmax;
+  background:radial-gradient(circle at 50% 50%,var(--decor-b),transparent 70%);
+  animation:decorDriftB 62s ease-in-out infinite alternate
+}
+@keyframes decorDriftA {
+  from { transform:translate3d(0,0,0) scale(1) }
+  50% { transform:translate3d(3%,4%,0) scale(1.08) }
+  to { transform:translate3d(-2%,7%,0) scale(1.03) }
+}
+@keyframes decorDriftB {
+  from { transform:translate3d(0,0,0) scale(1.04) }
+  50% { transform:translate3d(-4%,3%,0) scale(1) }
+  to { transform:translate3d(2%,-3%,0) scale(1.09) }
+}
+/* 内容层必须浮在装饰层之上 */
+.workspace {
+  position:relative;
+  z-index:1
+}
+
+/* ================= 人格与提示词编辑 ================= */
+.layer-note {
+  border:1px solid var(--accent-border-soft);
+  background:var(--accent-soft-bg);
+  border-radius:12px;
+  padding:14px 18px;
+  margin:14px 0 6px;
+  font-size:12px;
+  color:var(--text-secondary);
+  line-height:1.9
+}
+.layer-note strong {
+  display:block;
+  color:var(--text-strong);
+  font-size:13px;
+  margin-bottom:4px
+}
+.layer-note ol {
+  margin:0;
+  padding-left:20px
+}
+.layer-note b {
+  color:var(--accent-soft-fg)
+}
+.layer-note code {
+  background:var(--surface);
+  border:1px solid var(--border-chip);
+  border-radius:5px;
+  padding:1px 6px
+}
+.persona-list {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(min(230px,100%),1fr));
+  gap:10px;
+  margin:10px 0 4px
+}
+.persona-item {
+  display:flex;
+  flex-direction:column;
+  gap:5px;
+  align-items:flex-start;
+  text-align:left;
+  padding:13px 15px;
+  border-radius:11px;
+  border:1px solid var(--border-chip);
+  background:var(--surface-subtle)
+}
+.persona-item:hover {
+  border-color:var(--accent-border-hover);
+  background:var(--surface-hover)
+}
+.persona-item.active {
+  border-color:var(--accent-border-active);
+  background:var(--accent-soft-bg)
+}
+.persona-item-head {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap
+}
+.persona-item-head strong {
+  font-size:13px;
+  color:var(--text-strong);
+  font-weight:600
+}
+.persona-item small {
+  font-size:11px;
+  color:var(--muted-soft);
+  overflow-wrap:anywhere
+}
+.persona-badge {
+  font-size:10px;
+  line-height:1.6;
+  padding:0 7px;
+  border-radius:20px;
+  background:var(--pill-green-bg);
+  color:var(--pill-green-fg)
+}
+.persona-badge.warn {
+  background:var(--warn-bg);
+  color:var(--warn-fg)
+}
+.layer-heading {
+  display:flex;
+  align-items:baseline;
+  gap:10px;
+  flex-wrap:wrap;
+  margin:30px 0 6px
+}
+.role-editor {
+  min-height:320px;
+  font-family:Consolas,"Microsoft YaHei",monospace;
+  font-size:12.5px
+}
+.code-area {
+  width:100%;
+  min-height:280px;
+  max-height:520px;
+  overflow:auto;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  font-family:Consolas,"Microsoft YaHei",monospace;
+  font-size:12px;
+  line-height:1.75;
+  background:var(--surface-sunken);
+  color:var(--pre-fg);
+  border:1px solid var(--border-subtle);
+  border-radius:10px;
+  padding:14px 16px;
+  margin-top:10px;
+  resize:vertical
+}
+.code-area.editing {
+  background:var(--surface);
+  color:var(--text-input);
+  border-color:var(--accent-border-focus)
+}
+#section-silent {
+  grid-column:1/-1
+}
+
+/* ================= 主题切换控件 ================= */
+#themeToggle {
+  font-size:16px
+}
+#themeToggle[aria-pressed="true"] {
+  background:var(--accent-soft-bg);
+  border-color:var(--accent-border-soft);
+  color:var(--accent-soft-fg)
+}
+
+/* ================= 对比度与层次 ================= */
+.card {
+  box-shadow:var(--shadow-card)
+}
+.sidebar {
+  border-right-color:var(--card-border)
+}
+.metric {
+  transition:background .18s ease,box-shadow .18s ease
+}
+.metric-link:hover {
+  background:var(--surface-hover)
+}
+.metric strong {
+  letter-spacing:-.6px
+}
+.nav-item.active {
+  box-shadow:inset 3px 0 0 var(--accent)
+}
+.settings-group {
+  overflow:hidden
+}
+.settings-group summary {
+  position:relative;
+  transition:background .18s ease,color .18s ease;
+  padding-right:42px
+}
+.settings-group summary::after {
+  content:"";
+  position:absolute;
+  right:20px;
+  top:50%;
+  width:7px;
+  height:7px;
+  margin-top:-5px;
+  border-right:1.6px solid var(--muted-soft);
+  border-bottom:1.6px solid var(--muted-soft);
+  transform:rotate(45deg);
+  transition:transform .22s ease
+}
+.settings-group[open] summary::after {
+  transform:rotate(-135deg)
+}
+.settings-group[open] summary {
+  background:var(--surface-open)
+}
+.v2-tool-item {
+  transition:background .18s ease,border-color .18s ease
+}
+.v2-tool-item:hover {
+  background:var(--surface-hover)
+}
+
+/* ================= 动效 ================= */
+button,
+.nav-item,
+.tag,
+summary,
+input,
+textarea,
+select,
+.metric-link,
+.brand {
+  transition:background .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease,transform .18s ease
+}
+button:not(.nav-item):hover:not(:disabled) {
+  transform:translateY(-1px)
+}
+button:active:not(:disabled) {
+  transform:translateY(0)
+}
+.tag:hover {
+  transform:translateY(-1px)
+}
+.card:hover {
+  border-color:var(--border)
+}
+[data-page]:not([hidden]) {
+  animation:pageIn .26s ease both
+}
+@keyframes pageIn {
+  from { opacity:0; transform:translateY(7px) }
+  to { opacity:1; transform:none }
+}
+.overview-summary,
+.page-heading {
+  animation:pageIn .3s ease both
+}
+.toast {
+  animation:toastIn .3s cubic-bezier(.22,1,.36,1) both
+}
+@keyframes toastIn {
+  from { opacity:0; transform:translate(-50%,14px) }
+  to { opacity:1; transform:translate(-50%,0) }
+}
+.modal {
+  animation:modalIn .24s cubic-bezier(.22,1,.36,1) both
+}
+@keyframes modalIn {
+  from { opacity:0; transform:translateY(12px) scale(.985) }
+  to { opacity:1; transform:none }
+}
+.search-results:not([hidden]) {
+  animation:pageIn .18s ease both
+}
+.status-badge:before {
+  transition:background .25s ease,box-shadow .25s ease
+}
+.status-badge.online:before {
+  box-shadow:0 0 0 3px var(--pill-green-bg)
+}
+.status-badge.offline:before {
+  box-shadow:0 0 0 3px var(--pill-red-bg)
+}
+@media(prefers-reduced-motion:reduce) {
+  .bg-decor::before,
+  .bg-decor::after,
+  [data-page]:not([hidden]),
+  .overview-summary,
+  .page-heading,
+  .toast,
+  .modal,
+  .search-results:not([hidden]) {
+    animation:none
+  }
+  button:not(.nav-item):hover:not(:disabled),
+  .tag:hover {
+    transform:none
+  }
+}
+
+/* ================= 令牌与花费 ================= */
+#section-usage .usage-h3 { font-size:13px; font-weight:600; color:var(--text); margin:20px 0 8px }
+#section-usage .usage-h3:first-of-type { margin-top:16px }
+#section-usage .metric strong { font-variant-numeric:tabular-nums }
+#section-usage td.num, #section-usage th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
+#section-usage td.usage-key { white-space:nowrap }
+#section-usage .usage-key-button { background:none; border:0; padding:0; color:var(--accent); cursor:pointer; font:inherit }
+#section-usage .usage-key-button:hover { text-decoration:underline }
+#section-usage .usage-key-button[aria-pressed="true"] { color:var(--text-strong); font-weight:600 }
+#section-usage .usage-bar-wrap { display:flex; align-items:center; gap:8px; min-width:96px }
+#section-usage .usage-bar-track { flex:1; height:7px; border-radius:4px; background:var(--surface-chip-strong); overflow:hidden }
+#section-usage .usage-bar-fill { display:block; height:100%; border-radius:4px; background:var(--accent); min-width:2px }
+#section-usage .usage-tier { font-size:11px }
+#section-usage .row.usage-controls { margin-top:10px; gap:10px }
+#section-usage select { max-width:260px }
+#section-usage .usage-chart-controls { margin:14px 0 6px }
+#section-usage .usage-chart-controls .tag { margin:0 }
+#section-usage .usage-chart-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; margin:10px 0 4px }
+#section-usage .usage-chart-head strong { font-size:20px; font-weight:600; font-variant-numeric:tabular-nums }
+#section-usage .usage-chart svg { display:block; width:100%; height:auto }
+#section-usage .usage-chart .usage-bar-peak { fill:var(--warn-fg-strong) }
+#section-usage .usage-chart .usage-bar-off { fill:var(--accent) }
+#section-usage .usage-chart .usage-bar-mixed { fill:var(--accent-hover) }
+#section-usage .usage-chart .usage-grid { stroke:var(--border-subtle); stroke-width:1 }
+#section-usage .usage-chart .usage-axis { fill:var(--muted); font-size:10px }
+#section-usage .usage-chart .usage-hit { fill:transparent; cursor:default }
+#section-usage .usage-chart .usage-hit:hover { fill:var(--surface-hover) }
+#section-usage .usage-chart .usage-col-hover { fill:var(--text-strong); opacity:.10 }
+#section-usage .usage-legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:8px }
+#section-usage .usage-legend span { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted) }
+#section-usage .usage-legend i { width:10px; height:10px; border-radius:3px; display:inline-block }
+#section-usage .usage-legend i.peak { background:var(--warn-fg-strong) }
+#section-usage .usage-legend i.off { background:var(--accent) }
+#section-usage .usage-legend i.mixed { background:var(--accent-hover) }
+
 </style>
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1>QQ 桥接控制台</h1>
-      <div class="sub">DeepSeek Harness ↔ QQ 模式后台 · 修改即时生效（桥接 5 秒内感知）</div>
-    </div>
-    <div class="status-badge" id="statusText">加载中…</div>
-  </header>
-
-  <main class="grid">
-
-    <!-- ============ 01 运行模式 ============ -->
-    <section class="card span-all">
-      <h2><span class="sec-no">01</span>运行模式</h2>
+  <div class="bg-decor" aria-hidden="true"></div>
+  <a class="skip-link" href="#mainContent">跳到主要内容</a>
+  <aside class="sidebar" aria-label="控制台导航">
+    <a href="#overview" class="brand"><span class="brand-mark" aria-hidden="true">q<span>↗</span></span><span>QQ Bridge<small>DeepSeek Harness 控制台</small></span></a>
+    <div class="nav-label">工作空间</div>
+    <nav id="mainNav">
+      <button data-view="overview" class="nav-item active" aria-current="page"><span class="nav-icon" aria-hidden="true">◫</span>运行总览</button>
+      <button data-view="sessions" class="nav-item"><span class="nav-icon" aria-hidden="true">☷</span>会话与审批<span class="nav-count" id="pendingCount">—</span></button>
+      <button data-view="persona" class="nav-item"><span class="nav-icon" aria-hidden="true">◉</span>人格与角色</button>
+      <div class="nav-label">聊天行为</div>
+      <button data-view="social-v2" class="nav-item"><span class="nav-icon" aria-hidden="true">◈</span>二代仿真<span class="nav-note">V2</span></button>
+      <button data-view="social-v1" class="nav-item"><span class="nav-icon" aria-hidden="true">◇</span>一代仿真<span class="nav-note">V1</span></button>
+      <button data-view="slang" class="nav-item"><span class="nav-icon" aria-hidden="true">▤</span>黑话词库</button>
+      <div class="nav-label">管理</div>
+      <button data-view="usage" class="nav-item"><span class="nav-icon" aria-hidden="true">◧</span>令牌与花费</button>
+      <button data-view="access" class="nav-item"><span class="nav-icon" aria-hidden="true">⊙</span>访问与安全</button>
+      <button data-view="operations" class="nav-item"><span class="nav-icon" aria-hidden="true">⌘</span>调试与运维</button>
+      <button data-view="reference" class="nav-item"><span class="nav-icon" aria-hidden="true">ⓘ</span>工具参考</button>
+    </nav>
+    <div class="sidebar-bottom"><span class="local-dot"></span>本地控制台<small>QQ ↔ DeepSeek Harness</small></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <div class="breadcrumb">工作空间<span>/</span><span id="breadcrumbPage">运行总览</span></div>
+      <div class="topbar-actions"><span class="status-badge" id="statusText" role="status">正在连接…</span><button id="themeToggle" class="icon-button" type="button" aria-label="切换深色模式" aria-pressed="false" title="切换深色 / 浅色主题">☾</button><button id="refreshConsole" class="icon-button" aria-label="刷新控制台状态" title="刷新状态">↻</button></div>
+    </header>
+    <main id="mainContent" tabindex="-1">
+      <div class="page-heading"><div><div class="eyebrow">QQ BRIDGE / CONSOLE</div><h1 id="pageTitle">让每一次连接，都自然发生。</h1><p id="pageDescription">掌握桥接状态，轻松管理你的 QQ 智能伙伴。</p></div>
+        <div class="search-wrap"><label class="sr-only" for="consoleSearch">搜索功能或参数</label><input id="consoleSearch" type="search" placeholder="搜索功能或参数…" autocomplete="off" aria-controls="searchResults" aria-expanded="false"><div id="searchResults" class="search-results" hidden></div></div>
+      </div>
+      <div id="connectionAlert" class="connection-alert" role="alert" hidden></div>
+      <div id="overviewSummary" class="overview-summary" data-page="overview">
+        <div class="metric"><span>DSH 连接</span><strong id="metricDsh">连接中</strong><small id="metricDshHint">等待服务响应</small></div>
+        <div class="metric"><span>当前运行模式</span><strong id="metricMode">—</strong><small id="metricRole">正在读取角色</small></div>
+        <button class="metric metric-link" data-view="sessions"><span>已建立会话</span><strong id="metricSessions">—</strong><small>查看会话映射 <span aria-hidden="true">↗</span></small></button>
+        <button class="metric metric-link" data-view="sessions" data-target="section-pending"><span>待处理请求</span><strong id="metricPending">—</strong><small>提问与工具审批 <span aria-hidden="true">↗</span></small></button>
+      </div>
+      <div class="grid">
+        <section id="section-mode" data-page="overview" class="card span-all">
+      <h2>运行模式</h2>
       <div class="mode-row" id="modeRow">
-        <button data-mode="chat">聊天模式</button>
-        <button data-mode="closed-agent">封闭 Agent</button>
-        <button data-mode="reserved">一代仿真模式</button>
-        <button data-mode="reserved2">二代仿真模式</button>
+        <button data-mode="chat" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>聊天模式</strong><small>白名单内，随时对话</small></button>
+        <button data-mode="closed-agent" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>封闭 Agent</strong><small>仅管理员，完整工具</small></button>
+        <button data-mode="reserved" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>一代仿真</strong><small>按策略自然参与群聊</small></button>
+        <button data-mode="reserved2" aria-pressed="false"><span class="mode-indicator" aria-hidden="true"></span><strong>二代仿真</strong><small>自主阅读、发言与潜水</small></button>
       </div>
       <div class="row" style="margin-top:12px">
         <label style="flex:1;margin:0">封闭 Agent 使用的 DSH 预设</label>
         <select id="closedPreset" style="max-width:260px"><option value="">（DSH 默认 preset）</option></select>
       </div>
-      <div class="meta">二代仿真模式（reserved2）骨架已接入；完整“一切皆工具”链路开发中。</div>
+      <div class="meta">切换后即时保存。仿真参数可在左侧对应页面调整；封闭 Agent 仅允许管理员私聊。</div>
     </section>
-
-    <!-- ============ 02 会话与消息 ============ -->
-    <section class="card">
-      <h2><span class="sec-no">02</span>会话映射</h2>
+<section id="section-sessions" data-page="sessions" class="card span-all">
+      <h2>会话映射</h2>
       <div id="sessionList">加载中…</div>
     </section>
-
-    <section class="card">
-      <h2><span class="sec-no">03</span>挂起审批 / 提问</h2>
+<section id="section-pending" data-page="sessions" class="card span-all">
+      <h2>挂起审批 / 提问</h2>
       <div id="pendingList">加载中…</div>
     </section>
-
-    <section class="card">
-      <h2><span class="sec-no">04</span>活动日志（最近 100 条）</h2>
+<section id="section-activity" data-page="overview" class="card">
+      <h2>活动日志（最近 100 条）</h2>
       <pre id="activity">（空）</pre>
     </section>
+<section id="section-persona" data-page="persona" class="card span-all">
+      <h2>人格与角色</h2>
+      <div class="meta">当前人格：<span id="roleText">-</span> ｜ 状态：<span id="roleModeText">-</span></div>
 
-    <!-- ============ 05 人格与角色 ============ -->
-    <section class="card">
-      <h2><span class="sec-no">05</span>人格（角色扮演）</h2>
-      <div class="meta">当前角色：<span id="roleText">-</span> ｜ 状态：<span id="roleModeText">-</span></div>
-      <div id="roleList" style="margin-top:10px">加载中…</div>
-      <div class="row" style="margin-top:10px">
-        <input type="text" id="roleInput" placeholder="选择已有角色或输入新角色名">
-        <button id="roleSet">设置</button>
-        <button id="roleClear">清除</button>
+      <div class="layer-note">
+        <strong>两层提示词的分工</strong>
+        <ol>
+          <li><b>仿真提示词</b>（预设内置）：AI 怎么调工具、怎么参与群聊 —— <i>行为与协议</i>。</li>
+          <li><b>人格提示词</b>（本页编辑）：AI 是谁、什么性格、怎么说话 —— <i>人设与语气</i>。</li>
+        </ol>
+        <p>每条消息发给 AI 时，按 <code>仿真提示词 → 人格提示词 → 本轮消息</code> 的顺序拼装。人格层保存即生效；仿真层需重启 DSH。</p>
       </div>
-      <details style="margin-top:10px">
-        <summary class="meta">新建人格</summary>
-        <label>角色名</label>
-        <input type="text" id="newRoleName" placeholder="如：猫娘">
-        <label>角色设定（Markdown）</label>
-        <textarea id="newRoleContent" placeholder="- 性格：…&#10;- 说话风格：…&#10;- 背景设定：…"></textarea>
-        <div class="row" style="margin-top:8px">
-          <button id="roleCreate">创建人格</button>
-          <span class="meta" id="roleCreateMsg"></span>
+
+      <h3>人格列表 <span class="meta" id="roleListHint"></span></h3>
+      <div id="roleList" class="persona-list">加载中…</div>
+
+      <details class="settings-group" open>
+        <summary>编辑人格提示词</summary>
+        <div class="settings-content">
+          <div class="meta" id="roleEditorMeta">当前是「新建」模式：填好名称与内容后点「新建人格」。</div>
+          <div class="row">
+            <label style="flex:0 0 auto">注入上限（字符）</label>
+            <input type="number" id="roleInjectMax" min="1000" max="20000" step="500" style="flex:0 1 140px">
+            <button id="roleInjectMaxSave" class="small">保存上限</button>
+            <span class="meta" id="roleInjectMaxMsg">每条约 4~6k token 的成本护栏；按模式筛完小节后才截断。</span>
+          </div>
+          <label>人格名（中文 / 字母 / 数字 / 横线）</label>
+          <input type="text" id="newRoleName" placeholder="如：猫娘">
+          <label>人格提示词（Markdown）</label>
+          <textarea id="newRoleContent" class="role-editor" placeholder="- 性格：…&#10;- 说话风格：…&#10;- 背景设定：…"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button id="roleCreate">新建人格</button>
+            <button id="roleDuplicate">另存为副本</button>
+            <button id="roleDelete" class="danger">删除</button>
+            <button id="roleFormReset">清空表单</button>
+            <span class="meta" id="roleCreateMsg"></span>
+          </div>
+          <div class="meta err" id="roleEditorWarnings"></div>
         </div>
       </details>
-    </section>
 
-    <!-- ============ 06 一代仿真模式 ============ -->
-    <section class="card span-all">
-      <h2><span class="sec-no">06</span>一代仿真模式（reserved）</h2>
+      <details class="settings-group">
+        <summary>切换当前启用的人格</summary>
+        <div class="settings-content">
+          <div class="row" style="margin-top:10px">
+            <input type="text" id="roleInput" placeholder="选择已有角色或输入新角色名">
+            <button id="roleSet">设置</button>
+            <button id="roleClear">清除</button>
+          </div>
+          <div class="meta">清空当前人格后，AI 只按「仿真提示词」行动，不扮演任何角色。</div>
+        </div>
+      </details>
+
+      <h3 class="layer-heading">仿真提示词（预设内置）<span class="meta" id="simPromptStatus">加载中…</span></h3>
+      <div class="row" style="margin-bottom:8px">
+        <label style="flex:0 0 auto">仿真代次</label>
+        <select id="simPromptPreset" style="flex:0 1 280px">
+          <option value="qq-chat-v2">二代仿真（reserved2 · qq-chat-v2）</option>
+          <option value="qq-chat">一代仿真（reserved · qq-chat）</option>
+        </select>
+        <span class="meta">两代机制不同（一代空格分条 / 二代一切皆工具），提示词各自独立。</span>
+      </div>
+      <div class="meta" id="simPromptWarnings"></div>
+      <textarea id="simPromptText" class="code-area" spellcheck="false" readonly></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="simPromptEdit">编辑</button>
+        <button id="simPromptSave" disabled>保存并同步到 DSH</button>
+        <button id="simPromptRestore">还原上次备份</button>
+        <button id="simPromptCancel" disabled>取消编辑</button>
+        <span class="meta" id="simPromptMsg"></span>
+      </div>
+      <div class="meta" id="simPromptRestart"></div>
+    </section>
+<section id="section-social-v1" data-page="social-v1" class="card span-all">
+      <h2>一代仿真模式（reserved）</h2>
       <div class="meta" id="socialStatus">加载中…</div>
 
       <div class="row" style="margin-top:10px">
@@ -309,8 +1897,7 @@
         <input type="number" id="sActiveDelayMin" min="0" style="width:70px"> ~
         <input type="number" id="sActiveDelayMax" min="0" style="width:70px">
       </div>
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">群聊活跃超时主动退出</div>
+      <details class="settings-group"><summary>群聊活跃超时主动退出</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">启用</label><input type="checkbox" id="sActiveDurationEnabled" style="width:auto">
       </div>
@@ -343,8 +1930,8 @@
         <label style="flex:1">单条消息长度上限（字）</label><input type="number" id="sMaxChars" min="1" style="width:80px">
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">分条发送（按空格分句）</div>
+      </div></details>
+<details class="settings-group"><summary>分条发送（按空格分句）</summary><div class="settings-content">
       <div class="meta" style="margin-bottom:8px">AI 用空格表示“分成下一条消息”；中英文/数字之间的空格也会被当成分条信号，不想分条就不要加空格、用标点连接。单条只做安全长度上限，不再限制条数。</div>
       <div class="row">
         <label style="flex:1">启用分条发送</label><input type="checkbox" id="sBurstEnabled" style="width:auto">
@@ -365,8 +1952,8 @@
       <label>必回关键词（逗号分隔）</label>
       <input type="text" id="sKeywords" placeholder="deepseek, 在吗">
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">主动开话题（观望期第三种触发）</div>
+      </div></details>
+<details class="settings-group"><summary>主动开话题（观望期第三种触发）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">启用主动开话题</label><input type="checkbox" id="sProactiveEnabled" style="width:auto">
       </div>
@@ -382,7 +1969,8 @@
         <label style="flex:1">判定成功概率</label><input type="number" id="sProactiveProb" step="0.05" min="0" max="1" style="width:80px">
       </div>
 
-      <div class="row" style="margin-top:10px">
+</div></details>
+<div class="save-bar">      <div class="row" style="margin-top:10px">
         <button id="socialSave">保存社交配置</button>
         <button id="socialFlush">立刻投喂摘要</button>
         <span class="meta" id="socialMsg"></span>
@@ -393,12 +1981,10 @@
         <button id="sStateIdle" class="small">设为观望</button>
       </div>
       <div class="meta">一代仿真模式状态机：观望期按“明确点名 / 小概率”触发进入活跃；活跃期每 10~20 秒批量查看新消息并回应；群聊活跃超过随机上限会主动提示 AI 收尾退场；冷场后大概率回观望、小概率让 AI 试探一句。可手动强制切换状态。</div>
-    </section>
-
-    <!-- ============ 07 二代仿真模式（reserved2）控制台 ============ -->
-    <section class="card span-all">
-      <h2><span class="sec-no">07</span>二代仿真模式（reserved2）控制台</h2>
-      <div class="meta">配置保存后写入 config.json 并热更新；工具开关决定 AI 能调用哪些工具（关闭后桥接 API 会拒绝）。</div>
+    </div></section>
+<section id="section-social-v2" data-page="social-v2" class="card span-all">
+      <h2>二代仿真模式（reserved2）控制台</h2>
+      <div class="meta">配置保存后写入 config.json 并热更新；工具开关决定 AI 能调用哪些工具。已接入开关的工具在<b>重启 DSH 后</b>会从工具清单里彻底消失（少一份 schema 就少一份每次请求的 token）；发送类等跨模式共用的工具只在调用时被桥接拒绝，清单不变。</div>
 
       <div class="row" style="margin-top:10px">
         <label style="flex:1">启用二代模式</label><input type="checkbox" id="v2Enabled" style="width:auto">
@@ -416,8 +2002,7 @@
         <span class="meta" id="v2ActivityStatus">读取中…</span>
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">工具开关（关闭后桥接会拒绝对应工具调用）</div>
+      <details class="settings-group"><summary>工具开关（关闭后 AI 不再拿到该工具；需重启 DSH 刷新工具清单，重启前仅调用时拒绝）</summary><div class="settings-content">
       <div class="v2-tool-list" id="v2Tools">
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getPrompt"> <span><b>qq_get_prompt</b><span class="meta">查看角色卡、推荐值、可用工具、当前唤醒配置</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getUnread"> <span><b>qq_get_unread_messages</b><span class="meta">查看未读消息，不自动标记已读</span></span></label>
@@ -448,11 +2033,32 @@
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="getSelfImage"> <span><b>qq_get_self_image</b><span class="meta">查看自己的默认 Q 版形象图片</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="stickerNote"> <span><b>qq_sticker_note</b><span class="meta">给表情记录本地含义/标签/用法</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="setStickerRemark"> <span><b>qq_set_sticker_remark</b><span class="meta">修改 QQ 官方表情备注（默认禁用，慎用）</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendVoice"> <span><b>qq_send_voice / qq_list_voices</b><span class="meta">发送语音条（只能发语音库里的音频；偶然而为的强表达）</span></span></label>
       </div>
-      <div class="meta" style="margin-top:6px">二代黑话学习：AI 可用 <code>qq_slang_submit</code> 提交陌生词，也可由桥接自动提取；管理员在下方「08 群聊黑话 / 网络用语库」筛选确认后，词条会自动写入黑话提示词并注入 <code>qq_get_prompt</code> 与后续唤醒。</div>
+      <div class="meta" style="margin-top:6px">二代黑话学习：AI 可用 <code>qq_slang_submit</code> 提交陌生词，也可由桥接自动提取；管理员在「黑话词库」页面筛选确认后，词条会自动写入黑话提示词并注入 <code>qq_get_prompt</code> 与后续唤醒。</div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">唤醒推荐值（仅参考，AI 可不遵守）</div>
+      </div></details>
+<details class="settings-group"><summary>语音库与语音发送（调试）</summary><div class="settings-content">
+      <div class="meta" style="margin-bottom:8px">
+        语音库目录：<code>qq-bridge/audio/</code>（改 <code>socialV2.voice.dir</code> 可换）。把音频文件丢进去即可被 AI 用 <code>qq_send_voice</code> 发出；
+        本面板用于调试与试发 —— 试发走的是与 AI 通道相同的解析/校验/限流路径（<code>/api/voice/send</code>），只是由你在控制台触发。
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
+        <button id="voiceRefreshBtn" type="button" class="btn-secondary">刷新语音库</button>
+        <label style="flex:0 0 auto">发送目标</label>
+        <input type="text" id="voiceSendTarget" placeholder="group:100005" style="width:190px">
+        <label style="flex:0 0 auto"><input type="checkbox" id="voiceSendDryRun" style="width:auto"> 只校验不发送</label>
+        <button id="voiceSendBtn" type="button">试发选中语音</button>
+        <span id="voiceMsg" class="meta"></span>
+      </div>
+      <div id="voiceList" class="meta" style="margin-top:8px">点「刷新语音库」加载…</div>
+      <div class="meta" style="margin-top:6px">
+        上限：时长 <code>maxSeconds</code>、体积 <code>maxBytes</code>、频率 <code>maxPerMinute</code>/<code>maxPerHour</code>（见下方配置区）。
+        命令行等价工具：<code>node scripts/send-voice.mjs list-voice</code>（经桥接）或 <code>node voice-cli.mjs</code>（独立工具，在上级 <code>voice-tool/</code> 里直连 SnowLuma）。
+      </div>
+
+      </div></details>
+<details class="settings-group"><summary>唤醒推荐值（仅参考，AI 可不遵守）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">默认模式</label>
         <select id="v2WakeDefaultMode" style="width:120px"><option value="diving">潜水</option><option value="active">活跃</option></select>
@@ -478,8 +2084,8 @@
       <label>唤醒推荐提示（给 AI 看的文字）</label>
       <textarea id="v2WakeHint" rows="2" placeholder="例如：如果你在潜水，推荐 5~120 分钟、普通消息概率 0.05…"></textarea>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">唤醒硬限制</div>
+      </div></details>
+<details class="settings-group"><summary>唤醒硬限制</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">最小潜水（秒）</label><input type="number" id="v2SleepMinMs" min="0" style="width:90px">
         <label style="flex:1">最大潜水（秒，0=不限）</label><input type="number" id="v2SleepMaxMs" min="0" style="width:90px">
@@ -499,8 +2105,8 @@
         <span class="meta" style="flex:2">AI 设置潜水/下一次唤醒前，默认必须先等够这个观察窗口；0 表示不限制。</span>
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">发送限制</div>
+      </div></details>
+<details class="settings-group"><summary>发送限制</summary><div class="settings-content">
       <div class="meta" style="margin-bottom:8px">二代不再按空格自动拆条；AI 要分多条必须显式传数组或用 qq_send_burst。</div>
       <div class="row">
         <label style="flex:1">允许多条发送</label><input type="checkbox" id="v2BurstEnabled" style="width:auto">
@@ -532,8 +2138,8 @@
       <label>发送推荐提示（给 AI 看的文字）</label>
       <textarea id="v2SendHint" rows="2" placeholder="例如：普通闲聊建议一次 1~3 条，条间 1~3 秒…"></textarea>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">等待工具参数（qq_wait_for_messages）</div>
+      </div></details>
+<details class="settings-group"><summary>等待工具参数（qq_wait_for_messages）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">默认等待（毫秒）</label><input type="number" id="v2WaitDefaultMs" min="100" style="width:90px">
         <label style="flex:1">最小等待（毫秒）</label><input type="number" id="v2WaitMinMs" min="100" style="width:90px">
@@ -549,8 +2155,8 @@
         <span class="meta" style="flex:2">回复检查是 AI 发消息后回来检查是否有人回复的延迟。</span>
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">主动机会参数（proactive：群安静时 AI 主动冒泡）</div>
+      </div></details>
+<details class="settings-group"><summary>主动机会参数（proactive：群安静时 AI 主动冒泡）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">启用主动机会</label><input type="checkbox" id="v2ProactiveEnabled" style="width:auto">
         <label style="flex:1">检查间隔（分）</label>
@@ -562,8 +2168,8 @@
         <label style="flex:1">触发概率</label><input type="number" id="v2ProactiveProbability" step="0.05" min="0" max="1" style="width:80px">
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">表情包参数（sticker：QQ 收藏表情体系）</div>
+      </div></details>
+<details class="settings-group"><summary>表情包参数（sticker：QQ 收藏表情体系）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">启用表情包体系</label><input type="checkbox" id="v2StickerEnabled" style="width:auto">
         <label style="flex:1">同步缓存 TTL（秒）</label><input type="number" id="v2StickerSyncTtlSec" min="1" style="width:90px">
@@ -584,16 +2190,16 @@
         <span class="meta" style="flex:2">AI 收藏别人表情时写的简短备注长度上限。</span>
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">上下文参数（recent / unread / contextWindow）</div>
+      </div></details>
+<details class="settings-group"><summary>上下文参数（recent / unread / contextWindow）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">最近消息上限</label><input type="number" id="v2ContextRecentLimit" min="1" style="width:80px">
         <label style="flex:1">未读上限</label><input type="number" id="v2ContextUnreadLimit" min="1" style="width:80px">
         <label style="flex:1">上下文窗口</label><input type="number" id="v2ContextWindow" min="1" style="width:80px">
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">反馈工具参数（qq_report_feedback）</div>
+      </div></details>
+<details class="settings-group"><summary>反馈工具参数（qq_report_feedback）</summary><div class="settings-content">
       <div class="row">
         <label style="flex:1">反馈最大长度</label><input type="number" id="v2FeedbackMaxLength" min="1" style="width:90px">
         <label style="flex:1">错误级通知 owner</label><input type="checkbox" id="v2FeedbackNotifyOwner" style="width:auto">
@@ -605,8 +2211,8 @@
       </div>
       <pre id="v2FeedbackOutput">（空）</pre>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">工具调用日志（AI 调用了什么工具、参数、成功/失败）</div>
+      </div></details>
+<details class="settings-group"><summary>工具调用日志（AI 调用了什么工具、参数、成功/失败）</summary><div class="settings-content">
       <div class="row">
         <button id="v2ToolLogLoad" class="small">加载工具日志</button>
         <button id="v2ToolLogClear" class="small danger">清空工具日志</button>
@@ -614,8 +2220,8 @@
       </div>
       <div id="v2ToolLogOutput" class="tool-log-table">（空）</div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">轻量记忆（activeTopics / pendingThoughts / memberImpressions）</div>
+      </div></details>
+<details class="settings-group"><summary>轻量记忆（activeTopics / pendingThoughts / memberImpressions）</summary><div class="settings-content">
       <div class="row">
         <input type="text" id="v2MemoryKey" placeholder="group:123456789" style="flex:1">
         <button id="v2MemoryLoad" class="small">加载记忆</button>
@@ -624,8 +2230,8 @@
       </div>
       <div id="v2MemoryOutput" class="tool-log-table">（空）</div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">唤醒状态（AI 当前设置的下一次唤醒条件/倒计时）</div>
+      </div></details>
+<details class="settings-group"><summary>唤醒状态（AI 当前设置的下一次唤醒条件/倒计时）</summary><div class="settings-content">
       <div class="row">
         <input type="text" id="v2WakeKey" placeholder="group:123456789" style="flex:1">
         <button id="v2WakeStatusLoad" class="small">查看唤醒状态</button>
@@ -633,21 +2239,15 @@
       </div>
       <div id="v2WakeStatusOutput" class="tool-log-table">（空）</div>
 
-      <div class="row" style="margin-top:10px">
-        <button id="v2ConfigSave" style="font-weight:bold;padding:8px 16px">保存当前参数（写入 config.json）</button>
-        <span class="meta" id="v2ConfigMsg"></span>
-      </div>
-      <div class="meta" style="margin-top:4px">修改上面任意推荐/默认参数后，必须点这个按钮才会持久化；保存后会自动应用到仍使用默认唤醒配置的会话，重启后仍然保留。</div>
-
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">白名单会话快速选择</div>
+</div></details>
+<details class="settings-group"><summary>白名单会话快速选择</summary><div class="settings-content">
       <div class="row">
         <select id="v2SessionSelect" style="flex:1"><option value="">选择白名单群/私聊…</option></select>
         <button id="v2SessionRefresh" class="small">刷新</button>
       </div>
 
-      <div class="divider"></div>
-      <div class="meta" style="margin-bottom:6px">会话状态查看</div>
+      </div></details>
+<details class="settings-group"><summary>会话状态查看</summary><div class="settings-content">
       <div class="row">
         <input type="text" id="v2StateKey" placeholder="group:123456789" style="flex:1">
         <button id="v2StateView" class="small">查看</button>
@@ -656,11 +2256,16 @@
       </div>
       <pre id="v2StateOutput">（空）</pre>
       <pre id="v2AllStatesOutput" style="margin-top:6px">（全部会话状态：空）</pre>
-    </section>
+    </div></details>
+<div class="save-bar">      <div class="row" style="margin-top:10px">
+        <button id="v2ConfigSave" style="font-weight:bold;padding:8px 16px">保存当前参数（写入 config.json）</button>
+        <span class="meta" id="v2ConfigMsg"></span>
+      </div>
+      <div class="meta" style="margin-top:4px">修改上面任意推荐/默认参数后，必须点这个按钮才会持久化；保存后会自动应用到仍使用默认唤醒配置的会话，重启后仍然保留。</div>
 
-    <!-- ============ 08 黑话库 ============ -->
-    <section class="card span-all">
-      <h2><span class="sec-no">08</span>群聊黑话 / 网络用语库</h2>
+      </div></section>
+<section id="section-slang" data-page="slang" class="card span-all">
+      <h2>群聊黑话 / 网络用语库</h2>
       <div class="meta">DSH 会从群聊中自动提取疑似黑话候选；二代仿真模式下 AI 也可用 <code>qq_slang_submit</code> 主动提交陌生词。候选可批量送 DSH 深度联网研究，研究结果回到控制台由你删改修正后转正；确认后的词条会写入“黑话提示词”，注入一代/二代 AI 的聊天上下文，成为 AI 可查询和使用的记忆。</div>
 
       <div class="slang-tabs">
@@ -775,10 +2380,195 @@
         </div>
       </details>
     </section>
-
-    <!-- 黑话确认/编辑弹窗 -->
-    <div class="modal-overlay" id="slangModalOverlay">
-      <div class="modal">
+<section id="section-reference" data-page="reference" class="card span-all">
+      <h2>DSH 侧 MCP 工具</h2>
+      <div class="meta">由 qq-bridge 的 MCP server 提供给 DSH agent；修改后需重启 DSH 才会刷新工具 schema。</div>
+      <table>
+        <tr><th>工具</th><th>说明</th></tr>
+        <tr><td>qq_status</td><td>登录状态（只读）</td></tr>
+        <tr><td>qq_list_groups</td><td>群列表（只返回白名单群）</td></tr>
+        <tr><td>qq_get_group_members</td><td>群成员（只读，群号必须白名单）</td></tr>
+        <tr><td>qq_get_group_history</td><td>群历史（只读，含 message_id，可作引用目标）</td></tr>
+        <tr><td>qq_send_group_message</td><td>发群消息；可选 <code>replyToMessageId</code> 引用/回复</td></tr>
+        <tr><td>qq_reply</td><td>专用“引用/回复”：在群里引用某条消息并发送文本</td></tr>
+        <tr><td>qq_send_private_message</td><td>发私聊；可选 <code>replyToMessageId</code> 引用/回复</td></tr>
+        <tr><td>qq_slang_query</td><td>查询已确认黑话/梗/网络表达（只读）</td></tr>
+        <tr><td>qq_slang_submit</td><td>AI 提交陌生词/黑话给管理员筛选</td></tr>
+      </table>
+      <div class="meta" style="margin-top:10px">二代仿真模式工具：qq_get_prompt / qq_get_unread_messages / qq_get_recent_messages / qq_social_state / qq_send_burst / qq_send_message / qq_wait_for_messages / qq_set_wake_config / qq_mark_read / qq_memory_* / qq_slang_query / qq_slang_submit 等。</div>
+    </section>
+<section id="section-whitelist" data-page="access" class="card span-all">
+      <h2>白名单 / 管理员</h2>
+      <label>允许的群号（逗号分隔）</label>
+      <input type="text" id="wlGroups" placeholder="123456789, 123456">
+      <label>允许的私聊 QQ（逗号分隔）</label>
+      <input type="text" id="wlPrivate" placeholder="123456789">
+      <label>管理员 QQ（ownerQQ，最高权限）</label>
+      <input type="text" id="ownerQQ" placeholder="123456789">
+      <div class="meta">管理员是唯一可执行管理命令/审批/closed-agent 的 QQ；可留空清除（清除后无管理员，fail-closed）。</div>
+      <label>拒绝的群号（黑名单，逗号分隔）</label>
+      <input type="text" id="dnGroups" placeholder="">
+      <label>拒绝的私聊 QQ（黑名单，逗号分隔）</label>
+      <input type="text" id="dnPrivate" placeholder="">
+      <div class="row" style="margin-top:10px">
+        <button id="wlSave">保存白名单</button>
+        <span class="meta">保存后立即生效并写入 config.json</span>
+      </div>
+    </section>
+<section id="section-silent" data-page="overview" class="card">
+      <h2>静默开关</h2>
+      <div class="row">
+        <button id="silentOn">开启静默</button>
+        <button id="silentOff">恢复正常</button>
+      </div>
+      <div class="meta">静默时群友消息不投递 agent，仅管理员可对话。</div>
+    </section>
+<section id="section-dsh" data-page="overview" class="card span-all">
+      <h2 data-note="下一条消息生效">DSH 模型与思考强度</h2>
+      <div class="meta">模型：<span id="dshModelText">-</span> ｜ 提供方：<span id="dshProviderText">-</span></div>
+      <div class="row" style="margin-top:10px">
+        <label style="flex:0 0 auto">思考强度</label>
+        <select id="dshEffortSelect" style="flex:0 1 220px"></select>
+        <button id="dshEffortSave">保存</button>
+        <span class="meta" id="dshEffortMsg"></span>
+      </div>
+      <div class="meta" id="dshEffortNote"></div>
+      <div class="meta" id="dshEffortSideEffect"></div>
+    </section>
+<section id="section-security" data-page="access" class="card">
+      <h2>安全拦截通知</h2>
+      <div class="row">
+        <label style="flex:1">拦截时在群里发提示</label><input type="checkbox" id="secInterceptNotify" style="width:auto">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="secSave" class="small">保存安全设置</button>
+        <span class="meta" id="secMsg"></span>
+      </div>
+      <div class="meta">开启：回复被安全拦截时会在群里提示；关闭：直接沉默，只在日志/活动记录里留下记录。</div>
+      <div id="stateDirWarn" style="display:none;margin-top:10px;padding:8px 10px;border-left:3px solid var(--warn,#d08700);background:rgba(208,135,0,.08)">
+        <b>⚠️ state/ 目录权限未收紧</b>
+        <div class="meta" style="margin:4px 0">Windows 上改文件权限需要管理员身份，本次启动没能收紧 <code id="stateDirPath"></code>。它里面的控制台令牌、SnowLuma 令牌、各会话令牌与 QQ 聊天记录，本机任何已登录用户都可能读到。</div>
+        <div class="meta">两种做法：① 用<b>管理员身份</b>打开终端执行下面这条命令（一次即可，可复制）；② 或者<b>用管理员身份重启桥接</b>，让它自己收紧。做完点下面的按钮复检。</div>
+        <pre id="stateDirCmd" style="user-select:all;overflow:auto;margin:4px 0;padding:6px;background:rgba(127,127,127,.12);border-radius:4px"></pre>
+        <button id="stateDirReharden" class="small">重新检测</button>
+        <span class="meta" id="stateDirMsg"></span>
+      </div>
+    </section>
+<section id="section-token" data-page="access" class="card">
+      <h2>控制台访问令牌</h2>
+      <div class="meta">用于打开本控制台 / 调用管理 API 的令牌。可手动输入新令牌保存，或留空生成随机令牌。修改后当前页面会自动使用新令牌。</div>
+      <input type="password" id="consoleTokenInput" placeholder="输入新令牌（至少 16 位），留空则生成随机" autocomplete="new-password">
+      <div class="row" style="margin-top:8px">
+        <button id="consoleTokenSave" class="small">保存令牌</button>
+        <button id="consoleTokenRandom" class="small">生成随机令牌</button>
+        <span class="meta" id="consoleTokenMsg"></span>
+      </div>
+    </section>
+<section id="section-test-send" data-page="operations" class="card">
+      <h2>测试发送</h2>
+      <div class="row">
+        <select id="tsKind" style="width:100px">
+          <option value="group">群</option>
+          <option value="private">私聊</option>
+        </select>
+        <input type="text" id="tsId" placeholder="群号 / QQ 号" style="width:140px">
+      </div>
+      <label>消息内容</label>
+      <textarea id="tsMsg" placeholder="这是一条测试消息"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="tsSend">发送测试</button>
+        <span class="meta" id="tsMsg2"></span>
+      </div>
+      <div class="meta">目标必须在白名单内，否则拒绝。</div>
+    </section>
+<section id="section-maintenance" data-page="operations" class="card">
+      <h2>桥接控制</h2>
+      <div class="row">
+        <button id="restartBtn" class="danger">重启桥接</button>
+        <span class="meta" id="restartMsg"></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="clearWsBtn" class="danger">清空 QQ 聊天工作区</button>
+        <span class="meta" id="clearWsMsg"></span>
+      </div>
+      <div class="meta">由守护窗口启动时，重启后 5 秒自动恢复；清空工作区会归档全部 QQ 会话并清空活动日志。</div>
+    </section>
+<section id="section-notify" data-page="operations" class="card span-all">
+      <h2>后台控制端引导</h2>
+      <div class="meta">直接向指定 QQ 会话的 DSH agent 投递一条“后台控制端提醒”，用于给 AI 引导/提醒；该消息不是群友消息。二代模式（reserved2）下会自动附带会话令牌和二代工具协议说明，AI 的文本输出不会自动转发，发言需通过发送工具。</div>
+      <div class="row" style="margin-top:10px">
+        <select id="aiNotifyKind" style="width:110px">
+          <option value="group">群</option>
+          <option value="private">私聊</option>
+        </select>
+        <input type="text" id="aiNotifyId" placeholder="群号 / QQ 号" style="width:180px">
+      </div>
+      <label>提醒内容（发给 DSH agent 的引导/提醒）</label>
+      <textarea id="aiNotifyMessage" placeholder="例如：接下来群里聊到某个话题时，你可以更主动一点；或：先潜水，等我叫你。"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="aiNotifySend">发送到 DSH</button>
+        <span class="meta" id="aiNotifyMsg"></span>
+      </div>
+    </section>
+<section id="section-usage" data-page="usage" class="card span-all">
+      <h2 data-note="每 3 秒自动同步">令牌与花费</h2>
+      <div class="meta">数据来源是 DSH 会话事件里的 provider usage。<b>累计总量</b>取 <code>tokenUsage</code> 投影（整条会话日志的权威累计，含桥接启动前的历史）；<b>逐轮明细</b>由 <code>assistant/message</code> 的 usage 折叠而来，能追溯到多深取决于会话开场快照带回的历史条数。金额按 DeepSeek 官方价目表折算，区分高峰 / 空闲时段（高峰单价为空闲的 2 倍）。</div>
+      <div class="overview-summary" id="usageSummary">
+        <div class="metric"><span>总花费</span><strong id="metricUsageCost">—</strong><small id="metricUsageCostHint">读取中…</small></div>
+        <div class="metric"><span>累计 token</span><strong id="metricUsageTokens">—</strong><small id="metricUsageTokensHint">输入 / 输出</small></div>
+        <div class="metric"><span>缓存命中率</span><strong id="metricUsageHitRate">—</strong><small id="metricUsageHitHint">命中输入 ÷ 总输入</small></div>
+        <div class="metric"><span>平均每轮</span><strong id="metricUsagePerTurn">—</strong><small id="metricUsagePerTurnHint">按已归属回合</small></div>
+      </div>
+      <div class="row usage-controls">
+        <button id="usageRefresh" class="small">刷新</button>
+        <button id="usageClear" class="small danger">清空账本</button>
+        <span class="meta" id="usageMsg">读取中…</span>
+      </div>
+      <h3 class="usage-h3">消耗走势</h3>
+      <div class="row usage-chart-controls" id="usageChartControls">
+        <span class="meta">时间范围</span>
+        <button class="tag active" data-usage-hours="24">近 24 小时</button>
+        <button class="tag" data-usage-hours="72">近 3 天</button>
+        <button class="tag" data-usage-hours="168">近 7 天</button>
+        <button class="tag" data-usage-hours="720">近 30 天</button>
+        <span class="meta">纵轴</span>
+        <button class="tag active" data-usage-metric="cost">花费</button>
+        <button class="tag" data-usage-metric="tokens">token</button>
+      </div>
+      <div class="usage-chart-head">
+        <strong id="usageChartTotal">—</strong>
+        <span class="meta" id="usageChartHint">读取中…</span>
+      </div>
+      <div class="usage-chart" id="usageChart">加载中…</div>
+      <div class="usage-legend">
+        <span><i class="off"></i>空闲时段</span>
+        <span><i class="peak"></i>高峰时段（单价 ×2）</span>
+        <span><i class="mixed"></i>跨时段</span>
+      </div>
+      <div class="meta" id="usageChartNote" style="margin-top:6px"></div>
+      <h3 class="usage-h3">按会话（群 / 私聊）</h3>
+      <div class="tool-log-table" id="usageConversations">加载中…</div>
+      <h3 class="usage-h3">逐轮花费 <span class="meta" id="usageTurnScope">—</span></h3>
+      <div class="row usage-controls">
+        <label class="sr-only" for="usageKeySelect">选择要查看逐轮明细的会话</label>
+        <select id="usageKeySelect"></select>
+        <button id="usageTurnsLoad" class="small">加载逐轮明细</button>
+      </div>
+      <div class="tool-log-table" id="usageTurns">选择会话后加载逐轮明细…</div>
+      <details class="settings-group"><summary>最近调用流水（实时，最新 40 条）</summary><div class="settings-content">
+      <div class="tool-log-table" id="usageRecent">（空）</div>
+      </div></details>
+      <details class="settings-group"><summary>当前生效的价目表</summary><div class="settings-content">
+      <div id="usagePrices" class="meta">读取中…</div>
+      </div></details>
+    </section>
+      </div>
+      <div class="overview-footnote" data-page="overview"><span id="accessSummary">正在读取访问范围…</span><button class="text-button" data-view="access">管理访问范围 →</button></div>
+      <footer class="page-footer"><span>QQ Bridge · 连接日常，保持自主</span><span id="lastUpdated">等待首次同步</span></footer>
+    </main>
+  </div>
+      <div class="modal-overlay" id="slangModalOverlay">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="slangModalTitle" tabindex="-1">
         <h3 id="slangModalTitle">确认黑话</h3>
         <div class="meta" id="slangModalContent" style="margin-bottom:6px"></div>
         <label>含义 *</label>
@@ -799,131 +2589,9 @@
       </div>
     </div>
 
-    <!-- ============ 09 DSH 侧 MCP 工具 ============ -->
-    <section class="card span-all">
-      <h2><span class="sec-no">09</span>DSH 侧 MCP 工具</h2>
-      <div class="meta">由 qq-bridge 的 MCP server 提供给 DSH agent；修改后需重启 DSH 才会刷新工具 schema。</div>
-      <table>
-        <tr><th>工具</th><th>说明</th></tr>
-        <tr><td>qq_status</td><td>登录状态（只读）</td></tr>
-        <tr><td>qq_list_groups</td><td>群列表（只返回白名单群）</td></tr>
-        <tr><td>qq_get_group_members</td><td>群成员（只读，群号必须白名单）</td></tr>
-        <tr><td>qq_get_group_history</td><td>群历史（只读，含 message_id，可作引用目标）</td></tr>
-        <tr><td>qq_send_group_message</td><td>发群消息；可选 <code>replyToMessageId</code> 引用/回复</td></tr>
-        <tr><td>qq_reply</td><td>专用“引用/回复”：在群里引用某条消息并发送文本</td></tr>
-        <tr><td>qq_send_private_message</td><td>发私聊；可选 <code>replyToMessageId</code> 引用/回复</td></tr>
-        <tr><td>qq_slang_query</td><td>查询已确认黑话/梗/网络表达（只读）</td></tr>
-        <tr><td>qq_slang_submit</td><td>AI 提交陌生词/黑话给管理员筛选</td></tr>
-      </table>
-      <div class="meta" style="margin-top:10px">二代仿真模式工具：qq_get_prompt / qq_get_unread_messages / qq_get_recent_messages / qq_social_state / qq_send_burst / qq_send_message / qq_wait_for_messages / qq_set_wake_config / qq_mark_read / qq_memory_* / qq_slang_query / qq_slang_submit 等。</div>
-    </section>
 
-    <!-- ============ 10 白名单 / 管理员 ============ -->
-    <section class="card">
-      <h2><span class="sec-no">10</span>白名单 / 管理员</h2>
-      <label>允许的群号（逗号分隔）</label>
-      <input type="text" id="wlGroups" placeholder="123456789, 123456">
-      <label>允许的私聊 QQ（逗号分隔）</label>
-      <input type="text" id="wlPrivate" placeholder="123456789">
-      <label>管理员 QQ（ownerQQ，最高权限）</label>
-      <input type="text" id="ownerQQ" placeholder="123456789">
-      <div class="meta">管理员是唯一可执行管理命令/审批/closed-agent 的 QQ；可留空清除（清除后无管理员，fail-closed）。</div>
-      <label>拒绝的群号（黑名单，逗号分隔）</label>
-      <input type="text" id="dnGroups" placeholder="">
-      <label>拒绝的私聊 QQ（黑名单，逗号分隔）</label>
-      <input type="text" id="dnPrivate" placeholder="">
-      <div class="row" style="margin-top:10px">
-        <button id="wlSave">保存白名单</button>
-        <span class="meta">保存后立即生效并写入 config.json</span>
-      </div>
-    </section>
-
-    <!-- ============ 11 静默与安全 ============ -->
-    <section class="card">
-      <h2><span class="sec-no">11</span>静默开关</h2>
-      <div class="row">
-        <button id="silentOn">开启静默</button>
-        <button id="silentOff">恢复正常</button>
-      </div>
-      <div class="meta">静默时群友消息不投递 agent，仅管理员可对话。</div>
-    </section>
-
-    <section class="card">
-      <h2><span class="sec-no">12</span>安全拦截通知</h2>
-      <div class="row">
-        <label style="flex:1">拦截时在群里发提示</label><input type="checkbox" id="secInterceptNotify" style="width:auto">
-      </div>
-      <div class="row" style="margin-top:8px">
-        <button id="secSave" class="small">保存安全设置</button>
-        <span class="meta" id="secMsg"></span>
-      </div>
-      <div class="meta">开启：回复被安全拦截时会在群里提示；关闭：直接沉默，只在日志/活动记录里留下记录。</div>
-    </section>
-
-    <!-- ============ 12b 控制台访问令牌 ============ -->
-    <section class="card">
-      <h2><span class="sec-no">12b</span>控制台访问令牌</h2>
-      <div class="meta">用于打开本控制台 / 调用管理 API 的令牌。可手动输入新令牌保存，或留空生成随机令牌。修改后当前页面会自动使用新令牌。</div>
-      <input type="password" id="consoleTokenInput" placeholder="输入新令牌（至少 16 位），留空则生成随机" autocomplete="new-password">
-      <div class="row" style="margin-top:8px">
-        <button id="consoleTokenSave" class="small">保存令牌</button>
-        <button id="consoleTokenRandom" class="small">生成随机令牌</button>
-        <span class="meta" id="consoleTokenMsg"></span>
-      </div>
-    </section>
-
-    <!-- ============ 13 运维 ============ -->
-    <section class="card">
-      <h2><span class="sec-no">13</span>测试发送</h2>
-      <div class="row">
-        <select id="tsKind" style="width:100px">
-          <option value="group">群</option>
-          <option value="private">私聊</option>
-        </select>
-        <input type="text" id="tsId" placeholder="群号 / QQ 号" style="width:140px">
-      </div>
-      <label>消息内容</label>
-      <textarea id="tsMsg" placeholder="这是一条测试消息"></textarea>
-      <div class="row" style="margin-top:8px">
-        <button id="tsSend">发送测试</button>
-        <span class="meta" id="tsMsg2"></span>
-      </div>
-      <div class="meta">目标必须在白名单内，否则拒绝。</div>
-    </section>
-
-    <section class="card">
-      <h2><span class="sec-no">14</span>桥接控制</h2>
-      <div class="row">
-        <button id="restartBtn" class="danger">重启桥接</button>
-        <span class="meta" id="restartMsg"></span>
-      </div>
-      <div class="row" style="margin-top:10px">
-        <button id="clearWsBtn" class="danger">清空 QQ 聊天工作区</button>
-        <span class="meta" id="clearWsMsg"></span>
-      </div>
-      <div class="meta">由守护窗口启动时，重启后 5 秒自动恢复；清空工作区会归档全部 QQ 会话并清空活动日志。</div>
-    </section>
-
-    <!-- ============ 15 后台控制端引导 ============ -->
-    <section class="card span-all">
-      <h2><span class="sec-no">15</span>后台控制端引导</h2>
-      <div class="meta">直接向指定 QQ 会话的 DSH agent 投递一条“后台控制端提醒”，用于给 AI 引导/提醒；该消息不是群友消息。二代模式（reserved2）下会自动附带会话令牌和二代工具协议说明，AI 的文本输出不会自动转发，发言需通过发送工具。</div>
-      <div class="row" style="margin-top:10px">
-        <select id="aiNotifyKind" style="width:110px">
-          <option value="group">群</option>
-          <option value="private">私聊</option>
-        </select>
-        <input type="text" id="aiNotifyId" placeholder="群号 / QQ 号" style="width:180px">
-      </div>
-      <label>提醒内容（发给 DSH agent 的引导/提醒）</label>
-      <textarea id="aiNotifyMessage" placeholder="例如：接下来群里聊到某个话题时，你可以更主动一点；或：先潜水，等我叫你。"></textarea>
-      <div class="row" style="margin-top:8px">
-        <button id="aiNotifySend">发送到 DSH</button>
-        <span class="meta" id="aiNotifyMsg"></span>
-      </div>
-    </section>
-
-  </main>
+  <div class="toast" id="consoleToast" role="status" hidden></div>
+  <noscript><div class="connection-alert">控制台需要启用 JavaScript 才能加载状态及保存设置。</div></noscript>
 
 <script>
 (function () {
@@ -932,7 +2600,7 @@
   const token = qs.get('token');
   if (token) {
     localStorage.setItem('consoleToken', token);
-    history.replaceState({}, '', location.pathname);
+    history.replaceState({}, '', location.pathname + location.hash);
   }
 })();
 
@@ -961,15 +2629,15 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 async function refresh() {
   try {
     const s = await api('/api/status');
-    document.querySelectorAll('#modeRow button').forEach(b => b.classList.toggle('active', b.dataset.mode === s.mode));
+    document.querySelectorAll('#modeRow button').forEach(b => (b.classList.toggle('active', b.dataset.mode === s.mode), b.setAttribute('aria-pressed', String(b.dataset.mode === s.mode))));
     document.getElementById('roleText').textContent = s.role || '无';
     document.getElementById('roleModeText').textContent = s.roleMode === 'silent' ? '静默' : '正常';
     const modeLabel = s.mode === 'reserved' ? '一代仿真模式' : s.mode === 'reserved2' ? '二代仿真模式' : s.mode === 'closed-agent' ? '封闭 Agent' : '聊天模式';
-    document.getElementById('statusText').textContent = 'DSH: ' + (s.dshReady ? '在线' : '离线') + ' ｜ 模式: ' + modeLabel + ' ｜ 管理员: ' + (s.ownerQQ || '未设置') + ' ｜ 群白名单: ' + (s.allowGroups.join(', ') || '无') + ' ｜ 私聊白名单: ' + (s.allowPrivate.join(', ') || '无');
+    updateOverview(s, modeLabel);
     document.getElementById('activity').textContent = s.activity || '（空）';
     const presetSel = document.getElementById('closedPreset');
     if (presetSel && document.activeElement !== presetSel) presetSel.value = s.closedAgentPreset || '';
-  } catch (e) { document.getElementById('statusText').textContent = '连接失败: ' + e; }
+  } catch (e) { document.getElementById('statusText').textContent = '连接中断 · 请检查桥接服务'; setConnectionError(e); }
 }
 
 async function refreshPresets() {
@@ -1010,19 +2678,207 @@ async function saveMode(mode) {
   return r;
 }
 
+// ── 人格管理 ────────────────────────────────────────────────────────────────
+// 人格提示词 = roles/<名称>.md，桥接每条消息注入，保存即生效。
+let roleEditorState = { mode: 'new', name: '' };
+let roleCache = [];
+let roleInjectMax = 6000;
+
+function setRoleMsg(text, ok) {
+  const el = document.getElementById('roleCreateMsg');
+  el.textContent = text;
+  el.className = ok === undefined ? 'meta' : (ok ? 'meta ok' : 'meta err');
+}
+
+function renderRoleEditor() {
+  const editing = roleEditorState.mode === 'edit';
+  document.getElementById('roleEditorMeta').textContent = editing
+    ? `正在编辑「${roleEditorState.name}」：改完点「保存修改」；改名字会同时重命名文件。`
+    : '当前是「新建」模式：填好名称与内容后点「新建人格」；名称与已有的人格同名则会改为保存修改。';
+  document.getElementById('roleCreate').textContent = editing ? '保存修改' : '新建人格';
+}
+
+function roleEditorWarnings(text) {
+  const value = String(text ?? '');
+  const warns = [];
+  if (value.length > roleInjectMax) warns.push(`超出注入上限：当前 ${value.length} 字符，只有前 ${roleInjectMax} 字符会进入提示词（多余 ${value.length - roleInjectMax} 字符不会生效）`);
+  if (/\[SILENT\]|空格分隔|按空格|用空格|空格分句|空格代表|自动转发|回复会自动|输出\s*\[SILENT\]/i.test(value)) {
+    warns.push('含一代仿真专用指令（[SILENT] / 空格分句 / 自动转发），二代仿真下这些行会被自动过滤');
+  }
+  return warns;
+}
+
+function updateRoleEditorWarnings() {
+  const warns = roleEditorWarnings(document.getElementById('newRoleContent').value);
+  document.getElementById('roleEditorWarnings').textContent = warns.length ? '⚠️ ' + warns.join('；') : '';
+}
+
+async function openRoleForEdit(name) {
+  setRoleMsg('读取中…');
+  const res = await api('/api/roles/content?name=' + encodeURIComponent(name));
+  if (!res.ok) { setRoleMsg(res.error || '读取失败', false); return; }
+  document.getElementById('newRoleName').value = name;
+  document.getElementById('newRoleContent').value = res.content;
+  roleEditorState = { mode: 'edit', name };
+  renderRoleEditor();
+  updateRoleEditorWarnings();
+  setRoleMsg(`已载入「${name}」（${res.chars} 字符）`, true);
+}
+
+function resetRoleForm() {
+  document.getElementById('newRoleName').value = '';
+  document.getElementById('newRoleContent').value = '';
+  roleEditorState = { mode: 'new', name: '' };
+  renderRoleEditor();
+  updateRoleEditorWarnings();
+  setRoleMsg('');
+}
+
 async function refreshRoles() {
   try {
     const r = await api('/api/roles');
-    const box = document.getElementById('roleList');
-    box.innerHTML = r.roles.length ? '' : '<span class="meta">暂无角色，可在下方新建</span>';
-    for (const name of r.roles) {
-      const tag = document.createElement('span');
-      tag.className = 'tag' + (name === r.current ? ' active' : '');
-      tag.textContent = name;
-      tag.addEventListener('click', async () => { const res = await api('/api/role', 'POST', { role: name }); if (!res.ok) alert(res.error); refreshRoles(); refresh(); });
-      box.appendChild(tag);
+    if (r.limits?.injectMaxChars) {
+      roleInjectMax = Number(r.limits.injectMaxChars) || roleInjectMax;
+      const input = document.getElementById('roleInjectMax');
+      if (input && document.activeElement !== input) input.value = String(roleInjectMax);
     }
-  } catch (e) { document.getElementById('roleList').textContent = '加载失败'; }
+    const names = Array.isArray(r.roles) ? r.roles : [];
+    roleCache = Array.isArray(r.summaries) && r.summaries.length === names.length
+      ? r.summaries
+      : names.map((name) => ({ name, chars: 0, bytes: 0, excerpt: '', truncated: false }));
+    const box = document.getElementById('roleList');
+    box.replaceChildren();
+    if (!roleCache.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.innerHTML = '<strong>还没有人格</strong><p>在「编辑人格提示词」里填名称与内容，点「新建人格」创建第一个。</p>';
+      box.appendChild(empty);
+    }
+    for (const role of roleCache) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'persona-item' + (role.name === r.current ? ' active' : '');
+      item.setAttribute('aria-pressed', String(role.name === r.current));
+      const head = document.createElement('span');
+      head.className = 'persona-item-head';
+      const title = document.createElement('strong');
+      title.textContent = role.name;
+      head.appendChild(title);
+      if (role.name === r.current) {
+        const badge = document.createElement('span');
+        badge.className = 'persona-badge';
+        badge.textContent = '启用中';
+        head.appendChild(badge);
+      }
+      if (role.truncated) {
+        const badge = document.createElement('span');
+        badge.className = 'persona-badge warn';
+        badge.textContent = `超出上限`;
+        badge.title = `按模式筛选后仍有超出：二代 ${role.charsV2} 字符 / 一代 ${role.charsV1} 字符，上限 ${roleInjectMax}`;
+        head.appendChild(badge);
+      }
+      if (role.hasModeTags) {
+        const badge = document.createElement('span');
+        badge.className = 'persona-badge';
+        badge.textContent = '分代内容';
+        badge.title = '该人格含 〔一代〕/〔二代〕 专属小节，只在对应仿真模式下注入';
+        head.appendChild(badge);
+      }
+      const meta = document.createElement('small');
+      const split = Number.isFinite(role.charsV1) && role.charsV1 !== role.charsV2;
+      const injection = split
+        ? `按模式注入：二代 ${role.injectedV2} / 一代 ${role.injectedV1} 字符`
+        : `注入 ${role.injectedV2 ?? role.chars} 字符`;
+      meta.textContent = `共 ${role.chars} 字符 · ${injection}${role.excerpt ? ' · ' + role.excerpt : ''}`;
+      item.append(head, meta);
+      item.addEventListener('click', () => openRoleForEdit(role.name));
+      box.appendChild(item);
+    }
+    const hint = document.getElementById('roleListHint');
+    if (hint) hint.textContent = roleCache.length ? `共 ${roleCache.length} 个 · 点任意一个载入编辑` : '';
+    renderRoleEditor();
+  } catch (error) {
+    document.getElementById('roleList').textContent = '加载失败：' + (error?.message ?? error);
+  }
+}
+
+// ── 仿真提示词（预设内置，需重启 DSH 生效）──────────────────────────────────
+let simPromptOriginal = '';
+let simPromptPreset = 'qq-chat-v2';
+
+function setSimMsg(text, ok) {
+  const el = document.getElementById('simPromptMsg');
+  el.textContent = text;
+  el.className = ok === undefined ? 'meta' : (ok ? 'meta ok' : 'meta err');
+}
+
+function setSimEditing(editing) {
+  const area = document.getElementById('simPromptText');
+  area.readOnly = !editing;
+  area.classList.toggle('editing', editing);
+  document.getElementById('simPromptEdit').disabled = editing;
+  document.getElementById('simPromptSave').disabled = !editing;
+  document.getElementById('simPromptCancel').disabled = !editing;
+}
+
+async function refreshSimPrompt() {
+  simPromptPreset = document.getElementById('simPromptPreset').value || 'qq-chat-v2';
+  setSimMsg('读取中…');
+  try {
+    const r = await api('/api/preset/sim-prompt?preset=' + encodeURIComponent(simPromptPreset));
+    const area = document.getElementById('simPromptText');
+    if (!r.ok) {
+      area.value = '';
+      setSimMsg(r.error || '读取失败', false);
+      document.getElementById('simPromptStatus').textContent = '不可用';
+      return;
+    }
+    simPromptOriginal = r.content;
+    area.value = r.content;
+    setSimEditing(false);
+    setSimMsg('');
+    const status = r.status || {};
+    document.getElementById('simPromptStatus').textContent =
+      `${status.label || simPromptPreset} · ${r.chars} 字符${status.installed ? ' · 已同步到 DSH' : ' · 尚未同步到 DSH'}`;
+    document.getElementById('simPromptWarnings').textContent = (r.warnings || []).length
+      ? '⚠️ ' + r.warnings.join('；') : '';
+    document.getElementById('simPromptRestart').textContent =
+      '改动写入该代预设的源文件并同步到 DSH 的 preset 目录；preset 由 DSH 在会话创建时装配，因此新会话会自动用新版，正在进行的 QQ 会话需重置该会话或重启 DSH。';
+  } catch (error) {
+    setSimMsg('读取失败：' + (error?.message ?? error), false);
+  }
+}
+
+// ── DSH 模型与思考强度 ──────────────────────────────────────────────────────
+async function refreshDshModel() {
+  try {
+    const r = await api('/api/dsh/model');
+    document.getElementById('dshModelText').textContent = r.model || '-';
+    document.getElementById('dshProviderText').textContent = r.provider || '-';
+    const select = document.getElementById('dshEffortSelect');
+    const labels = r.labels || {};
+    select.replaceChildren();
+    for (const option of (r.options || [])) {
+      const el = document.createElement('option');
+      el.value = option;
+      const info = labels[option] || {};
+      const isDefault = option === (r.providerDefault || r.default);
+      el.textContent = `${option}${isDefault ? '（默认）' : ''}`;
+      if (info.description) el.title = info.description;
+      select.appendChild(el);
+    }
+    select.value = r.reasoningEffort;
+    const parts = [];
+    if (r.providerDefault) parts.push(`DSH 出厂默认是 ${r.providerDefault}`);
+    parts.push(r.catalogSource === 'dsh' ? '档位取自 DSH 实际公布的能力' : '未能读取 DSH 能力，档位为内置清单');
+    document.getElementById('dshEffortNote').textContent = parts.join('；') + '。';
+    document.getElementById('dshEffortSideEffect').textContent = r.globalSideEffect
+      ? '注意：切换会同时写入 DSH 的全局默认（~/.dsh/settings.yaml 的 agent-default-model），也就是 Web GUI 里新建会话的默认强度也会跟着变。'
+      : '';
+    document.getElementById('dshEffortMsg').textContent = '';
+  } catch (error) {
+    document.getElementById('dshEffortMsg').textContent = '读取失败：' + (error?.message ?? error);
+  }
 }
 
 async function refreshWhitelist() {
@@ -1040,7 +2896,8 @@ async function refreshSessions() {
   try {
     const s = await api('/api/sessions');
     const box = document.getElementById('sessionList');
-    if (!s.sessions.length) { box.innerHTML = '<span class="meta">暂无会话</span>'; return; }
+    document.getElementById('metricSessions').textContent = s.sessions.length;
+    if (!s.sessions.length) { box.innerHTML = '<div class="empty-state"><strong>还没有会话</strong><p>白名单中的群或好友发来消息后，会话会显示在这里。</p></div>'; return; }
     let html = '<table><tr><th>QQ 会话</th><th>DSH 会话 ID</th><th>类型</th><th></th></tr>';
     for (const x of s.sessions) {
       const isP = x.key.startsWith('private:');
@@ -1062,7 +2919,9 @@ async function refreshPending() {
   try {
     const p = await api('/api/pending');
     const box = document.getElementById('pendingList');
-    if (!p.pending.length) { box.innerHTML = '<span class="meta">无挂起请求</span>'; return; }
+    document.getElementById('metricPending').textContent = p.pending.length;
+    document.getElementById('pendingCount').textContent = p.pending.length;
+    if (!p.pending.length) { box.innerHTML = '<div class="empty-state"><strong>暂时没有待处理请求</strong><p>AI 的提问或工具审批会出现在这里，请前往对应 QQ 会话回复。</p></div>'; return; }
     let html = '<table><tr><th>会话</th><th>类型</th><th>详情</th></tr>';
     for (const x of p.pending) {
       const kind = x.kind === 'approval' ? '<span class="pill r">审批</span>' : '<span class="pill b">提问</span>';
@@ -1093,10 +2952,108 @@ document.getElementById('roleClear').addEventListener('click', async () => { awa
 document.getElementById('roleCreate').addEventListener('click', async () => {
   const name = document.getElementById('newRoleName').value.trim();
   const content = document.getElementById('newRoleContent').value.trim();
-  const r = await api('/api/roles/create', 'POST', { name, content });
-  document.getElementById('roleCreateMsg').textContent = r.ok ? '✅ 已创建' : ('❌ ' + (r.error || '失败'));
-  document.getElementById('roleCreateMsg').className = r.ok ? 'meta ok' : 'meta err';
-  if (r.ok) { document.getElementById('newRoleName').value = ''; document.getElementById('newRoleContent').value = ''; refreshRoles(); }
+  if (!name) { setRoleMsg('请先填人格名', false); return; }
+  const editing = roleEditorState.mode === 'edit';
+  const exists = roleCache.some((role) => role.name === name);
+  // 编辑模式下改了名字 → 先重命名文件，再保存内容
+  if (editing && roleEditorState.name !== name) {
+    const renamed = await api('/api/roles/rename', 'POST', { from: roleEditorState.name, to: name });
+    if (!renamed.ok) { setRoleMsg('❌ ' + (renamed.error || '重命名失败'), false); return; }
+  }
+  const endpoint = editing || exists ? '/api/roles/update' : '/api/roles/create';
+  const r = await api(endpoint, 'POST', { name, content });
+  setRoleMsg(r.ok ? `✅ 已保存「${name}」` : ('❌ ' + (r.error || '失败')), r.ok);
+  if (r.ok) {
+    roleEditorState = { mode: 'edit', name };
+    document.getElementById('roleEditorWarnings').textContent = (r.warnings || []).length ? '⚠️ ' + r.warnings.join('；') : '';
+    await refreshRoles();
+  }
+});
+document.getElementById('roleDuplicate').addEventListener('click', async () => {
+  const source = document.getElementById('newRoleName').value.trim();
+  const content = document.getElementById('newRoleContent').value.trim();
+  const target = (prompt('把当前内容另存为新的人格，名称：', source ? source + '-副本' : '') || '').trim();
+  if (!target) return;
+  const r = await api('/api/roles/create', 'POST', { name: target, content });
+  if (!r.ok) { setRoleMsg('❌ ' + (r.error || '另存失败'), false); return; }
+  document.getElementById('newRoleName').value = target;
+  roleEditorState = { mode: 'edit', name: target };
+  renderRoleEditor();
+  setRoleMsg(`✅ 已另存为「${target}」`, true);
+  refreshRoles();
+});
+document.getElementById('roleDelete').addEventListener('click', async () => {
+  const name = document.getElementById('newRoleName').value.trim();
+  if (!name) { setRoleMsg('请先选择或填写要删除的人格名', false); return; }
+  if (!confirm(`确定删除人格「${name}」？该操作不可撤销（roles/${name}.md）。`)) return;
+  const r = await api('/api/roles/delete', 'POST', { name });
+  if (!r.ok) { setRoleMsg('❌ ' + (r.error || '删除失败'), false); return; }
+  resetRoleForm();
+  setRoleMsg(r.clearedCurrent ? `已删除「${name}」，并清除了当前启用的人格` : `已删除「${name}」`, true);
+  refreshRoles();
+  refresh();
+});
+document.getElementById('roleFormReset').addEventListener('click', () => resetRoleForm());
+document.getElementById('newRoleContent').addEventListener('input', updateRoleEditorWarnings);
+
+// ── 仿真提示词 ──────────────────────────────────────────────────────────────
+document.getElementById('simPromptEdit').addEventListener('click', () => {
+  setSimEditing(true);
+  setSimMsg('编辑中：改完点「保存并同步到 DSH」。保存会先备份，并做 YAML 与安全不变量校验。');
+});
+document.getElementById('simPromptCancel').addEventListener('click', () => {
+  document.getElementById('simPromptText').value = simPromptOriginal;
+  setSimEditing(false);
+  setSimMsg('已放弃修改');
+});
+document.getElementById('simPromptPreset').addEventListener('change', () => { refreshSimPrompt(); });
+document.getElementById('simPromptSave').addEventListener('click', async () => {
+  const content = document.getElementById('simPromptText').value;
+  if (!confirm('保存会改写该代预设的源文件并同步到 DSH 的 preset 目录（新会话生效，进行中的会话需重置或重启 DSH）。确定继续？')) return;
+  setSimMsg('保存中…');
+  const r = await api('/api/preset/sim-prompt', 'POST', { preset: simPromptPreset, content });
+  if (!r.ok) { setSimMsg('❌ ' + (r.error || '保存失败'), false); return; }
+  if (r.unchanged) {
+    simPromptOriginal = content;
+    setSimEditing(false);
+    setSimMsg('内容没有变化，未写入文件（避免无谓地重排预设格式）', true);
+    return;
+  }
+  simPromptOriginal = content;
+  setSimEditing(false);
+  setSimMsg(`✅ 已保存${r.synced ? '并同步到 DSH' : ''}；重启 DSH 后生效`, true);
+  document.getElementById('simPromptWarnings').textContent = (r.warnings || []).length ? '⚠️ ' + r.warnings.join('；') : '';
+  document.getElementById('simPromptStatus').textContent = `${r.status?.label || simPromptPreset} · ${content.length} 字符 · 已保存，待重启 DSH`;
+});
+document.getElementById('simPromptRestore').addEventListener('click', async () => {
+  if (!confirm('还原到该代预设上一次保存前的备份？当前改动会丢失（原文件会先自动备份）。')) return;
+  const r = await api('/api/preset/sim-prompt/restore', 'POST', { preset: simPromptPreset });
+  if (!r.ok) { setSimMsg('❌ ' + (r.error || '还原失败'), false); return; }
+  setSimMsg(`✅ 已还原（${r.restoredFrom}）；重启 DSH 后生效`, true);
+  refreshSimPrompt();
+});
+
+// ── 人格注入上限 ────────────────────────────────────────────────────────────
+document.getElementById('roleInjectMaxSave').addEventListener('click', async () => {
+  const msg = document.getElementById('roleInjectMaxMsg');
+  const value = Number(document.getElementById('roleInjectMax').value);
+  if (!Number.isFinite(value) || value < 1000 || value > 20000) { msg.textContent = '请输入 1000~20000 之间的整数'; msg.className = 'meta err'; return; }
+  const r = await api('/api/roles/limit', 'POST', { maxInjectChars: value });
+  msg.textContent = r.ok ? `✅ 已设为 ${r.maxInjectChars} 字符，下一条消息生效` : ('❌ ' + (r.error || '保存失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  if (r.ok) refreshRoles();
+});
+
+// ── DSH 思考强度 ────────────────────────────────────────────────────────────
+document.getElementById('dshEffortSave').addEventListener('click', async () => {
+  const effort = document.getElementById('dshEffortSelect').value;
+  const msg = document.getElementById('dshEffortMsg');
+  msg.textContent = '保存中…';
+  msg.className = 'meta';
+  const r = await api('/api/dsh/effort', 'POST', { reasoningEffort: effort });
+  msg.textContent = r.ok ? `✅ 已设为 ${r.reasoningEffort}，下一条消息生效` : ('❌ ' + (r.error || '保存失败'));
+  msg.className = r.ok ? 'meta ok' : 'meta err';
+  if (r.ok) refreshDshModel();
 });
 document.getElementById('silentOn').addEventListener('click', async () => { await api('/api/role-mode', 'POST', { mode: 'silent' }); refresh(); });
 document.getElementById('silentOff').addEventListener('click', async () => { await api('/api/role-mode', 'POST', { mode: 'active' }); refresh(); });
@@ -1141,6 +3098,72 @@ document.getElementById('aiNotifySend').addEventListener('click', async () => {
   msg.textContent = r.ok ? ('✅ 已投递到 DSH：' + r.sessionId) : ('❌ ' + (r.error || '失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';
 });
+
+// ── 语音库与语音发送（调试面板） ───────────────────────────────────────────
+// 试发走 /api/voice/send（操作者通道，凭控制台令牌），与 CLI 同一条路径 ——
+// 所以这里能验证「白名单 / 时长体积上限 / 限流 / 文件名审计」是不是真的生效。
+let voiceEntries = [];
+let voiceLibraryLoaded = false;
+// 只在首次进入/手动刷新时拉取：语音库会逐个 ffprobe 探测时长，放进 3 秒轮询会白白压网关。
+async function loadVoiceLibrary(force) {
+  if (voiceLibraryLoaded && force !== true) return;
+  const box = document.getElementById('voiceList');
+  const msg = document.getElementById('voiceMsg');
+  try {
+    const r = await api('/api/voice/list?probe=1');
+    voiceEntries = Array.isArray(r.voices) ? r.voices : [];
+    voiceLibraryLoaded = true;
+    if (!voiceEntries.length) {
+      box.innerHTML = '语音库是空的：把音频文件放进 <code>qq-bridge/audio/</code> 后点「刷新语音库」。';
+      return;
+    }
+    const limits = r.limits || {};
+    box.innerHTML = '共 ' + voiceEntries.length + ' 个（上限：' + (limits.maxSeconds || '?') + ' 秒 / '
+      + Math.round((limits.maxBytes || 0) / 1024 / 1024) + ' MiB / ' + (limits.maxPerMinute || '?') + ' 每分钟）：<br>'
+      + voiceEntries.map((v, i) => {
+        const bad = v.ok === false;
+        // v.name / v.error / v.detail 来自语音库的文件名与探测结果，属于**外部数据**：
+        // 语音库目录里放一个名为 `x<img src=x onerror=...>.mp3` 的文件即可注入脚本
+        // （CSP 允许 unsafe-inline，拦不住内联事件处理器）。所有插值都必须过 esc()。
+        return '<label style="display:block;margin:2px 0">'
+          + '<input type="radio" name="voicePick" value="' + i + '"' + (i === 0 ? ' checked' : '') + '> '
+          + '<code>' + esc(v.name) + '</code> ' + (bad ? '❌ ' + esc(v.error || '不可用') : esc(v.detail || ''))
+          + '</label>';
+      }).join('');
+  } catch (error) {
+    box.textContent = '加载失败：' + (error && error.message ? error.message : error);
+  }
+  if (msg) msg.textContent = '';
+}
+
+async function sendVoiceFromConsole() {
+  const msg = document.getElementById('voiceMsg');
+  const target = document.getElementById('voiceSendTarget').value.trim();
+  const dryRun = document.getElementById('voiceSendDryRun').checked;
+  const pick = document.querySelector('input[name="voicePick"]:checked');
+  if (!target) { msg.textContent = '❌ 请填发送目标（如 group:100005）'; msg.className = 'meta err'; return; }
+  if (!pick) { msg.textContent = '❌ 先刷新语音库并选中一个音频'; msg.className = 'meta err'; return; }
+  const entry = voiceEntries[Number(pick.value)];
+  msg.textContent = '发送中…'; msg.className = 'meta';
+  try {
+    const r = await api('/api/voice/send', 'POST', { target, file: entry.name, dryRun });
+    if (r.dryRun) {
+      msg.textContent = '✅ 校验通过（未发送）：' + (r.detail || '');
+      msg.className = 'meta ok';
+    } else if (r.ok) {
+      msg.textContent = '✅ 已发出 messageId=' + (r.messageId ?? '?')
+        + (r.detail ? '（' + r.detail + '）' : '')
+        + (r.verified ? '，已回读校验为语音段' : '，未能回读校验');
+      msg.className = 'meta ok';
+    } else {
+      msg.textContent = '❌ ' + (r.error || '失败');
+      msg.className = 'meta err';
+    }
+  } catch (error) {
+    msg.textContent = '❌ ' + (error && error.message ? error.message : error);
+    msg.className = 'meta err';
+  }
+}
 
 // ── 二代仿真模式（reserved2）配置 ─────────────────────────────────────────
 async function loadV2Config() {
@@ -1627,6 +3650,8 @@ document.getElementById('v2SessionSelect').addEventListener('change', (ev) => {
 
 document.getElementById('v2ConfigSave').addEventListener('click', saveV2Config);
 document.getElementById('v2ConfigSaveTop').addEventListener('click', saveV2Config);
+document.getElementById('voiceRefreshBtn').addEventListener('click', () => loadVoiceLibrary(true));
+document.getElementById('voiceSendBtn').addEventListener('click', sendVoiceFromConsole);
 async function refreshV2Activity() {
   try {
     const r = await api('/api/socialV2/activity');
@@ -2154,6 +4179,17 @@ document.getElementById('slangConfigSave').addEventListener('click', async () =>
 function loadSecurity() {
   api('/api/security').then(r => {
     document.getElementById('secInterceptNotify').checked = r.security?.interceptNotify !== false;
+    // state/ 的 ACL 是否收紧（Windows 上需要管理员权限，未提权时会失败）。
+    // 明确警示 + 给出可复制的命令，而不是让用户以为已经安全。
+    const warn = document.getElementById('stateDirWarn');
+    const hardened = r.stateDir?.hardened;
+    if (hardened === false) {
+      document.getElementById('stateDirPath').textContent = r.stateDir?.path || 'state/';
+      document.getElementById('stateDirCmd').textContent = r.stateDir?.manualCommand || '';
+      warn.style.display = '';
+    } else {
+      warn.style.display = 'none';
+    }
   }).catch(() => {});
 }
 document.getElementById('secSave').addEventListener('click', async () => {
@@ -2162,6 +4198,14 @@ document.getElementById('secSave').addEventListener('click', async () => {
   msg.textContent = r.ok ? '✅ 已保存' : ('❌ ' + (r.error || '失败'));
   msg.className = r.ok ? 'meta ok' : 'meta err';
   if (r.ok) loadSecurity();
+});
+document.getElementById('stateDirReharden').addEventListener('click', async () => {
+  const msg = document.getElementById('stateDirMsg');
+  msg.textContent = '检测中…';
+  const r = await api('/api/security', 'POST', { rehardenStateDir: true });
+  msg.textContent = r.hardened === true ? '✅ 权限已收紧' : '❌ 仍未收紧（改 ACL 需要管理员权限；请按上面两种做法之一操作后复检）';
+  msg.className = r.hardened === true ? 'meta ok' : 'meta err';
+  loadSecurity();
 });
 
 async function changeConsoleToken(generate) {
@@ -2182,14 +4226,660 @@ async function changeConsoleToken(generate) {
   // 保存到 localStorage，当前页面继续使用新令牌
   localStorage.setItem('consoleToken', r.token);
   input.value = r.token;
-  msg.textContent = r.generated ? ('✅ 已生成随机令牌：' + r.token) : '✅ 已保存新令牌';
+  msg.textContent = r.generated ? '已生成随机令牌，当前页面已自动使用。可点击显示后复制。' : '已保存新令牌';
   msg.className = 'meta ok';
 }
 document.getElementById('consoleTokenSave').addEventListener('click', () => changeConsoleToken(false));
 document.getElementById('consoleTokenRandom').addEventListener('click', () => changeConsoleToken(true));
 
-refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity();
+// Presentation layer: keep every existing control mounted so drafts and API contracts survive navigation.
+const consolePages = {
+  overview: ['运行总览', '让每一次连接，都自然发生。', '掌握桥接状态，轻松管理你的 QQ 智能伙伴。'],
+  sessions: ['会话与审批', '让每一段对话，都有迹可循。', '查看 QQ 与 DSH 的会话映射，以及等待你回复的审批和提问。'],
+  persona: ['人格与角色', '给你的伙伴，一点独特个性。', '选择已有角色，或用自己的语言写下新的性格与表达方式。'],
+  'social-v2': ['二代仿真', '自主参与，恰到好处。', '管理 AI 的工具、唤醒与发言节奏。展开需要调整的分组，修改后保存参数。'],
+  'social-v1': ['一代仿真', '为自然对话，设定合适的节奏。', '调整参与概率、活跃周期和分条发送；所有配置项完整保留。'],
+  slang: ['黑话词库', '读懂群聊里的，言外之意。', '从候选到确认，让 AI 逐渐熟悉大家的表达习惯。'],
+  usage: ['令牌与花费', '每一次思考，都算得清楚。', '实时查看 AI 的 token 消耗与花费，可下钻到每个群、每个好友、每一轮对话。'],
+  access: ['访问与安全', '明确边界，安心连接。', '管理允许对话的对象、管理员权限与控制台访问凭证。'],
+  operations: ['调试与运维', '让桥接，始终井然有序。', '测试消息、引导 AI，或维护桥接进程与会话工作区。'],
+  reference: ['工具参考', '每一种能力，都清晰可见。', '查看桥接提供给 DSH 的 MCP 工具与用途。']
+};
+let currentConsolePage = 'overview';
+let toastTimer;
+function showConsoleToast(message) {
+  const toast = document.getElementById('consoleToast');
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 4200);
+}
+function setConsolePage(page, { updateHash = true, focus = false, target = '' } = {}) {
+  if (!Object.hasOwn(consolePages, page)) page = 'overview';
+  currentConsolePage = page;
+  document.querySelectorAll('[data-page]').forEach(el => { el.hidden = el.dataset.page !== page; });
+  document.querySelectorAll('#mainNav [data-view]').forEach(button => {
+    const selected = button.dataset.view === page;
+    button.classList.toggle('active', selected);
+    if (selected) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+  document.getElementById('breadcrumbPage').textContent = consolePages[page][0];
+  document.getElementById('pageTitle').textContent = consolePages[page][1];
+  document.getElementById('pageDescription').textContent = consolePages[page][2];
+  document.title = consolePages[page][0] + ' · QQ 桥接控制台';
+  if (updateHash && location.hash !== '#' + page) history.pushState({}, '', '#' + page);
+  closeConsoleSearch();
+  // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
+  if (page === 'social-v2' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();
+  if (focus) {
+    document.getElementById('mainContent').focus({ preventScroll: true });
+    document.getElementById(target || 'mainContent')?.scrollIntoView({ block: 'start', behavior: 'instant' });
+  }
+}
+document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+  setConsolePage(button.dataset.view, { focus: true, target: button.dataset.target });
+}));
+window.addEventListener('hashchange', () => {
+  const page = location.hash.slice(1);
+  if (Object.hasOwn(consolePages, page) || !page) setConsolePage(page, { updateHash: false });
+});
+document.querySelector('.skip-link').addEventListener('click', event => {
+  event.preventDefault();
+  document.getElementById('mainContent').focus();
+  document.getElementById('mainContent').scrollIntoView({ block: 'start', behavior: 'instant' });
+});
+function updateOverview(status, modeLabel) {
+  const connection = document.getElementById('statusText');
+  connection.textContent = status.dshReady ? 'DSH 已连接' : 'DSH 未连接';
+  connection.className = 'status-badge ' + (status.dshReady ? 'online' : 'offline');
+  document.getElementById('metricDsh').textContent = status.dshReady ? '已连接' : '未连接';
+  document.getElementById('metricDsh').className = status.dshReady ? 'ok' : 'err';
+  document.getElementById('metricDshHint').textContent = status.dshReady ? '桥接状态已同步' : '请检查 DSH 是否运行';
+  document.getElementById('metricMode').textContent = modeLabel.replace('模式', '');
+  document.getElementById('metricRole').textContent = '角色 · ' + (status.role || '默认人格');
+  document.getElementById('accessSummary').textContent = '管理员 ' + (status.ownerQQ || '未设置') + ' · ' + (status.allowGroups || []).length + ' 个白名单群 · ' + (status.allowPrivate || []).length + ' 位白名单好友';
+  document.getElementById('lastUpdated').textContent = '状态同步于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  document.getElementById('connectionAlert').hidden = true;
+  const silent = status.roleMode === 'silent';
+  for (const [id, active] of [['silentOn', silent], ['silentOff', !silent]]) {
+    const button = document.getElementById(id);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+}
+function setConnectionError(error) {
+  document.getElementById('statusText').className = 'status-badge offline';
+  document.getElementById('metricDsh').textContent = '连接中断';
+  document.getElementById('metricDsh').className = 'err';
+  document.getElementById('metricDshHint').textContent = '当前状态可能已过期';
+  const alert = document.getElementById('connectionAlert');
+  alert.textContent = error.message === '未授权' ? '访问令牌无效或已取消输入。请使用启动日志中的控制台链接重新打开。' : '无法连接桥接服务，当前显示的是上次同步结果。请检查桥接是否运行，再点击右上角刷新。';
+  alert.hidden = false;
+}
+document.getElementById('refreshConsole').addEventListener('click', async function () {
+  this.disabled = true;
+  await Promise.allSettled([refresh(), refreshSessions(), refreshPending(), refreshSocialStatus(), refreshV2Activity()]);
+  this.disabled = false;
+  if (document.getElementById('connectionAlert').hidden) showConsoleToast('运行状态已刷新');
+});
+
+// Attach real accessible names to the original form controls, including paired min/max inputs.
+document.querySelectorAll('input,select,textarea').forEach(input => {
+  if (input.labels?.length || input.hasAttribute('aria-label')) return;
+  let label = input.previousElementSibling;
+  while (label && label.tagName !== 'LABEL') label = label.previousElementSibling;
+  if (label) {
+    const siblings = [];
+    let next = label.nextElementSibling;
+    while (next && next.tagName !== 'LABEL') {
+      if (next.matches('input,select,textarea')) siblings.push(next);
+      next = next.nextElementSibling;
+    }
+    input.setAttribute('aria-label', label.textContent.trim() + (siblings.length > 1 ? (siblings.indexOf(input) === 0 ? '（下限）' : '（上限）') : ''));
+  } else {
+    const names = { consoleTokenInput: '新的控制台访问令牌', closedPreset: '封闭 Agent 使用的 DSH 预设', tsKind: '测试消息目标类型', aiNotifyKind: '后台提醒目标类型', sStateKey: '一代仿真会话', v2SessionSelect: '二代仿真白名单会话', slangLimitCand: '候选词显示数量', slangLimitConfirmed: '已确认词显示数量', slangLimitRejected: '已拒绝词显示数量' };
+    input.setAttribute('aria-label', names[input.id] || input.placeholder || input.closest('section')?.querySelector('h2')?.textContent || '设置');
+  }
+});
+const primaryActions = ['roleSet','roleCreate','socialSave','v2ConfigSave','v2ConfigSaveTop','wlSave','secSave','consoleTokenSave','tsSend','aiNotifySend','slangAdd','slangConfigSave','slangModalDirectConfirm'];
+primaryActions.forEach(id => document.getElementById(id)?.classList.add('primary'));
+document.querySelectorAll('.meta[id$="Msg"], .meta[id$="Msg2"]').forEach(el => el.setAttribute('role','status'));
+document.getElementById('section-mode').querySelector('h2').dataset.note = '选择后即时生效';
+document.getElementById('section-activity').querySelector('h2').dataset.note = '每 3 秒自动同步';
+
+const searchInput = document.getElementById('consoleSearch');
+const searchResults = document.getElementById('searchResults');
+const featureIndex = [];
+document.querySelectorAll('section[data-page]').forEach(section => {
+  const page = section.dataset.page;
+  featureIndex.push({ page, label: section.querySelector('h2').textContent, target: section });
+  section.querySelectorAll('details.settings-group>summary,input,textarea,select').forEach(el => {
+    let label = el.tagName === 'SUMMARY' ? el.textContent : (el.getAttribute('aria-label') || el.labels?.[0]?.textContent || el.placeholder);
+    if (label) featureIndex.push({ page, label: label.trim(), target: el });
+  });
+});
+function closeConsoleSearch() { searchResults.hidden = true; searchInput.setAttribute('aria-expanded','false'); }
+searchInput.addEventListener('input', () => {
+  const query = searchInput.value.trim().toLowerCase();
+  searchResults.replaceChildren();
+  if (!query) return closeConsoleSearch();
+  const matches = featureIndex.filter(entry => (consolePages[entry.page][0] + entry.label + entry.target.id).toLowerCase().includes(query)).slice(0,12);
+  if (!matches.length) { const empty = document.createElement('p'); empty.textContent = '未找到匹配功能，试试「唤醒」「白名单」或「表情」。'; searchResults.append(empty); }
+  matches.forEach(entry => {
+    const button = document.createElement('button');
+    const title = document.createElement('span'); title.textContent = entry.label;
+    const caption = document.createElement('small'); caption.textContent = consolePages[entry.page][0];
+    button.append(title,caption);
+    button.addEventListener('click', () => {
+      setConsolePage(entry.page);
+      let ancestor = entry.target.closest('details');
+      while (ancestor) { ancestor.open = true; ancestor = ancestor.parentElement.closest('details'); }
+      if (entry.target.closest('.slang-panel')) {
+        const panels = { slangPanelCandidate: 'candidate', slangPanelConfirmed: 'confirmed', slangPanelRejected: 'rejected' };
+        setSlangTab(panels[entry.target.closest('.slang-panel').id]);
+      }
+      entry.target.scrollIntoView({ block:'center', behavior:'instant' });
+      if (!entry.target.hasAttribute('tabindex') && !entry.target.matches('input,textarea,select,button,summary')) entry.target.tabIndex = -1;
+      entry.target.focus({ preventScroll:true });
+      entry.target.classList.add('search-highlight');
+      setTimeout(() => entry.target.classList.remove('search-highlight'), 2000);
+    });
+    searchResults.append(button);
+  });
+  searchResults.hidden = false;
+  searchInput.setAttribute('aria-expanded','true');
+});
+searchInput.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeConsoleSearch();
+  if ((event.key === 'ArrowDown' || event.key === 'Enter') && !searchResults.hidden) { event.preventDefault(); searchResults.querySelector('button')?.focus(); }
+});
+document.addEventListener('click', event => { if (!event.target.closest('.search-wrap')) closeConsoleSearch(); });
+searchResults.addEventListener('keydown', event => { if (event.key === 'Escape') { closeConsoleSearch(); searchInput.focus(); } });
+
+// Keyboard support for the existing editor dialog without replacing its save flow.
+let modalPreviousFocus;
+const slangOverlay = document.getElementById('slangModalOverlay');
+new MutationObserver(() => {
+  if (slangOverlay.classList.contains('open')) {
+    modalPreviousFocus = document.activeElement;
+    document.getElementById('slangModalMeaning').focus();
+  } else modalPreviousFocus?.focus();
+}).observe(slangOverlay, { attributes:true, attributeFilter:['class'] });
+slangOverlay.addEventListener('keydown', event => {
+  if (event.key === 'Escape') { event.preventDefault(); closeSlangModal(); }
+  if (event.key === 'Tab') {
+    const controls = [...slangOverlay.querySelectorAll('button,input,textarea,select')].filter(el => !el.disabled && el.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+});
+const tokenToggle = document.createElement('button');
+tokenToggle.id = 'consoleTokenToggle'; tokenToggle.className = 'small'; tokenToggle.textContent = '显示令牌'; tokenToggle.type = 'button'; tokenToggle.setAttribute('aria-pressed','false');
+tokenToggle.addEventListener('click', () => {
+  const input = document.getElementById('consoleTokenInput');
+  const visible = input.type === 'password';
+  input.type = visible ? 'text' : 'password';
+  tokenToggle.textContent = visible ? '隐藏令牌' : '显示令牌';
+  tokenToggle.setAttribute('aria-pressed',String(visible));
+});
+document.getElementById('consoleTokenInput').after(tokenToggle);
+// ── 消耗走势图（手写 SVG） ───────────────────────────────────────────────
+// 为什么不用图表库：控制台 CSP 是 default-src 'self'，不能引外部脚本；
+// 而 SVG 用 document.createElementNS 生成既没有 innerHTML 转义风险，
+// 也能直接用 CSS 变量跟随深浅主题。
+let usageChartHours = 24;
+let usageChartMetric = 'cost';
+let usageChartData = null;
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(name, attrs = {}) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+  return node;
+}
+function usageBucketValue(b, metric) {
+  return metric === 'tokens' ? (Number(b.tokens) || 0) : (Number(b.cost) || 0);
+}
+function usageMetricLabel(metric) {
+  return metric === 'tokens' ? 'token' : '花费';
+}
+function usageAxisValue(v, metric, sym) {
+  if (metric === 'tokens') return usageNum(v);
+  if (v === 0) return sym + '0';
+  return v < 0.01 ? sym + v.toFixed(4) : sym + v.toFixed(2);
+}
+function usageBucketClock(ms, bucketMs) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  // 桶宽 ≥ 1 天时只显示日期，否则显示「日 时:分」，跨天也能分辨。
+  if (bucketMs >= 24 * 3600 * 1000) return `${d.getMonth() + 1}/${d.getDate()}`;
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function renderUsageChart(series) {
+  const box = document.getElementById('usageChart');
+  const totalEl = document.getElementById('usageChartTotal');
+  const hintEl = document.getElementById('usageChartHint');
+  const noteEl = document.getElementById('usageChartNote');
+  usageChartData = series;
+  const sym = series?.symbol || '¥';
+  const buckets = Array.isArray(series?.buckets) ? series.buckets : [];
+  if (!buckets.length) {
+    box.innerHTML = '';
+    box.textContent = '暂无数据';
+    totalEl.textContent = '—';
+    hintEl.textContent = '还没有用量记录';
+    noteEl.textContent = '';
+    return;
+  }
+  const metric = usageChartMetric;
+  const values = buckets.map((b) => usageBucketValue(b, metric));
+  const max = Math.max(...values, 0);
+  // 全零时给一个假上限，避免除零；同时让空图看起来是"平"的而不是报错。
+  const scaleMax = max > 0 ? max : 1;
+
+  const W = 960;
+  const H = 240;
+  const padL = 62;
+  const padR = 12;
+  const padT = 12;
+  const padB = 34;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const step = plotW / buckets.length;
+  const barW = Math.max(2, step * 0.72);
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${usageMetricLabel(metric)}随时间的走势图` });
+
+  // 横向网格 + 纵轴刻度（3 条线即可：0 / 一半 / 最大）
+  // 窗口内完全没有用量时（max === 0）三条刻度都写 0：不能编出一个 ¥1 的假量程，
+  // 那会让人以为"有量但很小"。
+  for (let i = 0; i <= 2; i += 1) {
+    const y = padT + plotH - (plotH * i) / 2;
+    svg.appendChild(svgEl('line', { class: 'usage-grid', x1: padL, y1: y, x2: W - padR, y2: y }));
+    const label = svgEl('text', { class: 'usage-axis', x: padL - 8, y: y + 3, 'text-anchor': 'end' });
+    label.textContent = usageAxisValue(max > 0 ? (scaleMax * i) / 2 : 0, metric, sym);
+    svg.appendChild(label);
+  }
+
+  // 柱：颜色 = 该桶的峰谷档位，所以"什么时候贵"是一眼可见的
+  for (let i = 0; i < buckets.length; i += 1) {
+    const b = buckets[i];
+    const v = values[i];
+    const x = padL + i * step + (step - barW) / 2;
+    const h = v > 0 ? Math.max(1.5, (v / scaleMax) * plotH) : 0;
+    const tooltip = svgEl('title');
+    tooltip.textContent = `${usageBucketClock(b.t, series.bucketMs)}\n${usageMetricLabel(metric)}：${usageAxisValue(v, metric, sym)}`
+      + `\n未命中输入：${usageNum(b.cacheMiss)} ｜ 命中输入：${usageNum(b.cacheHit)} ｜ 输出：${usageNum(b.output)}`
+      + `\n步数：${usageNum(b.steps)} ｜ 轮次：${usageNum(b.turns)}`
+      + `\n时段：${b.tier === 'peak' ? '高峰（单价 ×2）' : (b.tier === 'mixed' ? '跨时段' : '空闲')}`
+      + (b.keys?.length ? `\n会话：${b.keys.join('、')}` : '');
+    if (h > 0) {
+      const rect = svgEl('rect', { x, y: padT + plotH - h, width: barW, height: h, rx: 2, class: `usage-bar-${b.tier === 'peak' ? 'peak' : (b.tier === 'mixed' ? 'mixed' : 'off')}` });
+      rect.appendChild(tooltip);
+      svg.appendChild(rect);
+    }
+    // 透明命中区：0 值的桶也能 hover（鼠标移到空白处也要能看出那一刻是空闲还是高峰）
+    const hit = svgEl('rect', { x: padL + i * step, y: padT, width: step, height: plotH, class: 'usage-hit' });
+    hit.appendChild(tooltip.cloneNode(true));
+    svg.appendChild(hit);
+  }
+
+  // 横轴：最多 6 个刻度，避免挤在一起
+  const tickEvery = Math.max(1, Math.ceil(buckets.length / 6));
+  for (let i = 0; i < buckets.length; i += tickEvery) {
+    const label = svgEl('text', { class: 'usage-axis', x: padL + i * step + step / 2, y: H - padB + 16, 'text-anchor': 'middle' });
+    label.textContent = usageBucketClock(buckets[i].t, series.bucketMs);
+    svg.appendChild(label);
+  }
+
+  box.innerHTML = '';
+  box.appendChild(svg);
+
+  const windowTotal = buckets.reduce((sum, b) => sum + usageBucketValue(b, metric), 0);
+  totalEl.textContent = metric === 'tokens' ? `${usageNum(windowTotal)} token` : usageMoney(windowTotal, sym);
+  const busiest = series.busiest;
+  hintEl.textContent = `窗口内合计 ｜ 每格 ${Math.round(series.bucketMs / 60000)} 分钟`
+    + (busiest && metric === 'cost' ? ` ｜ 最贵一格：${usageBucketClock(busiest.t, series.bucketMs)} ${usageMoney(busiest.cost, sym)}` : '')
+    + (series.estimated ? ' ｜ ⚠️ 含按兜底价估算的模型' : '');
+
+  // 图上一定要能看出"还有多少没画进来"：投影基线覆盖的更早历史没有逐时明细。
+  const notes = [];
+  if (Number(series.offChartCost) > 0.0001) {
+    notes.push(`另有 ${usageMoney(series.offChartCost, sym)}（约 ${usageNum(series.offChartTokens)} token）属于更早的历史，只有累计值、没有逐时明细，因此不在上图里；所以本图合计会小于「总花费」。`);
+  }
+  if (series.countedSamples === 0) {
+    notes.push('所选时间窗内没有采样：要么这段时间真的没调用，要么逐轮明细已被容量上限淘汰（累计总量仍然准确）。');
+  }
+  noteEl.textContent = notes.join(' ');
+}
+
+async function refreshUsageChart() {
+  try {
+    const r = await api(`/api/tokens/series?hours=${usageChartHours}`);
+    renderUsageChart(r);
+  } catch (error) {
+    document.getElementById('usageChart').textContent = `走势读取失败：${error?.message || '未知错误'}`;
+  }
+}
+
+document.getElementById('usageChartControls').addEventListener('click', (ev) => {
+  const hoursBtn = ev.target.closest('[data-usage-hours]');
+  const metricBtn = ev.target.closest('[data-usage-metric]');
+  if (hoursBtn) {
+    usageChartHours = Number(hoursBtn.dataset.usageHours) || 24;
+    document.querySelectorAll('#usageChartControls [data-usage-hours]').forEach((b) => b.classList.toggle('active', b === hoursBtn));
+    refreshUsageChart();
+  } else if (metricBtn) {
+    usageChartMetric = metricBtn.dataset.usageMetric === 'tokens' ? 'tokens' : 'cost';
+    document.querySelectorAll('#usageChartControls [data-usage-metric]').forEach((b) => b.classList.toggle('active', b === metricBtn));
+    // 只换纵轴：不重新请求，直接重画现有数据。
+    if (usageChartData) renderUsageChart(usageChartData);
+  }
+});
+
+// ── 令牌与花费 ───────────────────────────────────────────────────────────
+// 数据分三层：累计总量（DSH tokenUsage 投影，权威）→ 按会话归并 → 逐轮明细。
+// 金额一律在渲染时算，价目表改了不需要重算历史。
+let usageSelectedKey = '';
+let usageConversationsCache = [];
+
+function usageNum(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e8) return (v / 1e8).toFixed(2) + ' 亿';
+  if (v >= 1e5) return (v / 1e4).toFixed(0) + ' 万';
+  if (v >= 1e4) return (v / 1e4).toFixed(1) + ' 万';
+  return String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function usageMoney(n, sym) {
+  const s = sym || '¥';
+  const v = Number(n) || 0;
+  if (v === 0) return s + '0';
+  if (v < 0.01) return s + v.toFixed(4);
+  return s + v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function usagePct(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  return (v * 100).toFixed(1) + '%';
+}
+function usageRate(buckets) {
+  const b = buckets || {};
+  const input = (b.cacheMiss || 0) + (b.cacheHit || 0) + (b.cacheWrite || 0);
+  return input > 0 ? (b.cacheHit || 0) / input : 0;
+}
+function usageTime(ms) {
+  if (!ms) return '—';
+  try { return new Date(ms).toLocaleString('zh-CN', { hour12: false }); } catch (error) { return '—'; }
+}
+function usageBar(share) {
+  const ratio = Math.max(0, Math.min(1, Number(share) || 0));
+  const width = Math.max(2, Math.round(ratio * 100));
+  return `<span class="usage-bar-wrap"><span class="usage-bar-track"><span class="usage-bar-fill" style="width:${width}%"></span></span><span class="meta">${(ratio * 100).toFixed(1)}%</span></span>`;
+}
+function usageTierTag(tier) {
+  if (tier === 'peak') return '<span class="pill r usage-tier">高峰</span>';
+  if (tier === 'off') return '<span class="pill g usage-tier">空闲</span>';
+  if (tier === 'mixed') return '<span class="pill b usage-tier">跨时段</span>';
+  return '<span class="meta">—</span>';
+}
+
+function syncUsageKeySelect(keys) {
+  const sel = document.getElementById('usageKeySelect');
+  if (!sel) return;
+  if (!keys.includes(usageSelectedKey)) usageSelectedKey = keys[0] || '';
+  const signature = keys.join('\u0000');
+  if (sel.dataset.signature !== signature) {
+    sel.dataset.signature = signature;
+    sel.innerHTML = keys.length
+      ? keys.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('')
+      : '<option value="">（暂无会话）</option>';
+  }
+  // 每 3 秒的轮询不得覆盖用户正在操作的控件。
+  if (document.activeElement !== sel) sel.value = usageSelectedKey;
+}
+
+function renderUsageConversations(r) {
+  const box = document.getElementById('usageConversations');
+  const list = r.conversations || [];
+  const sym = r.symbol || '¥';
+  usageConversationsCache = list;
+  if (!list.length) {
+    box.innerHTML = '<div class="empty-state"><strong>还没有用量记录</strong><p>QQ 会话产生一次 LLM 调用后，这里会按群 / 好友列出 token 与花费。新账本从桥接重启后开始记账。</p></div>';
+    return;
+  }
+  const maxCost = Math.max(...list.map(x => Number(x.cost) || 0), 0);
+  let html = '<table><tr><th>会话</th><th>类型</th><th class="num">轮数</th><th class="num">步数</th><th class="num">未命中输入</th><th class="num">命中输入</th><th class="num">命中率</th><th class="num">输出</th><th class="num">花费</th><th>占比</th></tr>';
+  for (const c of list) {
+    const key = String(c.key ?? '');
+    const isInternal = key.startsWith('internal:');
+    const type = isInternal ? '<span class="pill b">内部</span>'
+      : (key.startsWith('private:') ? '<span class="pill b">私聊</span>' : '<span class="pill g">群</span>');
+    const b = c.buckets || {};
+    html += '<tr>'
+      + `<td class="usage-key"><button class="usage-key-button" data-usage-key="${esc(key)}" aria-pressed="${key === usageSelectedKey}">${esc(key)}</button></td>`
+      + `<td>${type}</td>`
+      + `<td class="num">${usageNum(c.turns)}</td>`
+      + `<td class="num">${usageNum(c.steps)}</td>`
+      + `<td class="num">${usageNum(b.cacheMiss)}</td>`
+      + `<td class="num">${usageNum(b.cacheHit)}</td>`
+      + `<td class="num">${usagePct(usageRate(b))}</td>`
+      + `<td class="num">${usageNum(b.output)}</td>`
+      + `<td class="num">${usageMoney(c.cost, sym)}</td>`
+      + `<td>${usageBar(maxCost > 0 ? (Number(c.cost) || 0) / maxCost : 0)}</td>`
+      + '</tr>';
+  }
+  html += '</table>';
+  const totals = r.totals || {};
+  if (Number(totals.unattributedCost) > 0) {
+    html += `<div class="meta" style="padding:8px 10px">其中 ${usageMoney(totals.unattributedCost, sym)} 来自更早的回合：它们只剩累计值（在逐轮快照窗口之外），无法再拆到具体某一轮。</div>`;
+  }
+  if (totals.estimated) {
+    html += '<div class="meta" style="padding:8px 10px">⚠️ 有模型未登记在价目表里，这部分按 <code>deepseek-flash</code> 兜底价估算，可在 <code>config.json</code> 的 <code>pricing.models</code> 补充。</div>';
+  }
+  box.innerHTML = html;
+  box.querySelectorAll('[data-usage-key]').forEach(btn => btn.addEventListener('click', () => {
+    usageSelectedKey = btn.dataset.usageKey;
+    box.querySelectorAll('[data-usage-key]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.usageKey === usageSelectedKey)));
+    const sel = document.getElementById('usageKeySelect');
+    if (sel) sel.value = usageSelectedKey;
+    refreshUsageTurns();
+  }));
+}
+
+function renderUsageTurns(r) {
+  const box = document.getElementById('usageTurns');
+  const scope = document.getElementById('usageTurnScope');
+  const rows = r.turns || [];
+  const sym = r.symbol || '¥';
+  if (scope) {
+    scope.textContent = `${esc(r.key || '')} ｜ 共 ${rows.length} 轮可追溯 ｜ 已归属 ${usageMoney(r.attributedCost, sym)}`
+      + (Number(r.unattributedCost) > 0 ? ` ｜ 未逐轮归属 ${usageMoney(r.unattributedCost, sym)}` : '');
+  }
+  if (!rows.length) {
+    box.innerHTML = '<span class="meta">该会话还没有可追溯的逐轮记录（只有累计值）。</span>';
+    return;
+  }
+  let html = '<table><tr><th class="num">轮次</th><th>结束时间</th><th class="num">步数</th><th class="num">未命中输入</th><th class="num">命中输入</th><th class="num">命中率</th><th class="num">输出</th><th class="num">花费</th><th>时段</th></tr>';
+  for (const t of rows) {
+    const b = t.buckets || {};
+    html += '<tr>'
+      + `<td class="num">#${esc(t.turn)}</td>`
+      + `<td>${esc(usageTime(t.endedAt))}</td>`
+      + `<td class="num">${usageNum(t.steps)}</td>`
+      + `<td class="num">${usageNum(b.cacheMiss)}</td>`
+      + `<td class="num">${usageNum(b.cacheHit)}</td>`
+      + `<td class="num">${usagePct(usageRate(b))}</td>`
+      + `<td class="num">${usageNum(b.output)}</td>`
+      + `<td class="num">${usageMoney(t.cost, sym)}</td>`
+      + `<td>${usageTierTag(t.tier)}</td>`
+      + '</tr>';
+  }
+  box.innerHTML = html + '</table>';
+}
+
+function renderUsageRecent(r) {
+  const box = document.getElementById('usageRecent');
+  const list = r.entries || [];
+  const sym = r.symbol || '¥';
+  if (!list.length) { box.innerHTML = '<span class="meta">（空）</span>'; return; }
+  let html = '<table><tr><th>时间</th><th>会话</th><th class="num">轮</th><th class="num">步</th><th class="num">未命中</th><th class="num">命中</th><th class="num">输出</th><th class="num">花费</th><th>时段</th></tr>';
+  for (const e of list) {
+    html += '<tr>'
+      + `<td>${esc(usageTime(e.time))}</td>`
+      + `<td>${esc(e.key || '未归属')}</td>`
+      + `<td class="num">#${esc(e.turn)}</td>`
+      + `<td class="num">${esc(e.step)}</td>`
+      + `<td class="num">${usageNum(e.cacheMiss)}</td>`
+      + `<td class="num">${usageNum(e.cacheHit)}</td>`
+      + `<td class="num">${usageNum(e.output)}</td>`
+      + `<td class="num">${usageMoney(e.cost, sym)}</td>`
+      + `<td>${usageTierTag(e.tier)}</td>`
+      + '</tr>';
+  }
+  box.innerHTML = html + '</table>';
+}
+
+function renderUsagePrices(pt) {
+  const box = document.getElementById('usagePrices');
+  if (!pt || !pt.models) { box.textContent = '（价目表不可用）'; return; }
+  const sym = pt.symbol || '¥';
+  const tier = pt.nowTier;
+  let html = `<div style="margin-bottom:6px">价目表版本 <code>${esc(pt.version)}</code> ｜ 高峰时段为北京时间的 2 倍价（周一至周五 9:00-12:00、14:00-18:00，法定节假日除外，已内置 ${esc(pt.holidayCount)} 天假期）</div>`;
+  html += '<table><tr><th>模型</th><th class="num">缓存命中</th><th class="num">缓存未命中</th><th class="num">输出</th></tr>';
+  for (const [name, m] of Object.entries(pt.models)) {
+    // 单价与货币符号都可能来自 config.json 的 pricing 覆盖项（运维可写），
+    // 不能直接拼进 innerHTML：这里统一走 esc() （数字原样显示仍然是数字）。
+    const price = (v) => esc(sym + (Number.isFinite(Number(v)) ? Number(v) : (v ?? '')));
+    html += `<tr><td><code>${esc(name)}</code><div class="meta">${esc(m.label)}</div></td>`
+      + `<td class="num">${price(m.off?.cacheHit)}</td>`
+      + `<td class="num">${price(m.off?.cacheMiss)}</td>`
+      + `<td class="num">${price(m.off?.output)}</td></tr>`;
+  }
+  html += '</table>';
+  html += `<div class="meta" style="padding:8px 10px">上表为<b>空闲时段</b>单价（元 / 百万 token）。当前时刻属于 <b>${tier ? esc(tier.tierLabel) : '—'}</b>${tier?.estimated ? '，且价目表里没有 <code>' + esc(tier.model) + '</code>，按兜底价估算' : ''}。</div>`;
+  box.innerHTML = html;
+}
+
+async function refreshUsage() {
+  const msg = document.getElementById('usageMsg');
+  try {
+    const r = await api('/api/tokens/summary?limit=200');
+    const t = r.totals || {};
+    const b = t.buckets || {};
+    const sym = r.symbol || '¥';
+    document.getElementById('metricUsageCost').textContent = usageMoney(t.cost, sym);
+    document.getElementById('metricUsageCostHint').textContent =
+      `高峰 ${usageMoney(t.byTier?.peak, sym)} ｜ 空闲 ${usageMoney(t.byTier?.off, sym)}`;
+    document.getElementById('metricUsageTokens').textContent = usageNum(t.totalTokens);
+    document.getElementById('metricUsageTokensHint').textContent =
+      `输入 ${usageNum(t.inputTokens)} ｜ 输出 ${usageNum(b.output)}`;
+    document.getElementById('metricUsageHitRate').textContent = usagePct(t.cacheHitRate);
+    document.getElementById('metricUsageHitHint').textContent =
+      `命中 ${usageNum(b.cacheHit)} ｜ 未命中 ${usageNum(b.cacheMiss)}`;
+    document.getElementById('metricUsagePerTurn').textContent = usageMoney(t.avgCostPerTurn, sym);
+    document.getElementById('metricUsagePerTurnHint').textContent =
+      `${usageNum(t.turns)} 轮 ｜ ${usageNum(t.steps)} 步 ｜ 当前${r.nowTier?.tier === 'peak' ? '高峰' : '空闲'}时段`;
+    renderUsageConversations(r);
+    renderUsagePrices(r.priceTable ? { ...r.priceTable, nowTier: r.nowTier } : null);
+    syncUsageKeySelect((r.conversations || []).map(c => String(c.key ?? '')));
+    if (!document.getElementById('usageTurns').dataset.loaded && usageSelectedKey) refreshUsageTurns();
+    msg.textContent = `✅ 已同步于 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+    msg.className = 'meta ok';
+  } catch (error) {
+    msg.textContent = `❌ 读取失败：${error?.message || '未知错误'}`;
+    msg.className = 'meta err';
+  }
+}
+
+async function refreshUsageTurns() {
+  const box = document.getElementById('usageTurns');
+  if (!usageSelectedKey) {
+    box.innerHTML = '<span class="meta">选择一个会话后加载逐轮明细…</span>';
+    box.dataset.loaded = '';
+    return;
+  }
+  try {
+    const r = await api('/api/tokens/turns?key=' + encodeURIComponent(usageSelectedKey) + '&limit=200');
+    renderUsageTurns(r);
+    box.dataset.loaded = '1';
+  } catch (error) {
+    box.innerHTML = `<span class="meta err">读取失败：${esc(error?.message || '未知错误')}</span>`;
+    box.dataset.loaded = '';
+  }
+}
+
+async function refreshUsageRecent() {
+  try {
+    renderUsageRecent(await api('/api/tokens/recent?limit=40'));
+  } catch (error) {
+    document.getElementById('usageRecent').innerHTML = '<span class="meta">（读取失败）</span>';
+  }
+}
+
+document.getElementById('usageRefresh').addEventListener('click', () => {
+  refreshUsage();
+  refreshUsageChart();
+  refreshUsageTurns();
+  refreshUsageRecent();
+  showConsoleToast('用量已刷新');
+});
+document.getElementById('usageTurnsLoad').addEventListener('click', () => refreshUsageTurns());
+document.getElementById('usageKeySelect').addEventListener('change', (ev) => {
+  usageSelectedKey = ev.target.value;
+  refreshUsageTurns();
+});
+document.getElementById('usageClear').addEventListener('click', async () => {
+  if (!confirm('确定清空 token 用量账本？累计花费与逐轮明细都会被删除，且不可恢复（下一次同步会从 DSH 重新拉取会话累计值）。')) return;
+  const msg = document.getElementById('usageMsg');
+  try {
+    const r = await api('/api/tokens/reset', 'POST', {});
+    msg.textContent = r.ok ? '✅ 账本已清空' : ('❌ ' + (r.error || '失败'));
+    msg.className = r.ok ? 'meta ok' : 'meta err';
+  } catch (error) {
+    msg.textContent = '❌ ' + (error?.message || '失败');
+    msg.className = 'meta err';
+  }
+  usageSelectedKey = '';
+  document.getElementById('usageTurnScope').textContent = '—';
+  document.getElementById('usageTurns').dataset.loaded = '';
+  refreshUsage();
+  refreshUsageRecent();
+});
+
+setConsolePage(location.hash.slice(1), { updateHash:false });
+
+refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
 setInterval(() => { refresh(); refreshSessions(); refreshPending(); refreshSocialStatus(); refreshSlang(); }, 3000);
+// 用量看板只在本页可见时轮询：既保证「实时」，又不让其它页白白多打两份接口。
+setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); refreshUsageChart(); refreshUsageRecent(); }, 3000);
+// 主题切换（纯前端，不发任何请求；选择写入 localStorage，未选择时跟随系统）
+(function () {
+  var root = document.documentElement;
+  var button = document.getElementById('themeToggle');
+  var media = window.matchMedia('(prefers-color-scheme: dark)');
+  function stored() {
+    try { return localStorage.getItem('qq-console-theme'); } catch (error) { return null; }
+  }
+  function apply(theme, persist) {
+    root.dataset.theme = theme;
+    if (persist) { try { localStorage.setItem('qq-console-theme', theme); } catch (error) {} }
+    var dark = theme === 'dark';
+    button.textContent = dark ? '☀' : '☾';
+    button.setAttribute('aria-pressed', String(dark));
+    button.setAttribute('aria-label', dark ? '切换浅色模式' : '切换深色模式');
+    button.title = dark ? '切换到浅色主题' : '切换到深色主题';
+  }
+  apply(root.dataset.theme === 'dark' ? 'dark' : 'light', false);
+  button.addEventListener('click', function () {
+    apply(root.dataset.theme === 'dark' ? 'light' : 'dark', true);
+  });
+  media.addEventListener('change', function (event) {
+    if (!stored()) apply(event.matches ? 'dark' : 'light', false);
+  });
+})();
 </script>
 </body>
 </html>

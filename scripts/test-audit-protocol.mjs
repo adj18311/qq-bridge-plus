@@ -12,7 +12,9 @@ const onUnhandled = (error) => unhandled.push(error);
 process.on('unhandledRejection', onUnhandled);
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
-const client = (timeoutMs = 1000) => new NodeApiClient('http://dsh.invalid', timeoutMs, { token: 'fixture-token' });
+// 用回环地址：launch token 交换默认**拒绝非回环 baseUrl**（凭据只应交给 127.0.0.1），
+// 所以夹具不能用 dsh.invalid 这类域名，否则测的是新加的那道闸门而不是协议行为。
+const client = (timeoutMs = 1000) => new NodeApiClient('http://127.0.0.1:9', timeoutMs, { token: 'fixture-token' });
 
 test('session/cancel uses the DSH request wrapper and unwraps the envelope', async () => {
   const api = client();
@@ -108,7 +110,27 @@ test('auth exchange has an independent bounded timeout', async () => {
   const keepAlive = setTimeout(() => {}, 250);
   try { await assert.rejects(client(30).ensureAuth(), (error) => error.name === 'TimeoutError'); }
   finally { clearTimeout(keepAlive); }
-  assert.equal(new NodeApiClient('http://dsh.invalid', undefined, {}).timeoutMs, 30000);
+  assert.equal(new NodeApiClient('http://127.0.0.1:9', undefined, {}).timeoutMs, 30000);
+});
+
+// 新增闸门：launch token 是进程启动凭据，交换时必须放进 URL，因此默认只允许回环地址。
+test('non-loopback baseUrl is refused unless allowRemote is set explicitly', async () => {
+  let fetched = false;
+  globalThis.fetch = async () => { fetched = true; return new Response('', { status: 303 }); };
+  await assert.rejects(
+    new NodeApiClient('http://dsh.example.com', 1000, { token: 'fixture-token' }).ensureAuth(),
+    /非本机地址/,
+  );
+  assert.equal(fetched, false, '拒绝时不应该发出任何请求');
+  // 127.0.0.0/8、localhost 都算回环；显式 opt-in 后放行（这里只验证不再被闸门拦下）
+  await assert.rejects(
+    new NodeApiClient('http://127.1.2.3:3080', 1000, { token: 'fixture-token' }).ensureAuth(),
+    /token exchange failed/,
+  );
+  await assert.rejects(
+    new NodeApiClient('http://dsh.example.com', 1000, { token: 'fixture-token', allowRemote: true }).ensureAuth(),
+    /token exchange failed/,
+  );
 });
 
 class FakeWebSocket {

@@ -50,6 +50,28 @@ for (const p of ['qq-chat', 'qq-chat-v2']) {
   check(`~/.dsh/.agent-presets/${p} 与仓库一致`, same);
 }
 
+// 整目录一致性：只比 agent.cordis.yml 会漏掉 qq-tool-restrict.mjs 这类守卫脚本的漂移
+// （实测出现过安装副本是更宽松的旧版：SAFE_EXACT 多放行 web_search/web_fetch，
+//  且非法工具名走裸 return = 放行，等于把 fail-closed 反成 fail-open）。
+for (const p of ['qq-chat', 'qq-chat-v2']) {
+  const repoDir = path.join(ROOT, 'dsh/agent-presets', p);
+  const instDir = path.join(DSH_HOME, '.agent-presets', p);
+  for (const name of fs.readdirSync(repoDir)) {
+    if (name.startsWith('.')) continue;
+    const a = path.join(repoDir, name);
+    const b = path.join(instDir, name);
+    if (!fs.statSync(a).isFile()) continue;
+    const same = fs.existsSync(b) && norm(fs.readFileSync(a, 'utf8')) === norm(fs.readFileSync(b, 'utf8'));
+    check(`~/.dsh/.agent-presets/${p}/${name} 与仓库一致（整目录）`, same);
+  }
+}
+// 守卫脚本必须是 fail-closed 的：非法工具名要被拒绝，而不是放行
+for (const p of ['qq-chat', 'qq-chat-v2']) {
+  const guard = fs.readFileSync(path.join(ROOT, 'dsh/agent-presets', p, 'qq-tool-restrict.mjs'), 'utf8');
+  check(`preset ${p}: 守卫对非法工具名 fail-closed`, !/typeof name !== 'string'[^\n]*\)\s*return\s*$/m.test(guard));
+  check(`preset ${p}: 守卫不额外放行 web_search/web_fetch`, !/'(?:web_search|web_fetch)'/.test(guard));
+}
+
 const patch = fs.readFileSync(path.join(DSH_HOME, 'profiles/web/cordis.patch.yml'), 'utf8');
 const patchDoc = yaml.load(patch);
 const mcpIds = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert.map((x) => x.id));

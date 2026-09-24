@@ -6,15 +6,18 @@
     "reasoningEffort": "max",
     "authToken": "",
     "authHeader": "authorization",
-    "authPrefix": "Bearer"
+    "authPrefix": "Bearer",
+    "allowRemote": false
+  },
+  "role": {
+    "maxInjectChars": 6000
   },
   "snowluma": {
     "wsUrl": "ws://127.0.0.1:3001",
     "httpUrl": "http://127.0.0.1:3000",
     "accessToken": "",
     "launcherPath": "",
-    "homeDir": "",
-    "allowProcessControl": false
+    "homeDir": ""
   },
   "ownerQQ": null,
   "sessionCwd": "",
@@ -34,6 +37,18 @@
   "questionTimeoutMs": 300000,
   "consolePort": 3100,
   "consoleToken": "",
+  "pricing": {
+    "models": {
+      "my-relay-model": {
+        "label": "我的中转模型",
+        "off": {
+          "cacheHit": 0.5,
+          "cacheMiss": 3,
+          "output": 9
+        }
+      }
+    }
+  },
   "security": {
     "interceptNotify": true
   },
@@ -122,7 +137,8 @@
       "setStickerRemark": false,
       "stickerNote": true,
       "collectSticker": true,
-      "getSelfImage": true
+      "getSelfImage": true,
+      "sendVoice": false
     },
     "wake": {
       "defaultMode": "diving",
@@ -199,6 +215,19 @@
         "maxRemarkChars": 20
       }
     },
+    "voice": {
+      "enabled": false,
+      "dir": "audio",
+      "maxSeconds": 300,
+      "maxBytes": 20971520,
+      "maxPerMinute": 2,
+      "maxPerHour": 10,
+      "allowAbsolutePath": false,
+      "defaultVolume": 1,
+      "loudness": "normal",
+      "ffmpegPath": "",
+      "autoReadback": true
+    },
     "proactive": {
       "enabled": true,
       "checkIntervalMinMs": 1800000,
@@ -213,7 +242,11 @@
     "context": {
       "recentLimit": 100,
       "unreadLimit": 30,
-      "contextWindow": 20
+      "contextWindow": 20,
+      "inlineWakeMessages": true,
+      "wakeMessageLimit": 12,
+      "wakeRecentLimit": 4,
+      "wakeMaxChars": 6000
     }
   }
 }

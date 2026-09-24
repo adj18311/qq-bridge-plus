@@ -41,6 +41,26 @@ export function discoverDshLaunchToken() {
   return '';
 }
 
+/**
+ * baseUrl 是否指向本机回环地址。
+ *
+ * 用途：DSH 的 launch token 是进程启动凭据，换 Cookie 时必须放进 URL 查询串，
+ * 一旦发往非回环地址就等于把凭据交给中途的任何一环（代理日志、抓包、对端记录）。
+ * 所以默认只允许回环，远程部署需要显式 opt-in。
+ */
+export function isLoopbackBase(baseUrl) {
+  try {
+    const u = new URL(String(baseUrl));
+    const host = u.hostname.toLowerCase();
+    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+    if (host === '::1' || host === '[::1]') return true;
+    // 127.0.0.0/8 整个网段都是回环
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
 /** 新协议 RPC 的 args 包装：旧 payload -> { <参数名>: payload }。 */
 const METHOD_ARG_WRAPPERS = {
   'session/list': '_request',
@@ -68,6 +88,13 @@ const METHOD_ARG_WRAPPERS = {
 function endpointOf(method) {
   return method.replace(/\./g, '/');
 }
+
+/**
+ * `session/follow` 开场快照携带的历史事件条数。
+ * DSH 默认 50；调大以便控制台能回填更长的「逐轮花费」历史。
+ * 该值只影响首帧大小，不影响后续增量事件。
+ */
+export const FOLLOW_SNAPSHOT_MESSAGES = 200;
 
 /** 把旧 payload 包装成新协议要求的 { args }，并补新版必填字段。 */
 function wrapArgs(method, payload) {
@@ -131,6 +158,12 @@ export class NodeApiClient extends AbstractApiClient {
     signal?.throwIfAborted();
     if (this.cookie) return this.cookie;
     if (!this.launchToken) throw new Error('DSH auth token missing: set dsh.authToken in config.json (or let auto-discovery read it from DSH guard logs)');
+    // launch token 是**进程启动凭据**，交换时只能放进 URL 查询串（DSH 的协议就这么定的）。
+    // 因此绝不能把它发往非回环地址：那会把凭据交给中间人、写进对端访问日志、
+    // 也可能落在代理/CDN 的请求行日志里。要连远程 DSH 请显式声明 dsh.allowRemote。
+    if (!this.auth.allowRemote && !isLoopbackBase(this.baseUrl)) {
+      throw new Error(`拒绝把 DSH launch token 发往非本机地址（${this.baseUrl}）：那是进程启动凭据，只应交给 127.0.0.1。确实要连远程 DSH 时请在 config.json 里显式设置 dsh.allowRemote: true`);
+    }
     if (this.cookiePromise) return waitWithSignal(this.cookiePromise, signal);
     const promise = (async () => {
       const epoch = this._authEpoch;
@@ -335,13 +368,26 @@ export class NodeApiClient extends AbstractApiClient {
     mux: (_payload, signal, onOpen) => this.openRemoteEventStream(signal, onOpen),
     host: (_payload, signal, onOpen) => this.openRemoteEventStream(signal, onOpen),
     follow: (sessionId) => this._followSession(sessionId),
+    /**
+     * 取消一个会话的订阅（会话被退役/重置时调用）。
+     *
+     * 不做这件事的话 `_desiredFollows` 只增不减：每次重连都会为一个早已不存在的会话
+     * 重开一条 follow 流，并让 DSH 回一整份历史快照 —— 内存、重连延迟和账本基线行数
+     * 都会随「历史上创建过的会话数」线性增长。
+     * 已经打开的流由 DSH 在会话消失时自行结束。
+     */
+    forget: (sessionId) => {
+      if (!sessionId) return;
+      this._desiredFollows.delete(String(sessionId));
+    },
   };
 
   openRemoteEventStream(signal, onOpen) {
     const gen = this._remoteMuxGenerator(signal, onOpen);
     return {
       [Symbol.asyncIterator]: () => gen,
-      follow: (sessionId) => this._followSession(sessionId)
+      follow: (sessionId) => this._followSession(sessionId),
+      forget: (sessionId) => { if (sessionId) this._desiredFollows.delete(String(sessionId)); }
     };
   }
 
@@ -398,7 +444,10 @@ export class NodeApiClient extends AbstractApiClient {
           payload: {
             args: {
               request: {
-                address: { kind: 'session', sessionId }
+                address: { kind: 'session', sessionId },
+                // 开场快照的历史深度。默认只有 50 条，不足以回填逐轮花费；
+                // 调大只影响首帧体积（每个已 follow 的会话一帧），不改变事件通道语义。
+                maxMessages: FOLLOW_SNAPSHOT_MESSAGES
               }
             }
           }
@@ -499,8 +548,20 @@ export class NodeApiClient extends AbstractApiClient {
               payload: { type: 'session/event', sessionId, event: msg.value.event }
             }
           });
+        } else if (sessionId && msg.value?.type === 'snapshot') {
+          // 打开/重连单会话流时的开场快照：带 projections（整条日志的权威 token 累计）
+          // 与 records（最多 maxMessages 条历史事件）。
+          // **单独一种帧类型**下发，绝不混进 session/event：快照里含历史 turn 的
+          // turn/end，若走事件通道会让桥接把「早已结束的回合」当成新的回合去发 QQ 回复。
+          enqueue({
+            kind: 'frame',
+            envelope: {
+              rpcId: msg.streamId,
+              payload: { type: 'session/snapshot', sessionId, snapshot: msg.value }
+            }
+          });
         }
-        // snapshot 帧忽略，避免重放历史
+        // 其余 snapshot 之外的帧（assistant-stream 等）当前桥接不需要，保持忽略。
       } else if (msg.type === 'end') {
         if (isEventStream) {
           eventStreamId = null;
@@ -511,6 +572,18 @@ export class NodeApiClient extends AbstractApiClient {
           sessionToStream.delete(sessionId);
           streamToSession.delete(msg.streamId);
           followed.delete(sessionId);
+          // DSH 正常结束了单条会话流（follow 被回收 / 会话被归档 / 服务端空闲清理）。
+          // 旧代码在这里什么都不做：不重订阅、不打日志，而重放只在 socket 'open' 时发生，
+          // 于是这个会话**永久失联**且毫无提示。更糟的是若它断在回合中间，
+          // collectors/v2TurnStartAt 会一直留着 → isConversationBusyV2 永远为真 →
+          // 该群所有唤醒都被塞进 pendingWakeReasons，群彻底哑掉且没有租约能救。
+          // 这里主动重开一次订阅；仍然想订阅的会话才重开（forget 过的就让它走）。
+          if (this._desiredFollows.has(sessionId)) {
+            console.error(`[dsh-client] session/follow 已被服务端结束，重新订阅：${sessionId}`);
+            setTimeout(() => {
+              if (!ended && this._desiredFollows.has(sessionId)) sendOpen(sessionId);
+            }, 2000);
+          }
         }
       } else if (msg.type === 'error') {
         if (isEventStream) {
