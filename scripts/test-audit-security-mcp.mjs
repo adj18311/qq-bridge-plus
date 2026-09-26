@@ -55,7 +55,7 @@ test('empty searches are rejected without calling the transport', async () => {
  * 用假 transport 加载 mcp-snowluma-safe.js，拿到它的工具回调。
  * 只需要把 fetch（桥接 API / OneBot HTTP）、McpServer、zod、两个本地纯模块塞进上下文。
  */
-function loadSnowlumaTools(fetchImpl) {
+function loadSnowlumaTools(fetchImpl, fixtureConfig = null) {
   const tools = new Map();
   // vm 里没有 ESM 的 import.meta，把模块顶部的 __dirname 推导整段替换成固定值。
   const source = fs.readFileSync(new URL('../src/mcp-snowluma-safe.js', import.meta.url), 'utf8')
@@ -66,6 +66,15 @@ function loadSnowlumaTools(fetchImpl) {
     constructor() { this.tool = (name, description, schema, callback) => tools.set(name, { schema, callback }); }
     connect() {}
   }
+  const fixtureFs = fixtureConfig === null ? fs : {
+    ...fs,
+    readFileSync(file, ...args) {
+      if (path.basename(String(file)) === 'config.json' && String(file).includes('fixture')) {
+        return JSON.stringify(fixtureConfig);
+      }
+      return fs.readFileSync(file, ...args);
+    },
+  };
   vm.runInNewContext(source, {
     McpServer,
     StdioServerTransport: class {},
@@ -80,7 +89,7 @@ function loadSnowlumaTools(fetchImpl) {
     console,
     Buffer,
     path,
-    fs,
+    fs: fixtureFs,
     SENSITIVE_RE: { test: () => false },
     serializeModelData: (value) => JSON.stringify(value),
   });
@@ -124,4 +133,22 @@ test('legacy read tools fail closed unless the bridge reports closed-agent', asy
   });
   const result = await callTool('qq_list_groups', {});
   assert.notEqual(result.isError, true, 'closed-agent 下应放行');
+});
+
+test('denied legacy group reads never reveal the group allowlist', async () => {
+  const fixtureConfig = { allow: { groups: ['111111', '222222'] } };
+  for (const mode of ['reserved2', 'closed-agent']) {
+    const calls = [];
+    const callTool = loadSnowlumaTools(async (url) => {
+      calls.push(String(url));
+      if (String(url).includes('/api/status')) return Response.json({ mode });
+      assert.fail('denied group read must not call OneBot');
+    }, fixtureConfig);
+    for (const name of ['qq_get_group_members', 'qq_get_group_history']) {
+      const result = await callTool(name, { groupId: '999999' });
+      assert.equal(result.isError, true, `${name} in ${mode} must fail`);
+      assert.doesNotMatch(result.content[0].text, /111111|222222/);
+    }
+    assert.equal(calls.length, 2, 'only the two authorization checks should reach the bridge');
+  }
 });

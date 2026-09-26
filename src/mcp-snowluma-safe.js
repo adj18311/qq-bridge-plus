@@ -263,16 +263,16 @@ server.tool(
   { groupId: z.union([z.number(), z.string()]).describe('群号') },
   async ({ groupId }) => {
     const g = String(groupId);
-    const a = getAccess();
-    if (!isAllowed(a.allowGroups, a.denyGroups, g, a.allowAllWhenEmpty)) {
-      return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中。白名单：${a.allowGroups.join(', ') || '（空）'}` }], isError: true };
-    }
     try {
       if (!(await legacyReadToolAllowed())) {
         return { content: [{ type: 'text', text: '旧只读工具仅在封闭 agent（管理员私聊）模式可用；其它模式请使用带会话令牌的 v2 读工具' }], isError: true };
       }
     } catch (error) {
       return { content: [{ type: 'text', text: `无法确认当前模式，拒绝读取：${error?.message ?? error}` }], isError: true };
+    }
+    const a = getAccess();
+    if (!isAllowed(a.allowGroups, a.denyGroups, g, a.allowAllWhenEmpty)) {
+      return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中` }], isError: true };
     }
     try {
       const data = await onebot('get_group_member_list', { group_id: Number(g) });
@@ -290,16 +290,16 @@ server.tool(
   { groupId: z.union([z.number(), z.string()]).describe('群号'), messageSeq: z.number().optional().describe('起始消息序号（可选）') },
   async ({ groupId, messageSeq }) => {
     const g = String(groupId);
-    const a = getAccess();
-    if (!isAllowed(a.allowGroups, a.denyGroups, g, a.allowAllWhenEmpty)) {
-      return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中。白名单：${a.allowGroups.join(', ') || '（空）'}` }], isError: true };
-    }
     try {
       if (!(await legacyReadToolAllowed())) {
         return { content: [{ type: 'text', text: '旧只读工具仅在封闭 agent（管理员私聊）模式可用；其它模式请使用带会话令牌的 v2 读工具' }], isError: true };
       }
     } catch (error) {
       return { content: [{ type: 'text', text: `无法确认当前模式，拒绝读取：${error?.message ?? error}` }], isError: true };
+    }
+    const a = getAccess();
+    if (!isAllowed(a.allowGroups, a.denyGroups, g, a.allowAllWhenEmpty)) {
+      return { content: [{ type: 'text', text: `拒绝：群 ${g} 不在只读白名单中` }], isError: true };
     }
     try {
       const params = { group_id: Number(g) };
