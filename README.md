@@ -2,8 +2,6 @@
 
 **English**: [README.en.md](README.en.md) | **中文**: [README.md](README.md)
 
-> 📘 详细内外核说明书见 **[docs/guides/PROJECT_GUIDE.md](docs/guides/PROJECT_GUIDE.md)**（架构、数据流、配置全解、调试与改进指南）。
->
 > 🗂️ 文档索引（全部文档一句话说明 + 是否仍然有效）见 **[docs/README.md](docs/README.md)**；仓库目录/脚本命名约定见 **[docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)**。
 >
 > 🔒 QQ 会话的权限边界与安全承诺见 **[RULES.md](RULES.md)**。
@@ -12,7 +10,15 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
-> ⚠️ **当前版本 `v0.1.5`，适配 DSH 0.1.5-rc.1**（在该版本上逐项实测）。使用 Cookie 鉴权、斜杠 RPC 和 `/api/remote.mux` 事件流；这一代协议自 DSH `0.1.2-alpha.1` 起引入，与更早的点号 endpoint 协议不兼容——**DSH `0.1.1-rc.2` 及更早**请改用 tag [`v0.1.0`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0)。
+> ⚠️ **当前版本 `v0.1.7`，适配 DSH 0.1.7-rc.2**（在该版本上逐项实测）。鉴权已改为用 `~/.dsh` 里持久化的
+> 浏览器会话签名密钥**离线铸造 Cookie** —— DSH 0.1.7 起进程启动 token 只存在于内存、不再落盘，
+> 旧版「从 guard 日志里读 token」的方式已失效。agent preset 亦已迁移为 DSH 0.1.7 的
+> `@deepseek-ai/dsh-agent-preset` Cordis 行。协议代次（Cookie 鉴权 / 斜杠 RPC / `/api/remote.mux` 事件流）
+> 自 DSH `0.1.2-alpha.1` 起引入，与更早的点号 endpoint 协议不兼容 —— **DSH `0.1.1-rc.2` 及更早**请改用 tag
+> [`v0.1.0`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0)；**DSH 0.1.5-rc.1** 请用
+> [`v0.1.5`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.5)。
+>
+> 本次更新的完整说明见 [**Release v0.1.7**](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.7)。
 >
 > 默认分支 `main` **就是**本版本，`git clone` 直接拿到，无需切换分支。
 
