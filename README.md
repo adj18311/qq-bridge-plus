@@ -201,7 +201,7 @@ npm start          # 或双击 start.bat（守护模式：崩溃自动重启，�
 npm run test:audit
 ```
 
-reserved2 的 token 开销优化、消息水位协议、升级及回退说明见 [docs/audits/TOKEN_OPTIMIZATION.md](docs/audits/TOKEN_OPTIMIZATION.md)。专项离线回归可运行 `npm run test:token`，已包含在上面的完整回归中。
+reserved2 的 token 开销优化、消息水位协议、升级及回退说明（该专项分析为本地文档，未随仓库发布。）专项离线回归可运行 `npm run test:token`，已包含在上面的完整回归中。
 
 控制台「令牌与花费」看板的账本与价目表回归（峰谷分时、幂等折叠、基线合并、压缩与容错）：
 
@@ -210,7 +210,7 @@ npm run test:tokens        # 单元测试
 npm run test:console-ui    # 离线浏览器回归（含看板渲染与逐轮下钻）
 ```
 
-本轮审查与修复明细见 [docs/audits/AUDIT_REPORT_2026-09-20.md](docs/audits/AUDIT_REPORT_2026-09-20.md)（2026-09-18 的报告已被它取代，存在 [docs/legacy/AUDIT_REPORT_2026-09-18.md](docs/legacy/AUDIT_REPORT_2026-09-18.md)）。升级后会为没有权限元数据的历史映射重建一次 QQ 会话；模式或 preset 变化也会自动重建，避免保留旧权限。旧历史仍在 DSH 中。
+本轮审查与修复明细为本地审计文档，未随仓库发布。升级后会为没有权限元数据的历史映射重建一次 QQ 会话；模式或 preset 变化也会自动重建，避免保留旧权限。旧历史仍在 DSH 中。
 
 验证 DSH 侧链路是否打通（会创建一个独立测试会话，不影响现有会话）：
 
@@ -234,7 +234,7 @@ qq-bridge/
     research/           # 调研：SnowLuma功能调研 / QQ消息免打扰 / 表情包能力 / 本地模型选型
     audits/             # 审查与优化报告（体检、控制台、token）
     legacy/             # 历史归档（已被取代或问题已全部修复的旧报告）
-  audio/                # 语音库：把准备好的音频放这里，可作 QQ 语音发出（见 docs/guides/VOICE.md）
+  audio/                # 语音库：把准备好的音频放这里，可作 QQ 语音发出（用法见 docs/README.md 文档索引）
   dsh/agent-presets/    # qq-chat / qq-chat-v2 的 DSH agent preset 模板
   plugins/qq-mode-console  # DSH 插件：注册 qq-mode 设置命名空间（仅 host 半，UI 卡片未实现）
   src/
@@ -263,7 +263,7 @@ qq-bridge/
 
 - agent 回复在回合结束时一次性发送（不做流式逐字转发）；回复超过 `socialV2.send.maxMessageChars`（默认 500 字，可用 `social.maxReplyChars` 调整）自动按句读/URL 边界分段
 - 图片及部分表情可以通过安全下载接入多模态模型；语音/视频以及无法取得图片字节的消息仍使用占位文本
-- **发**语音是支持的（独立工具的图形界面 / 命令行 / AI 工具，见 [docs/guides/VOICE.md](docs/guides/VOICE.md)）；但**收**到的语音目前只显示占位文本，不做语音转写入上下文
+- **发**语音是支持的（独立工具的图形界面 / 命令行 / AI 工具，见 `docs/README.md` 的文档索引）；但**收**到的语音目前只显示占位文本，不做语音转写入上下文
 - **AI 发语音默认关闭**（`socialV2.voice.enabled` 与 `tools.sendVoice` 默认 `false`）：先把音频放进 `audio/`，再到控制台打开开关；你自己发语音不受这个开关影响
 - agent 的 Markdown 回复会转成纯文本（链接保留 `文字 (url)` 形式）
 - `@snowluma/sdk` 的 npm 发布版存在 ESM 扩展名 bug，本仓库通过 postinstall 补丁修复（见 `scripts/patch-snowluma-sdk.mjs`）
