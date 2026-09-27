@@ -22,6 +22,8 @@ function fixture(name, patch = '') {
   const home = path.join(base, 'home');
   fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(root, 'scripts/setup-dsh.mjs'), path.join(repo, 'scripts/setup-dsh.mjs'));
+  // setup-dsh.mjs 直接从仓库源生成 bundle patch，生成器必须一起进夹具。
+  fs.copyFileSync(path.join(root, 'scripts/build-agent-preset-patches.mjs'), path.join(repo, 'scripts/build-agent-preset-patches.mjs'));
   fs.cpSync(path.join(root, 'dsh'), path.join(repo, 'dsh'), { recursive: true });
   fs.cpSync(path.join(root, 'plugins'), path.join(repo, 'plugins'), { recursive: true });
   fs.cpSync(parserRoot, path.join(repo, 'node_modules/js-yaml'), { recursive: true });
@@ -63,7 +65,7 @@ try {
     }
     const pkg = JSON.parse(fs.readFileSync(path.join(f.home, 'profiles/web/package.json')));
     assert.equal(pkg.dependencies.existing, '1.0.0');
-    assert.deepEqual(pkg.dsh.profile.bundles, ['existing', 'qq-mode-console']);
+    assert.deepEqual(pkg.dsh.profile.bundles, ['existing', 'qq-mode-console', 'qq-agent-presets']);
   });
 
   test('legacy root [] is repaired without altering literal strings', () => {

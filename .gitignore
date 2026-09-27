@@ -47,3 +47,22 @@ config.json
 
 # 本机专用的隐私扫描规则（含真实 QQ 号/路径，不入库）
 /scripts/privacy-rules.json
+
+# ── 内部文档保护（修复：忽略规则仍指向旧的根目录路径）──────────────────────
+# 上面那批 `/XXX.md` 规则是按**仓库根目录**写的，但这些文档后来整体挪进了 docs/，
+# 旧规则再也匹配不上 —— 于是"原始开发文档不进公开仓库"这条约定静默失效，privacy-scan
+# 在 docs/ 里扫出多份含本机真实路径（含本机用户名与工作盘路径）的文件。这里按新路径补回。
+# 判断依据：① 原 .gitignore 已列出的同义文件；② privacy-scan 实测命中真实路径的文件；
+# ③ 安全审计/发布计划这类"写了怎么绕过"的内部文档。
+docs/audits/
+docs/design/
+docs/legacy/
+docs/research/
+docs/qq-bridge-PUBLISH_PLAN.md
+docs/qq-bridge-SECURITY_AUDIT.md
+docs/guides/PROJECT_GUIDE.md
+docs/guides/VOICE.md
+
+# 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
+audio/
+

@@ -279,18 +279,74 @@ ${list}
 - 只输出 JSON 数组。`;
 }
 
-export function parseExtractionJson(text) {
+/**
+ * 从模型输出里抠出一个 JSON 数组。
+ *
+ * 为什么不能只用 `raw.match(/\[[\s\S]*\]/)`：那是**贪婪**匹配，取的是"第一个 `[` 到最后一个 `]`"。
+ * 模型很自然会先写一句解释再给 JSON，例如 `根据 [1] 的分析：\n[{"content":"yyds"}]` ——
+ * 此时匹配到的片段跨越了两个方括号结构，JSON.parse 必然失败，函数就**静默**返回 []：
+ * 学到的新词条/调研结果直接丢掉，日志里一个字都没有，只能靠人去猜"为什么今天没学到东西"。
+ *
+ * 这里改为：先整体 parse；失败则从左到右扫描出**括号配平**的 `[...]` 候选（扫描时跳过字符串字面量
+ * 里的括号与转义，否则词条内容里出现 `[` 就会算错深度），逐个尝试 parse。
+ *
+ * 候选的取舍：优先返回「至少含一个对象元素」的那个数组。只看"能否 parse 成数组"是不够的 ——
+ * `根据 [1] 的分析：[{...}]` 里 `[1]` 本身就是一个合法 JSON 数组，先到先得会把真正的结果挤掉，
+ * 调用方拿到的仍是 []（这正是本条 finding 要修的场景）。若所有候选都不含对象，则退回第一个可解析的
+ * 数组，保持与原实现一致的"确实是数组就返回"语义。候选数量与总长度都设上限，避免超长文本变成 O(n²)。
+ */
+export function extractJsonArray(text) {
   const raw = String(text ?? '').trim();
-  if (!raw) return [];
-  let data = null;
+  if (!raw) return null;
   try {
-    data = JSON.parse(raw);
-  } catch {
-    const match = raw.match(/\[[\s\S]*\]/);
-    if (match) {
-      try { data = JSON.parse(match[0]); } catch { data = null; }
+    const direct = JSON.parse(raw);
+    if (Array.isArray(direct)) return direct;
+  } catch {}
+  if (raw.length > 400_000) return null; // 超长文本不做候选扫描，避免 O(n²) 卡住事件循环
+  const MAX_CANDIDATES = 32;
+  const candidates = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    if (raw[i] !== '[') continue;
+    if (candidates.length >= MAX_CANDIDATES) break;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < raw.length; j += 1) {
+      const c = raw[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (c === '\\') escaped = true;
+        else if (c === '"') inString = false;
+        continue;
+      }
+      if (c === '"') { inString = true; continue; }
+      if (c === '[') depth += 1;
+      else if (c === ']') {
+        depth -= 1;
+        if (depth === 0) {
+          candidates.push(raw.slice(i, j + 1));
+          break; // 这一个括号段扫描完；它内部的 '[' 仍可能是更小的合法数组，交给外层继续
+        }
+      }
     }
   }
+  let fallback = null;
+  for (const candidate of candidates) {
+    let parsed;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+    if (parsed.some((item) => item && typeof item === 'object' && !Array.isArray(item))) return parsed;
+    if (fallback === null) fallback = parsed;
+  }
+  return fallback;
+}
+
+export function parseExtractionJson(text) {
+  const data = extractJsonArray(text);
   if (!Array.isArray(data)) return [];
   return data
     .filter((item) => item && typeof item === 'object' && String(item.content ?? '').trim())
@@ -301,17 +357,7 @@ export function parseExtractionJson(text) {
 }
 
 export function parseResearchJson(text) {
-  const raw = String(text ?? '').trim();
-  if (!raw) return [];
-  let data = null;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    const match = raw.match(/\[[\s\S]*\]/);
-    if (match) {
-      try { data = JSON.parse(match[0]); } catch { data = null; }
-    }
-  }
+  const data = extractJsonArray(text);
   if (!Array.isArray(data)) return [];
   return data
     .filter((item) => item && typeof item === 'object' && String(item.content ?? '').trim())

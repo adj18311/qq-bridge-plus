@@ -181,7 +181,20 @@ export function formatForwardResponse(data, options = {}) {
   let textTruncated = false;
   const messages = raw.slice(0, maxMessages).map((node, index) => {
     const fullText = nodeText(node);
-    const text = fullText.slice(0, maxCharsPerMessage);
+    // 切点落在代理对中间时必须前移一个码元（判据与 md-to-plain.js 的 splitForQQ 一致）：
+    // `slice(0, max)` 是按 UTF-16 码元切的，emoji/生僻字会被切成孤立高代理，
+    // 那半个字符既不是合法文本，写进提示词或日志后还会渲染成乱码或替换符。
+    let cut = maxCharsPerMessage;
+    const cutCode = fullText.charCodeAt(cut - 1);
+    if (cutCode >= 0xd800 && cutCode <= 0xdbff) cut -= 1;
+    // 与 splitForQQ 相同：切点被逼到 0 时至少保留一个完整码点，
+    // 否则 maxCharsPerMessage=1 且开头是 emoji 会让整条预览变成空串。
+    if (cut === 0) {
+      const first = fullText.charCodeAt(0);
+      const second = fullText.charCodeAt(1);
+      cut = (first >= 0xd800 && first <= 0xdbff && second >= 0xdc00 && second <= 0xdfff) ? 2 : 1;
+    }
+    const text = fullText.slice(0, cut);
     if (fullText.length > maxCharsPerMessage) textTruncated = true;
     const content = nodeContent(node);
     const meta = collectSegmentMeta(content);

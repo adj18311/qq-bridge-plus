@@ -18,6 +18,7 @@ import * as sticker from '../src/sticker-lib.js';
 import * as modelPrices from '../src/model-prices.js';
 import * as tokenLedger from '../src/token-ledger.js';
 import * as voiceLib from '../src/send-voice-lib.js';
+import * as stateAcl from '../src/state-acl.mjs';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -131,7 +132,10 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl,
+    // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
+    // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。
+    hardenDir: () => ({ ok: true, detail: 'stub' }),
     // 音量靠 ffmpeg；测试环境不该真跑 ffmpeg（也不该在沙箱里 spawn）。
     // 默认桩成"按倍数记账但不转码"，调用方可用 globals 覆盖来断言真实行为。
     processAudioVolume: async (file, { volume = 1, normalize = false, loudness = 'normal' } = {}) => {

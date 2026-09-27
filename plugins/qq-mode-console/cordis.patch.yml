@@ -1,4 +1,11 @@
+# entry 的 **id 必须等于插件注册的设置命名空间名**（`qq-mode`，见 lib/index.js 的
+# QQMODE_NAMESPACE）。DSH 0.1.7 的 settings.write() 用
+# `configEditor.entries().find((row) => row.options.id === ns)` 定位可写目标，
+# 再用 `entry.fiber.runtime.Config` 取 schema —— id 与命名空间不同名时，
+# 桥接的「模式写穿 DSH 设置」会永远抛 `No configurable plugin entry "qq-mode"`，
+# 模式只在本地生效并在下一次 DSH 轮询时被覆盖回滚。
+# `name` 仍然是包名 qq-mode-console，二者职责不同，不能混为一谈。
 - insert:
-    - id: qq-mode-console
+    - id: qq-mode
       name: qq-mode-console
       config: {}

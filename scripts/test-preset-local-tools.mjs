@@ -38,7 +38,11 @@ const CLOSED_AGENT_PRESETS = ['qsh-closed'];
  * 本地执行能力清单。
  *
  * ⚠️ 这里**必须**含每一个能执行本地命令、读写本地文件或派生 agent 的工具名。
- * 名字取自 DSH 0.1.5-rc.1 实际注册的工具（见 qq-tool-restrict.mjs 的注释）。
+ * 名字取自 DSH 0.1.7-rc.2 实际注册的工具（见 qq-tool-restrict.mjs 的注释）。
+ * 2026-09-27 的对账替换：`cordis_define`/`cordis_undefine`/`cordis_run`/`cordis_stop`
+ * 在 0.1.7 里已不存在（dsh-tool-cordis 现在只注册 cordis_inspect_list/query），
+ * 同一轮补上 `load_workspace_dependencies`（自带 Python/Node/pnpm 路径）与
+ * `list_subagent_models`（派生 agent 家族）。
  *
  * 两类失败模式，本文件都要防：
  *   ① **漏**（本地工具不在守卫名单里 ⇒ 留在 schema）——由 test 3 对账 RESTRICTED_TOOL_NAMES 防；
@@ -49,9 +53,11 @@ const LOCAL_EXECUTION_TOOLS = [
   'pwsh', 'bash',
   'read', 'read_image', 'write', 'edit', 'str_replace_editor',
   'glob', 'grep',
-  'subagent', 'subagent_fork', 'send_message', 'interrupt_agent', 'list_agents',
+  'load_workspace_dependencies',
+  'subagent', 'subagent_fork', 'list_subagent_models',
+  'send_message', 'interrupt_agent', 'list_agents',
   'workflow', 'ralph',
-  'cordis_define', 'cordis_undefine', 'cordis_run', 'cordis_stop',
+  'cordis_inspect_list', 'cordis_inspect_query',
   'dsh_snapshot', 'dsh_rollback', 'incident_resolved',
   'job_list', 'job_output', 'job_kill', 'skill', 'present',
   'get_goal', 'create_goal', 'update_goal',
@@ -181,7 +187,10 @@ test('模拟会话的 preset 都挂了工具守卫（否则 L7 没有任何载�
       /qq-tool-restrict/,
       `${id} 必须挂载 qq-tool-restrict（L7 的落点），否则本地工具会随全局层继承进来`,
     );
-    // 守卫必须是相对插件（./qq-tool-restrict.mjs），而不是一个被忽略的名字。
+    // 源文件里仍是 preset 目录内的相对名；DSH 0.1.7 下真正装进 DSH 的是 bundle patch
+    // （scripts/build-agent-preset-patches.mjs 生成），那里会把它改写成从 profile 目录
+    // 可解析的 `qq-agent-presets/qq-tool-restrict.mjs`——这条断言钉的是"源里必须有守卫行"，
+    // 改写结果由 test-agent-preset-patches.mjs 钉住。
     assert.match(yml, /\.\/qq-tool-restrict\.mjs/, `${id} 的守卫要指向本目录的 .mjs`);
   }
 });

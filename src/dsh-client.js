@@ -11,22 +11,43 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
+import YAML from 'js-yaml';
 import { AbstractApiClient } from '@deepseek-ai/dsh-host-apiproxy/client';
 
-/** 从 DSH guard 日志里自动发现最新的进程启动 token（新版 DSH 打印在 dsh web URL 上）。 */
+/** DSH home：凭据文件与（历史）启动日志都在这里。 */
+export function resolveDshHome() {
+  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+}
+
+/**
+ * 自动发现 DSH 的进程启动 token（新版 DSH 把它打印在 `dsh web` 的 URL 上）。
+ *
+ * 注意：0.1.7 的启动 token 由 processLaunchToken() 现场生成（32 字节随机数，
+ * 只存在内存 WeakMap 里，**不落盘、不可推导**），所以「读日志」这条路只有
+ * 在启动器把 `dsh web` 的 stdout 重定向到文件时才成立。guard 退役后
+ * boot-guard.ps1 不再写 ~/.dsh/guard/logs/server-*.out.log，日志里剩下的是
+ * **旧进程的陈旧 token**，拿它换 Cookie 只会得到 401。
+ * 因此这里只是最后的兜底，主路径是 {@link discoverDshSessionCookie}。
+ *
+ * 查找顺序：环境变量 DSH_LAUNCH_TOKEN → DSH_HOME/logs（新启动器）→
+ * DSH_HOME/guard/logs（guard 时代的历史日志，按时间从新到旧）。
+ */
 export function discoverDshLaunchToken() {
-  try {
-    const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-    const logsDir = path.join(home, 'guard', 'logs');
+  const fromEnv = process.env.DSH_LAUNCH_TOKEN;
+  if (typeof fromEnv === 'string' && /^[A-Za-z0-9_-]{16,}$/.test(fromEnv)) return fromEnv;
+  const home = resolveDshHome();
+  // DSH_HOME/logs 是退役 guard 之后约定的启动日志位置；guard/logs 保留兼容。
+  const dirs = [path.join(home, 'logs'), path.join(home, 'guard', 'logs')];
+  for (const logsDir of dirs) {
     let files;
     try {
       files = fs.readdirSync(logsDir)
-        .filter((name) => /^server-.*\.out\.log$/.test(name))
+        .filter((name) => /^server-.*\.(?:out\.)?log$/.test(name))
         .map((name) => ({ name, mtime: fs.statSync(path.join(logsDir, name)).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime);
     } catch {
-      return '';
+      continue;
     }
     for (const { name } of files) {
       try {
@@ -37,8 +58,89 @@ export function discoverDshLaunchToken() {
         // 单个日志文件可能正被 DSH 占用/轮转，跳过继续看更早的日志。
       }
     }
-  } catch {}
+  }
   return '';
+}
+
+// ── 浏览器会话 Cookie 铸造（不依赖进程启动 token）────────────────────────────
+// 背景：进程启动 token 是现生成、只在内存里的随机数，进程一重启就失效，且只有
+// 「启动器记了 stdout 日志」时才能被发现——DSH 每升一次级、启动方式每变一次，
+// 这条链路就要重新适配一次。
+//
+// DSH 另有一份**持久化**的会话签名密钥：credentials 里的
+// `client-connection/browser-session`（32 字节，首次生成后长期不变）。浏览器
+// Cookie 就是用它做 HMAC 签名的，服务端校验（dsh-client-connection 的
+// isAuthenticated）只要求：
+//   · cookie 名 = 'dsh-auth-' + base64url(sha256(authority))
+//   · payload.authority === authority（Host 头，例如 127.0.0.1:3080）
+//   · issuedAt <= now < expiresAt 且 expiresAt - issuedAt <= cookieMaxAgeDays（默认 30 天）
+// 所以本机同用户进程可以**离线铸造**一个合法 Cookie，完全绕开启动 token。
+// 权限没有提升：桥接本来就用启动 token 换到同等会话权限，这里只是换了一条
+// 不依赖「启动器有没有记日志」的路。签名密钥不可用时返回空串，调用方回退到
+// 启动 token 交换。
+const BROWSER_SESSION_KEY = 'client-connection/browser-session';
+const COOKIE_PAYLOAD_VERSION = 1;
+const COOKIE_PREFIX = 'dsh-auth-';
+const SECRET_BYTES = 32;
+/** 铸造 Cookie 的有效期：远小于 DSH 默认上限（30 天），够用且留足余量。 */
+export const MINTED_COOKIE_LIFETIME_MS = 60 * 60 * 1000;
+/** 到期前多久主动重铸。铸造是纯本地 HMAC（无网络往返），提前换比撞 401 再重试便宜。 */
+const MINTED_COOKIE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
+const base64url = (buffer) => Buffer.from(buffer).toString('base64')
+  .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+
+/**
+ * 读取 DSH 持久化的浏览器会话签名密钥。
+ * @returns 32 字节密钥；文件缺失/被占用/结构不符时返回 null（调用方回退）。
+ */
+export function readBrowserSessionSecret() {
+  try {
+    const doc = YAML.load(fs.readFileSync(path.join(resolveDshHome(), '.credentials.yaml'), 'utf8'));
+    const record = doc?.records?.[BROWSER_SESSION_KEY];
+    if (record?.kind !== 'grant' || record?.payload?.version !== 1) return null;
+    const secret = record.payload.secret;
+    if (typeof secret !== 'string' || !/^[A-Za-z0-9_-]+$/.test(secret)) return null;
+    const decoded = Buffer.from(secret.replaceAll('-', '+').replaceAll('_', '/'), 'base64');
+    // 长度必须正好 32 字节；否则说明 DSH 换了密钥方案，宁可回退也不发坏 Cookie。
+    return decoded.byteLength === SECRET_BYTES ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 用签名密钥为指定 DSH 地址铸造一个会话 Cookie。
+ * @param baseUrl - DSH 基址；其 authority（host:port）会绑定进 Cookie 名与签名载荷。
+ * @param secret - {@link readBrowserSessionSecret} 返回的密钥。
+ * @param options.lifetimeMs - Cookie 有效期。
+ * @returns 可直接放进 Cookie 头的 `name=value` 串。
+ */
+export function mintBrowserSessionCookie(baseUrl, secret, { lifetimeMs = MINTED_COOKIE_LIFETIME_MS } = {}) {
+  const authority = new URL(String(baseUrl)).host;
+  if (!authority) throw new Error('DSH baseUrl has no authority');
+  const issuedAt = Date.now();
+  const expiresAt = issuedAt + lifetimeMs;
+  const body = base64url(Buffer.from(JSON.stringify({
+    version: COOKIE_PAYLOAD_VERSION, authority, issuedAt, expiresAt
+  }), 'utf8'));
+  const signature = base64url(createHmac('sha256', secret).update(body).digest());
+  const name = COOKIE_PREFIX + base64url(createHash('sha256').update(authority).digest());
+  return `${name}=v1.${body}.${signature}`;
+}
+
+/**
+ * 一步到位：为本机 DSH 铸造会话 Cookie。
+ * @returns Cookie 串；密钥不可用时返回 ''（调用方回退到启动 token 交换）。
+ */
+export function discoverDshSessionCookie(baseUrl, options) {
+  const secret = readBrowserSessionSecret();
+  if (!secret) return '';
+  try {
+    return mintBrowserSessionCookie(baseUrl, secret, options);
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -134,6 +236,19 @@ export class NodeApiClient extends AbstractApiClient {
     this.cookiePromise = null;
     this._authEpoch = 0;
     this._muxSendOpen = null;
+    // 持久化签名密钥的探测缓存：undefined=未探测，null=不可用，Buffer=可用。
+    // 探一次就够（文件在 DSH 生命周期内不变），避免每个请求都读一次磁盘。
+    this._secret = undefined;
+    // token 是用户显式配置的（true）还是从日志猜的（false）。猜来的不优先于离线铸造。
+    this.tokenExplicit = this.auth.tokenExplicit === true;
+    // 上次用的鉴权策略（'minted' | 'token' | null）与「改用 launch token」的偏好。
+    // _preferToken **只在铸造出来的 Cookie 真的被 401 时**才置位（见 _doFetchWithAuth）：
+    // invalidateAuth() 也会被 remote.mux 流结束（WS 抖动 / DSH 重启）调用，那是常态事件，
+    // 拿它当「铸造无效」的证据会把客户端钉死在过期 token 上。
+    this._strategy = null;
+    this._preferToken = false;
+    // 铸造 Cookie 的到期时刻；到期前主动重铸，避免先撞一次 401 再重试。
+    this._cookieExpiresAt = 0;
     // 期望 follow 的会话集合：**跨重连保留**。DSH 重启或 WS 中断后必须重放，
     // 否则已有会话再也收不到 session 事件（turn/end 丢失 → QQ 上永远没有回复，且无报错）。
     this._desiredFollows = new Set();
@@ -149,15 +264,76 @@ export class NodeApiClient extends AbstractApiClient {
     this._authEpoch += 1;
     this.cookie = null;
     this.cookiePromise = null;
+    this._cookieExpiresAt = 0;
+    // 密钥文件可能刚被 DSH 重建（首次启动写入凭据），重探一次。
+    this._secret = undefined;
+    // 这里**刻意不碰 _preferToken**：本方法也被 endStream()（remote.mux 流结束）调用，
+    // 而 WS 抖动/DSH 重启都会走到那里——那是常态事件，不是「铸造的 Cookie 无效」的证据。
+    // 策略切换只在 _doFetchWithAuth 真正收到 401 时决定。
+    this._strategy = null;
     const discovered = discoverDshLaunchToken();
     if (discovered) this.launchToken = discovered;
   }
 
-  /** 新版 DSH 要求先用 launch token 换 Cookie，之后所有请求带 Cookie。 */
+  /** 持久化签名密钥（惰性探测 + 记忆）。 */
+  browserSessionSecret() {
+    if (this._secret === undefined) this._secret = readBrowserSessionSecret();
+    return this._secret;
+  }
+
+  /**
+   * 是否具备至少一种鉴权手段：显式配置/可发现的 launch token，或持久化签名密钥。
+   * 两者都没有时请求按匿名发出——由服务端回 401，而不是在客户端提前抛错。
+   */
+  hasAuth() {
+    return Boolean(this.launchToken) || this.browserSessionSecret() !== null;
+  }
+
+  /**
+   * 换取或铸造一个会话 Cookie。
+   *
+   * 两条路：
+   * 1. 有 launch token（config.json 的 dsh.authToken，或从日志发现）→ 走 DSH 的
+   *    官方 token 交换；token 是进程启动凭据，只能放进 URL 查询串。
+   * 2. 没有 launch token → 用持久化签名密钥**离线铸造** Cookie
+   *    （见文件头的说明）。这条路不依赖启动器是否把 stdout 记进日志，
+   *    所以 DSH 换启动方式/升级都不再需要重新适配。
+   * @param signal - 取消信号。
+   * @returns 可直接放进 Cookie 头的串。
+   */
+  /** 铸造并缓存一个会话 Cookie，同时记下到期时刻。 */
+  _mintCookie(secret) {
+    this.cookie = mintBrowserSessionCookie(this.baseUrl, secret);
+    this._cookieExpiresAt = Date.now() + MINTED_COOKIE_LIFETIME_MS;
+    this._strategy = 'minted';
+    return this.cookie;
+  }
+
   async ensureAuth(signal) {
     signal?.throwIfAborted();
-    if (this.cookie) return this.cookie;
-    if (!this.launchToken) throw new Error('DSH auth token missing: set dsh.authToken in config.json (or let auto-discovery read it from DSH guard logs)');
+    // 铸造来的 Cookie 到期前主动重铸：铸造是纯本地 HMAC、没有网络往返，
+    // 比「用到 401 再重试」便宜，也不会在重试窗口里丢掉一次 RPC。
+    if (this.cookie && this._strategy !== 'minted') return this.cookie;
+    if (this.cookie && Date.now() < this._cookieExpiresAt - MINTED_COOKIE_REFRESH_MARGIN_MS) return this.cookie;
+    this.cookie = null;
+    const secret = this.browserSessionSecret();
+    // 铸造只对回环地址成立：签名密钥取自本机 DSH_HOME，远程 DSH 用的是另一份密钥，
+    // 拿本机密钥去签只会换来 401。
+    const canMint = secret !== null && isLoopbackBase(this.baseUrl);
+    // 优先级：默认**铸造优先**——它不依赖「启动器有没有把 stdout 记进日志」，也不随
+    // DSH 重启失效，是唯一不需要每次升级重新适配的一条路。两个例外：
+    // 用户在 config.json 里显式填了 dsh.authToken（那是明确意图，尊重它），
+    // 或铸造刚被 401（_preferToken，见 _doFetchWithAuth）。
+    if (canMint && !this._preferToken && !this.tokenExplicit) return this._mintCookie(secret);
+    if (!this.launchToken) {
+      if (canMint) return this._mintCookie(secret);
+      throw new Error(
+        'DSH 鉴权不可用：没有可用的 launch token（config.json 的 dsh.authToken 为空，日志里也没发现），'
+        + `也读不到 ${path.join(resolveDshHome(), '.credentials.yaml')} 里的 `
+        + `${BROWSER_SESSION_KEY} 签名密钥。请在 config.json 里显式设置 dsh.authToken，`
+        + '或确认 DSH_HOME 指向真正的 .dsh 目录。'
+      );
+    }
     // launch token 是**进程启动凭据**，交换时只能放进 URL 查询串（DSH 的协议就这么定的）。
     // 因此绝不能把它发往非回环地址：那会把凭据交给中间人、写进对端访问日志、
     // 也可能落在代理/CDN 的请求行日志里。要连远程 DSH 请显式声明 dsh.allowRemote。
@@ -178,6 +354,7 @@ export class NodeApiClient extends AbstractApiClient {
       if (!setCookie) throw new Error(`DSH token exchange failed: HTTP ${res.status}`);
       if (epoch !== this._authEpoch) throw new Error('DSH auth session invalidated during token exchange');
       this.cookie = setCookie.split(';')[0];
+      this._strategy = 'token';
       return this.cookie;
     })();
     this.cookiePromise = promise;
@@ -284,12 +461,16 @@ export class NodeApiClient extends AbstractApiClient {
     const authEpoch = this._authEpoch;
     init?.signal?.throwIfAborted();
     const headers = new Headers(init?.headers);
-    if (this.launchToken) {
+    if (this.hasAuth()) {
       try {
         const cookie = await this.ensureAuth(init?.signal);
         headers.set('cookie', cookie);
       } catch (error) {
         if (!isRetry && this.launchToken && /token exchange failed|invalidated during token exchange/i.test(error?.message ?? '')) {
+          // 交换失败通常意味着那个 launch token 已经过期（DSH 重启过，日志里的是上一个
+          // 进程的）。解除「改用 token」的偏好，否则客户端会一直抱着一个死 token 不放 ——
+          // 这正是「一次 401 之后所有 RPC 永久失败」的成因。
+          this._preferToken = false;
           if (authEpoch === this._authEpoch) this.invalidateAuth();
           return this._doFetchWithAuth(input, init, true);
         }
@@ -298,8 +479,13 @@ export class NodeApiClient extends AbstractApiClient {
     }
     init?.signal?.throwIfAborted();
     const response = await fetch(input, { ...init, headers });
-    if (!isRetry && response.status === 401 && this.launchToken) {
+    if (!isRetry && response.status === 401 && this.hasAuth()) {
       await response.body?.cancel();
+      // 策略切换只在**真的收到 401** 时决定（不能放在 invalidateAuth 里：那里也会被
+      // WS 流结束调用）。铸造的 Cookie 被 401 ⇒ 本机密钥对不上（典型：DSH_HOME 指向了
+      // 另一个 .dsh），改用 launch token；token 交换被 401 ⇒ 那个 token 已死，改回铸造。
+      if (this._strategy === 'minted' && this.launchToken) this._preferToken = true;
+      else if (this._strategy === 'token') this._preferToken = false;
       // 同一旧 Cookie 的并发 401 只能触发一次换票，不能使已开始的新换票失效。
       if (authEpoch === this._authEpoch) this.invalidateAuth();
       return this._doFetchWithAuth(input, init, true);

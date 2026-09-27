@@ -131,6 +131,13 @@ async function agentApi(path, init = {}) {
     ...(consoleToken ? { 'x-console-token': consoleToken } : {}),
     ...(rest.headers ?? {})
   };
+  // 声明「这是一次智能体调用」。桥接据此把「没带会话令牌」判定为**拒绝**，而不是
+  // 退化成「管理端全权」——所以这个头绝不能随 token 一起被省略。历史上 331/355/379/877
+  // 行用 `...(token ? {headers:{...}} : {})` 把整个头省掉了，于是「模型漏传 token」
+  // 不是被拒绝，反而提权成控制台权限（confused deputy）。
+  // 令牌本身仍然只在真有时才发：/api/status 的模式探测（legacyReadToolAllowed）本来就是
+  // 无令牌调用，桥接对它单独放行并按最小对象返回。
+  headers['x-agent-call'] = '1';
   const res = await fetch(`${agentApiBase()}${path}`, { ...rest, headers, signal: AbortSignal.timeout(timeoutMs) });
   let body = null;
   try { body = await res.json(); } catch { body = null; }
@@ -164,7 +171,7 @@ async function legacyReadToolAllowed() {
   return String(status?.mode ?? '') === 'closed-agent';
 }
 
-const server = new McpServer({ name: 'snowluma-safe', version: '0.1.5' });
+const server = new McpServer({ name: 'snowluma-safe', version: '0.1.7' });
 
 // ── 工具开关必须在**注册期**生效，而不是只在校验期 ──────────────────────────
 //
@@ -200,6 +207,21 @@ const TOOL_CONFIG_FLAGS = {
   qq_slang_submit: 'slangSubmit',
   qq_send_voice: 'sendVoice',
   qq_list_voices: 'sendVoice',
+  // 下面这些曾经漏登记。漏一个不是"多注册一个工具"那么轻：桥接那边按 `v2ToolEnabled(flag)`
+  // 在**调用期**一律 403，而这里不登记就等于"控制台显示已关闭、模型每次请求仍收到它的完整
+  // 描述与参数 schema，然后调用它、再拿到 403"——既白烧 token（本文件开头 176 行起就是为省这份
+  // token 才改注册期过滤的），又诱导模型误调。`qq_set_sticker_remark` 默认就是 `false`
+  // （见 bridge.js 的 socialV2.tools 默认表），所以此前它一直是"默认关闭却仍然可见"。
+  qq_send_poke: 'sendPoke',
+  qq_get_message_images: 'getImages',
+  qq_get_forward_msg: 'getForwardMsg',
+  qq_list_stickers: 'listStickers',
+  qq_get_sticker_image: 'getStickerImage',
+  qq_send_sticker: 'sendSticker',
+  qq_collect_sticker: 'collectSticker',
+  qq_get_self_image: 'getSelfImage',
+  qq_sticker_note: 'stickerNote',
+  qq_set_sticker_remark: 'setStickerRemark',
 };
 const disabledTools = [];
 {

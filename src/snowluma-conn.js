@@ -196,6 +196,7 @@ export function persistToken(cfgPath, newToken) {
  */
 export function persistSnowLumaEndpoint(cfgPath, { accessToken, wsUrl, httpUrl } = {}) {
   let text = fs.readFileSync(cfgPath, 'utf8');
+  // 读的时候必须吃掉 BOM，否则 JSON.parse 会抛「Unexpected token」。
   const hadBom = text.charCodeAt(0) === 0xFEFF;
   if (hadBom) text = text.slice(1);
   const cfg = JSON.parse(text);
@@ -213,6 +214,10 @@ export function persistSnowLumaEndpoint(cfgPath, { accessToken, wsUrl, httpUrl }
   consider('httpUrl', httpUrl);
   if (Object.keys(changed).length === 0) return { updated: false, changed: {} };
   cfg.snowluma = next;
-  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  // 原来 hadBom 只用于读、没用回写：用户文件带 UTF-8 BOM 时，我们改一个 token 就把 BOM 吞掉了
+  // —— 那是对用户文件的**字节级**静默改动（Windows 编辑器/工具常写 BOM），会让文件在 git 里
+  // 显示成整文件重写，也可能影响按字节读它的其它程序。只改该改的字段，编码原样保留。
+  const serialized = JSON.stringify(cfg, null, 2) + '\n';
+  fs.writeFileSync(cfgPath, hadBom ? `\uFEFF${serialized}` : serialized, 'utf8');
   return { updated: true, changed };
 }

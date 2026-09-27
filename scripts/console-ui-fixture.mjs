@@ -6,6 +6,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { roleCharStats, roleSectionReport } from '../src/role-card.js';
 import { pickBucketMs } from '../src/token-ledger.js';
+import { manualDirCommand } from '../src/state-acl.mjs';
 
 export const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const timestamp = '2026-09-20T08:30:00.000Z';
@@ -469,12 +470,16 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           });
           case '/api/slang': return json({ ok: true, entries: state.slang, config: state.slangConfig });
           // state/ 的 ACL 收紧结果：用离线示例值演示「未收紧」的告警条（Windows 上未提权时的真实情况）
+          // 命令本身必须来自 `src/state-acl.mjs`，不能在这里另抄一份：这里曾经抄的是
+          // `icacls DIR /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /T /C` —— 正是那句
+          // 会把子文件 DACL 清空、让桥接读不到自己令牌的破坏性命令。示例数据是给人照抄的，
+          // 抄错的那一版和真的那一版看起来一模一样。
           case '/api/security': return json({
             ok: true,
             security: state.security,
             stateDir: state.hardenStateDir
               ? { hardened: true, path: 'D:\\demo\\qq-bridge\\state', manualCommand: '' }
-              : { hardened: false, path: 'D:\\demo\\qq-bridge\\state', manualCommand: 'icacls "D:\\demo\\qq-bridge\\state" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /T /C' }
+              : { hardened: false, path: 'D:\\demo\\qq-bridge\\state', manualCommand: manualDirCommand('D:\\demo\\qq-bridge\\state') }
           });
           // 令牌与花费：全部为离线示例数据，不含任何真实用量。
           case '/api/tokens/summary': return json(usageSummaryFixture());

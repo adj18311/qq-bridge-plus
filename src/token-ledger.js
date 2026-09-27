@@ -753,13 +753,39 @@ export function createTokenLedger({
     const totals = { cost: 0, tokens: 0, turns: 0, steps: 0 };
     let estimated = false;
     let countedSamples = 0;
+    // 逐桶的「轮次」去重集合（键 = sessionId|turn）。
+    // steps 数的是计费请求（同一回合的多个 step / 重试各算一条），turns 数的是真正的对话轮次；
+    // 旧代码把去重集合的键写成 sampleKeyOf(sid, turn, step, retry) —— 那**正是 samples 的键**，
+    // 遍历 samples 时每个键天然唯一，去重永不命中，于是 row.turns 恒等于 row.steps：
+    // 图上标的「轮次」其实一直是「请求数」，且这层去重是纯粹的死代码。
     const turnSeen = new Set();
+    const rowTurnSeen = rows.map(() => new Set());
+    // 权威总额（含窗口之外）的三个组成部分，按 summary() 的同一口径在**同一次遍历**里累加：
+    //   ① 被淘汰采样的累计（evicted）② 投影基线自身 ③ 仍然逐轮可拆、且没被基线覆盖的采样（seq > 基线 seq）。
+    // 非 live 采样绝不能计入：基线已经包含了它的历史，再算一次就是重复计费，offChartCost 会凭空变大。
+    let ledgerCost = 0;
+    let ledgerBuckets = { ...ZERO_BUCKETS };
+    for (const e of evicted.values()) {
+      ledgerCost += Number(e.cost) || 0;
+      ledgerBuckets = addBuckets(ledgerBuckets, e.buckets);
+    }
+    for (const base of baselines.values()) {
+      // 与 sessionView() 同口径：基线没有逐时明细，按快照时刻（缺失时取当前）整体计价。
+      ledgerCost += priceUsage(base.buckets, { model: base.model, at: base.t || now(), table: priceTable }).cost.total;
+      ledgerBuckets = addBuckets(ledgerBuckets, base.buckets);
+    }
     for (const s of samples.values()) {
+      // 这条采样的计价只算一次：窗口内的桶与窗口外的"总额"共用同一个 p。
+      const p = priceUsage(s.buckets, { model: s.model, at: s.t || endAt, table: priceTable });
+      const tokens = totalTokensOf(s.buckets);
+      const base = baselines.get(s.sessionId);
+      if (!base || s.seq > base.seq) {
+        ledgerCost += p.cost.total;
+        ledgerBuckets = addBuckets(ledgerBuckets, s.buckets);
+      }
       if (s.t < start || s.t >= end) continue;
       const idx = Math.min(count - 1, Math.max(0, Math.floor((s.t - start) / bucketMs)));
       const row = rows[idx];
-      const p = priceUsage(s.buckets, { model: s.model, at: s.t || endAt, table: priceTable });
-      const tokens = totalTokensOf(s.buckets);
       row.cost += p.cost.total;
       row.tokens += tokens;
       row.cacheMiss += s.buckets.cacheMiss;
@@ -769,9 +795,15 @@ export function createTokenLedger({
       row.steps += 1;
       row.tier = row.tier === null || row.tier === p.rates.tier ? p.rates.tier : 'mixed';
       row.keys.add(keyOf(s.sessionId) ?? s.key ?? null);
-      if (!turnSeen.has(sampleKeyOf(s.sessionId, s.turn, s.step, s.retry))) {
-        turnSeen.add(sampleKeyOf(s.sessionId, s.turn, s.step, s.retry));
+      const turnId = `${s.sessionId}|${s.turn}`;
+      if (!rowTurnSeen[idx].has(turnId)) {
+        rowTurnSeen[idx].add(turnId);
         row.turns += 1;
+      }
+      // 窗口级轮次：跨桶的同一回合只算一次（所以各桶 turns 之和 ≥ totals.turns）。
+      if (!turnSeen.has(turnId)) {
+        turnSeen.add(turnId);
+        totals.turns += 1;
       }
       totals.cost += p.cost.total;
       totals.tokens += tokens;
@@ -784,15 +816,18 @@ export function createTokenLedger({
       if (row.tier === null) row.tier = isPeakAt(row.t, priceTable) ? 'peak' : 'off';
       row.keys = [...row.keys].filter(Boolean);
     }
-    totals.turns = new Set([...turnSeen].map((k) => k.split('|').slice(0, 2).join('|'))).size;
 
     let busiest = null;
     for (const row of rows) {
       if (row.cost <= 0) continue;
       if (!busiest || row.cost > busiest.cost) busiest = row;
     }
-    // 只有累计值、拆不到时间轴上的那部分（更早的回合 / 投影基线覆盖的历史）。
-    const summaryTotals = summary({ limit: 1 }).totals;
+    // 时间轴之外的那部分（更早的回合 / 投影基线覆盖的历史）。
+    //
+    // 旧实现在这里调 summary({ limit: 1 }) 只为拿一个总额 —— 那是又一次 buildIndex()（全量采样、
+    // 每条约一次 priceUsage、还建两层 Map）加逐会话聚合，把控制台每 3 秒轮询一次的最热端点成本
+    // 直接翻倍，也违背了本函数头「单遍扫描」的约定。现在用上面同一次遍历累出的权威总额。
+    const ledgerTokens = totalTokensOf(ledgerBuckets);
     return {
       ok: true,
       generatedAt: endAt,
@@ -808,8 +843,8 @@ export function createTokenLedger({
       estimated,
       countedSamples,
       // 时间轴之外的部分：图上画不出来，控制台会单独说明，避免"图上加起来 ≠ 总花费"引起误会。
-      offChartCost: Math.max(0, (Number(summaryTotals?.cost) || 0) - totals.cost),
-      offChartTokens: Math.max(0, (Number(summaryTotals?.totalTokens) || 0) - totals.tokens)
+      offChartCost: Math.max(0, ledgerCost - totals.cost),
+      offChartTokens: Math.max(0, ledgerTokens - totals.tokens)
     };
   }
 
@@ -860,6 +895,14 @@ export function createTokenLedger({
     retryAxis.clear();
     sessionKeys.clear();
     sessionSeen.clear();
+    // 被淘汰采样汇总是「权威累计」的一部分：漏清它，控制台点完重置仍会报出旧花费，
+    // 用户以为没清掉。更隐蔽的是 evictedDirty 若保持 true，下一次 maybeCompact() 会走
+    // compact()，把内存里这份 **已经被删掉** 的 evicted 重新序列化回磁盘 ——
+    // 「删除」的总额在下一个采样到来时原地复活，而且文件被写坏成"重置前的量"。
+    evicted.clear();
+    evictedDirty = false;
+    droppedLines = 0;
+    lastCompactedAt = 0;
     journalLines = 0;
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });

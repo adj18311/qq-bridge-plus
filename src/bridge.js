@@ -10,20 +10,21 @@ import os from 'node:os';
 import http from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { extractPresetPrefix, presetPromptBlockers, presetPromptWarnings, renderPresetPromptYaml } from './preset-prompt.js';
 import { GEN1_ROLE_LINE_RE, parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from './role-card.js';
 import { fileURLToPath } from 'node:url';
 import { SnowLumaWebSocketClient, text } from '@snowluma/sdk';
 import { NodeApiClient, unwrap, createTurnCollector, discoverDshLaunchToken } from './dsh-client.js';
-import { mdToPlain, splitForQQ } from './md-to-plain.js';
+import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-plain.js';
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
+import { hardenDir, manualDirCommand } from './state-acl.mjs';
 import { extractForwardIds, forwardIdFromData, sanitizeForwardId, formatForwardResponse } from './forward.js';
 import { resolvePriceTable } from './model-prices.js';
 import { createTokenLedger } from './token-ledger.js';
@@ -68,6 +69,37 @@ const TOKEN_USAGE_FILE = path.join(STATE_DIR, 'token-usage.jsonl');
 const ACTIVITY_LOG = path.join(STATE_DIR, 'qq-activity.log');
 const BRIDGE_LOG = path.join(STATE_DIR, 'bridge.log');
 
+/**
+ * 模式拼写的**唯一**归一入口（输入边界）。
+ *
+ * `simulation` 是规范名（QSH_PLAN.md §2.1：对用户只暴露 `closed-agent` / `simulation`），
+ * `chat` / `reserved` / `reserved2` 是历史拼写 —— 必须继续被**接受**（线上桥接持久化的全局值
+ * 就是 `reserved2`），但进程内部一律用历史拼写存储与比较：`currentMode === 'reserved2'` 这类
+ * 判断遍布发送闸门、定时器与 preset 解析，把规范名直接塞进 `currentMode` 会让它们全部变成假。
+ *
+ * 旧写法是 `VALID_MODES = ['chat','closed-agent','reserved','reserved2']`，控制台那处还抄了
+ * 一份同样的字面量数组。后果是：在 DSH 设置或 `state/mode.json` 里写 `simulation` 会被**静默
+ * 忽略**，`currentMode` 保持上一次的值（进程刚起来时是 `chat`，即一代仿真 —— preset 与工具面
+ * 都和二代不同，`v2ToolEnabled` 之类的闸门也不生效）。用户以为切到了仿真，实际跑的是另一套，
+ * 而且没有任何日志。规范名与历史名必须在这里收敛成同一个内部值。
+ */
+const MODE_INPUT_ALIASES = Object.freeze({
+  chat: 'chat',
+  reserved: 'reserved',
+  reserved2: 'reserved2',
+  simulation: 'reserved2',
+  'closed-agent': 'closed-agent'
+});
+/** 内部合法模式集合（由别名表派生，避免"两份名单各自漂移"）。 */
+const VALID_MODES = Object.freeze([...new Set(Object.values(MODE_INPUT_ALIASES))]);
+
+/** 输入侧归一：返回内部拼写；无法识别返回 null，由调用方 fail-closed。 */
+function normalizeModeInput(value) {
+  if (typeof value !== 'string') return null;
+  const key = value.trim();
+  return Object.prototype.hasOwnProperty.call(MODE_INPUT_ALIASES, key) ? MODE_INPUT_ALIASES[key] : null;
+}
+
 // 读取 JSON 文件并容错：Windows 下常见 UTF-8 BOM（\uFEFF）会令 JSON.parse 失败。
 // required=true 时文件缺失或解析失败直接抛错（用于启动必需配置，fail-fast）。
 function readJsonSafe(file, fallback, required = false) {
@@ -79,6 +111,26 @@ function readJsonSafe(file, fallback, required = false) {
     if (required) throw new Error(`配置文件读取/解析失败：${file}（${error?.message ?? error}）`);
     return fallback;
   }
+}
+
+/**
+ * 读取 config.json，并保证拿到一个**可安全改写的普通对象**。
+ *
+ * 为什么不是 `readJsonSafe(file, null, true) ?? {}`：控制台这些端点都是
+ * 「读整份 config → 改一个字段 → 原子写回」。JSON.parse 对字面量 `null` 是**成功**的，
+ * 于是 `file` 可能是 null：`file.socialV2` 直接 TypeError（保存接口 500，且错误信息
+ * 完全指不出"配置文件顶层是 null"）；而用 `?? {}` 兜底更糟 —— 回写会把整份配置替换成
+ * 只含本次提交字段的新对象，用户的白名单、令牌、模式全被抹掉。
+ * 所以：不是普通对象就抛错，让调用方的 try/catch 返回 500（与各端点注释里
+ * "配置文件损坏时直接 500，绝不回写" 的既有约定一致）。
+ */
+function readConfigObject(file) {
+  const parsed = readJsonSafe(file, null, true);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const kind = parsed === null ? 'null' : Array.isArray(parsed) ? '数组' : typeof parsed;
+    throw new Error(`config.json 顶层不是对象（实际是 ${kind}），已拒绝改写以免覆盖整份配置：${file}`);
+  }
+  return parsed;
 }
 
 /**
@@ -149,54 +201,33 @@ function loadOrCreateConsoleToken() {
  * 这台机器的用户都能读走控制台令牌、Snowluma accessToken、各会话 agentToken 和全部 QQ 聊天记录。
  * 这里用 icacls 切断 state/ 的继承链，只保留「当前用户 + SYSTEM + Administrators」。
  *
- * ⚠️ 现实约束：改 ACL 需要**管理员权限**。普通用户（未提权）跑这里会失败 ——
- * 所以失败时不能只说"可能可读"就完事，要给出**一条可复制的提权命令**，
- * 并把结果回报到控制台（见 /api/security 的 stateDirHardened 字段）。
+ * ⚠️ 具体实现已抽到 `src/state-acl.mjs`（与 scripts/harden-state-acl.mjs 共用同一份）。
+ * 这里原本自带一份**会破坏数据**的实现：
+ *   · `icacls DIR /inheritance:r /grant:r "u:(OI)(CI)F" /T` —— (OI)(CI) 是目录专用标志，
+ *     套到 /T 展开的文件上会失败，而 /inheritance:r 已摘掉文件的继承 ACE，净结果是
+ *     **子文件 DACL 被清空、连属主都读不了**（实测 state/ 下 50 个文件变空，桥接读不到
+ *     自己的控制台令牌）；启动日志只报「未能收紧」，看不出已经造成破坏。
+ *   · 回读自检用 `/\(I\)/` 扫全文，而 DSH 沙箱的 Low 完整性标签行永远带 (I) ——
+ *     于是「已收紧」被误判成「未收紧」，**每次启动都重跑一遍那个破坏性命令**。
+ * 两处逻辑各写一份正是漂移的根源，故合并。失败时不能只说"可能可读"就完事，
+ * 要给出一条**安全**的可复制命令，并把结果回报到控制台（/api/security 的 stateDirHardened）。
  * 宁可明确报"没做成"，也不要假装已经安全。
  */
 function hardenStateDirAcl() {
-  if (process.platform !== 'win32') {
-    try {
-      fs.chmodSync(STATE_DIR, 0o700);
-      stateDirHardened = true;
-    } catch (error) {
-      stateDirHardened = false;
-      log(`⚠️ 收紧 state/ 权限失败（chmod 700）：${error?.message ?? error}`);
-    }
+  const result = hardenDir(STATE_DIR);
+  if (result.ok) {
+    stateDirHardened = true;
     return;
   }
-  const user = process.env.USERNAME;
-  if (!user) { stateDirHardened = false; return; }
-  const manual = `icacls "${STATE_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F" /grant:r "Administrators:(OI)(CI)F" /T /C`;
-  // 注意：icacls 的 /C 会"继续处理剩余文件"，于是**即使每个文件都失败，退出码仍是 0**。
-  // 所以必须看输出、并且回读一次实际 ACL，否则这个函数会在失败时静默地什么都不做。
-  try {
-    const res = spawnSync('icacls', [
-      STATE_DIR,
-      '/inheritance:r',
-      '/grant:r', `${user}:(OI)(CI)F`,
-      '/grant:r', 'SYSTEM:(OI)(CI)F',
-      '/grant:r', 'Administrators:(OI)(CI)F',
-      '/T', '/C', '/Q'
-    ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
-    const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-    if (res.error) throw res.error;
-    if (/Failed processing\s+[1-9]/i.test(output) || /access is denied/i.test(output)) {
-      throw new Error(output.trim().split('\n').slice(-4).join(' / '));
-    }
-    // 回读确认继承链真的断了（继承来的 ACE 带 (I) 标记）
-    const check = spawnSync('icacls', [STATE_DIR], { encoding: 'utf8', timeout: 10000, windowsHide: true });
-    if (/\(I\)/.test(check.stdout ?? '')) {
-      throw new Error('state/ 目录仍带有继承来的 ACE（(I) 标记未消失）');
-    }
-    stateDirHardened = true;
-  } catch (error) {
-    stateDirHardened = false;
-    log('⚠️ 未能收紧 state/ 目录权限：本机任何已登录用户都可能读到控制台令牌与 QQ 聊天记录。');
-    log(`   原因：${String(error?.message ?? error).slice(0, 300)}`);
-    log('   改 ACL 需要管理员权限。请用**管理员身份**打开终端后执行下面这条命令（或在控制台「访问与安全」页点按钮）：');
-    log(`   ${manual}`);
+  stateDirHardened = false;
+  if (process.platform !== 'win32') {
+    log(`⚠️ 收紧 state/ 权限失败（chmod 700）：${result.detail}`);
+    return;
   }
+  log('⚠️ 未能收紧 state/ 目录权限：本机任何已登录用户都可能读到控制台令牌与 QQ 聊天记录。');
+  log(`   原因：${String(result.detail).slice(0, 300)}`);
+  log('   改 ACL 需要管理员权限。请用**管理员身份**打开终端后执行下面这几条命令（或在控制台「访问与安全」页点按钮）：');
+  log(`   ${manualDirCommand(STATE_DIR)}`);
 }
 
 function readActivityTail(n) {
@@ -344,7 +375,6 @@ function writeRoleContent(name, content) {
 // 两代仿真各自有独立的预设提示词：一代 qq-chat（空格分条 / [SILENT]），
 // 二代 qq-chat-v2（一切皆工具）。控制台可分别查看与修改。
 const PRESET_NAMES = { v1: 'qq-chat', v2: 'qq-chat-v2' };
-const PRESET_NAME_SET = new Set(Object.values(PRESET_NAMES));
 const PRESET_BACKUP_DIR = path.join(STATE_DIR, 'preset-backups');
 const PRESET_BACKUP_KEEP = 10;
 
@@ -360,11 +390,12 @@ function installedPresetYaml(name) {
   return path.join(dshHomeDir(), '.agent-presets', name, 'agent.cordis.yml');
 }
 
-// 只接受已知预设名，杜绝把任意路径当 preset 传进来。
-function resolvePresetName(raw) {
-  const name = String(raw ?? '').trim();
-  return PRESET_NAME_SET.has(name) ? name : PRESET_NAMES.v2;
-}
+// 这里**没有**模块级的 resolvePresetName —— 曾经有一个，但它被 main() 内部同名函数完全遮蔽
+// （函数声明提升到 main 作用域，main 里所有调用点都落到内部那个），是纯死代码。
+// 而且它的语义是错的：未知名字静默回退到 qq-chat-v2，等于 fail-OPEN —— 一旦哪天有人把它
+// "复活"成真正生效的实现，群聊会话就会在 preset 清单校验失败时照样建起来。
+// 真正在用的那个（main() 内，带 strict 开关）在名字不可用时返回 '' 让调用方拒绝建会话。
+// 同理不再保留 PRESET_NAME_SET：它只服务于那个死函数，留着只会诱惑下一个人去用它。
 
 function readPresetPromptText(name) {
   const file = presetSourceYaml(name);
@@ -444,6 +475,54 @@ const DIRECTION_HINT = '注意：消息里的 [引用 某人：...] 表示这句
 
 // 已知的二代 agent token 集合：日志/活动/出站文本统一脱敏，防止令牌被模型泄露到 QQ。
 const KNOWN_AGENT_TOKENS = new Set();
+
+// 会话 → 该会话「当前代 + 上一代」agentToken 的索引（见 rememberAgentToken）。
+//
+// 为什么必须有这份索引：retireSession() 每次轮换 token 都会把**新** token 塞进
+// KNOWN_AGENT_TOKENS，而 reconcileSessionPolicies() 在**任何**策略变化（切模式、改白名单、
+// preset 清单变动）时都会退役全部会话 —— 于是每切一次模式，每个会话就在集合里永久多留一个
+// token，且只有 /reset、/api/session/reset、/api/socialV2/reset 会删。集合只增不减，而
+// redactSensitiveText()（每写一行日志）和 redactKnownTokensOnly()/onebotSend()（每条出站消息）
+// 都要先复制整个集合再线性扫，长期运行后这两条热路径会被拖垮。
+//
+// 选择「按会话替换」而不是硬性 LRU 上限：硬上限在会话多的时候会淘汰掉**仍然有效**的 token，
+// 那等于把活令牌漏到 QQ，属于削弱安全边界。按会话记账时集合大小 ≈ 会话数 × 2，且每个会话
+// 一定保留当前代（活令牌必然可脱敏）与上一代（模型上下文里最可能残留的那一个）；会话被删除
+// 时用 forgetAgentToken() 整体摘除。第三代已经在两次轮换之前，不可能还在上下文里，直接丢弃。
+const CONVERSATION_TOKENS = new Map();
+const MAX_KNOWN_AGENT_TOKENS = 512;
+
+/**
+ * 记录某会话的当前 agentToken：丢掉它两代之前的旧 token，避免集合无界增长。
+ * 另加一层上限兜底（防止异常路径下会话 key 无界增多），淘汰顺序是「先扔非活代」。
+ */
+function rememberAgentToken(key, token) {
+  const tk = String(token ?? '');
+  if (!tk) return;
+  const prev = CONVERSATION_TOKENS.get(key);
+  if (prev && prev[0] === tk) return;
+  const next = prev ? [tk, prev[0]] : [tk];
+  if (prev && prev[1]) KNOWN_AGENT_TOKENS.delete(prev[1]);
+  CONVERSATION_TOKENS.set(key, next);
+  KNOWN_AGENT_TOKENS.add(tk);
+  if (KNOWN_AGENT_TOKENS.size > MAX_KNOWN_AGENT_TOKENS) {
+    // 只淘汰已经不属于任何会话**当前代**的 token（即更早的旧代）。
+    // 当前代一个都不能丢：脱敏漏掉活令牌就是把令牌发到 QQ，比内存占用严重得多。
+    const live = new Set([...CONVERSATION_TOKENS.values()].map((pair) => pair[0]));
+    for (const old of [...KNOWN_AGENT_TOKENS]) {
+      if (KNOWN_AGENT_TOKENS.size <= MAX_KNOWN_AGENT_TOKENS) break;
+      if (!live.has(old)) KNOWN_AGENT_TOKENS.delete(old);
+    }
+  }
+}
+
+/** 会话被彻底移除（重置/清空工作区/退订）时，连同它的 token 一起从脱敏集合摘掉。 */
+function forgetAgentToken(key) {
+  const prev = CONVERSATION_TOKENS.get(key);
+  if (!prev) return;
+  for (const tk of prev) KNOWN_AGENT_TOKENS.delete(tk);
+  CONVERSATION_TOKENS.delete(key);
+}
 
 // 读取 DSH 模型能力的在途 Promise：withTimeout 只做 Promise.race，不会取消底层 RPC，
 // 因此并发刷新会各自留下一个不可取消的请求。这里做去重，同一时刻只发一个。
@@ -830,7 +909,12 @@ function loadConfig() {
     }
   };
 
-  // 新版 DSH 的 launch token 每次启动会变；配置里没填时自动从 DSH guard 日志发现。
+  // DSH 0.1.7 起 launch token 是**每进程现生成的 32 字节随机数，只存在内存里**，
+  // 不落盘、不可推导；只有启动器把 `dsh web` 的 stdout 重定向到文件时才能从日志读到。
+  // 所以这里发现的 token 只是兜底，主路径是客户端用 ~/.dsh 里持久化的签名密钥
+  // 离线铸造会话 Cookie（见 dsh-client 的 mintBrowserSessionCookie）。
+  // authTokenExplicit 记录「token 是用户填的还是这里猜的」，客户端据此排优先级。
+  cfg.dsh.authTokenExplicit = Boolean(cfg.dsh.authToken);
   if (!cfg.dsh.authToken) cfg.dsh.authToken = discoverDshLaunchToken();
 
   // 思考强度可能被手工改成非法值（config.json 是用户可编辑的）。DeepSeek 适配器对非法值
@@ -854,8 +938,35 @@ function loadConfig() {
 
 // ── 状态持久化（QQ 会话 ↔ DSH 会话映射） ─────────────────────────────────────
 let state = { sessions: {} };
+// sessions.json 读不动/读坏时必须**大声失败**，不能静默回落成空映射：
+// 那会让每个 QQ 会话都拿到一个全新的 DSH 会话（上下文全丢），而紧接着的
+// saveState() 会把这份空映射原子写回磁盘 —— 一次截断/占用/写满就变成永久丢失。
+// 与表情库、黑话库一样走「只读不写」降级：保留原文件，等人来处理。
+let stateWritable = true;
 function loadState() {
-  const loaded = readJsonSafe(STATE_FILE, null);
+  let raw;
+  try {
+    raw = fs.readFileSync(STATE_FILE, 'utf8');
+  } catch (error) {
+    state = { sessions: {}, sessionPolicies: {} };
+    if (error?.code !== 'ENOENT') {
+      stateWritable = false;
+      log(`⚠️ sessions.json 读取失败，已降级为「只读不写」（不会覆盖原文件）：${error?.message ?? error}`);
+    }
+    return;
+  }
+  let loaded = null;
+  if (raw.trim() !== '') {
+    try {
+      const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+      loaded = JSON.parse(text);
+    } catch (error) {
+      state = { sessions: {}, sessionPolicies: {} };
+      stateWritable = false;
+      log(`⚠️ sessions.json 内容损坏，已降级为「只读不写」（不会覆盖原文件，请先备份再修复）：${error?.message ?? error}`);
+      return;
+    }
+  }
   if (loaded && loaded.sessions && typeof loaded.sessions === 'object') state = loaded;
   else state = { sessions: {} };
   if (!state.sessionPolicies || typeof state.sessionPolicies !== 'object' || Array.isArray(state.sessionPolicies)) state.sessionPolicies = {};
@@ -863,6 +974,7 @@ function loadState() {
 function saveState() {
   // 统一走原子写：固定 `.tmp` 名 + 无 mode 的手写版本会在外部进程（杀软/备份）
   // 占住 sessions.json.tmp 时抛 EPERM，且写出的文件权限与其它 state 文件不一致。
+  if (!stateWritable) return; // 见 loadState：读失败/损坏时绝不回写，避免把丢失变成永久
   atomicWriteJson(STATE_FILE, state);
 }
 
@@ -1185,7 +1297,17 @@ async function main() {
   let slangTaskChain = Promise.resolve();
 
   // ── 表情包体系（二代仿真）本地知识库 ────────────────────────────────────
-  let stickerEntries = loadStickerStore(STICKER_FILE);
+  // 库文件损坏/读不动时**不能当成空库继续**：下面任何一次 saveStickerStoreSafe 都会把
+  // 「空库」写回去，把 AI 学到的 localNote/tags/usage 永久清零。读失败就显式降级为
+  // 「只读不写」，并留下醒目日志（与 loadSlang 的 slangStoreWritable 同一套路）。
+  let stickerEntries = [];
+  let stickerStoreWritable = true;
+  try {
+    stickerEntries = loadStickerStore(STICKER_FILE);
+  } catch (error) {
+    stickerStoreWritable = false;
+    log(`⚠️ 表情库读取失败，已降级为「只读不写」（不会覆盖原文件）：${error?.message ?? error}`);
+  }
   let stickerSyncedAt = 0; // 上次从 SnowLuma 拉取收藏表情的时间戳（毫秒）
   let lastForcedAgentStickerSync = 0; // AI 强制刷新表情库的最小间隔保护
 
@@ -1194,6 +1316,7 @@ async function main() {
   }
 
   function saveStickerStoreSafe() {
+    if (!stickerStoreWritable) return; // 读失败时绝不回写，避免把「损坏」当成「空库」落盘
     try { saveStickerStore(STICKER_FILE, stickerEntries); } catch (error) { log('保存表情库失败:', error?.message ?? error); }
   }
 
@@ -1339,7 +1462,9 @@ async function main() {
       if (confined) {
         resolved = { path: confined, via: `${r.via}+library-confined` };
       } else {
-        throw new Error(`语音只能从语音库取文件（当前目录：${vc.dir}）；即使是绝对路径也必须位于语音库之内（socialV2.voice.allowAbsolutePath 已不再放宽 AI 通道）。请把音频放进语音库，或用操作者通道（CLI / 控制台）发送库外文件。`);
+        // 只报目录名，不报绝对路径：这条消息会经 MCP 工具错误回给模型，
+        // 而模型面对的是不可信的群聊内容（prompt injection 可能诱导它复述本机路径）。
+        throw new Error(`语音只能从语音库取文件（语音库目录：${path.basename(vc.dir)}）；即使是绝对路径也必须位于语音库之内（socialV2.voice.allowAbsolutePath 已不再放宽 AI 通道）。请把音频放进语音库，或用操作者通道（CLI / 控制台）发送库外文件。`);
       }
     } else {
       // ⚠️ 安全关键：相对路径**只能**在语音库内解析。
@@ -1378,7 +1503,7 @@ async function main() {
     const library = voiceLibrary();
     const hint = library.length
       ? `语音库里现有：${library.slice(0, 12).map((x) => x.name).join('、')}${library.length > 12 ? ` 等 ${library.length} 个` : ''}`
-      : `语音库（${vc.dir}）目前是空的，先把音频文件放进去`;
+      : `语音库（${path.basename(vc.dir)}）目前是空的，先把音频文件放进去`;
     // 按 basename 去扩展名做近似匹配（只用于提示）
     const want = path.basename(raw).toLowerCase();
     const wantNoExt = want.replace(/\.[^.]+$/, '');
@@ -1535,8 +1660,8 @@ async function main() {
     const entry = {
       messageId: sent.messageId ? String(sent.messageId) : null,
       sender: '我',
-      text: display.slice(0, 200),
-      plain: display.slice(0, 200),
+      text: truncateText(display, 200),
+      plain: truncateText(display, 200),
       quoteTargetIsSelf: false,
       isOwner: true,
       ownerLabel: '我',
@@ -2011,7 +2136,7 @@ async function main() {
     if (/进入角色扮演|退出角色扮演|切换角色|设置角色|改角色|换角色|关闭角色扮演|开启角色扮演/.test(text)) return;
     if (!slangWindows.has(key)) slangWindows.set(key, []);
     const win = slangWindows.get(key);
-    win.push({ sender: String(sender || '未知'), text: text.slice(0, 200), time: Date.now() });
+    win.push({ sender: String(sender || '未知'), text: truncateText(text, 200), time: Date.now() });
     if (win.length > 80) win.splice(0, win.length - 80);
     maybeQueueSlangExtraction(key);
   }
@@ -2091,6 +2216,8 @@ async function main() {
   // DSH 侧
   const api = new NodeApiClient(cfg.dsh.baseUrl, undefined, {
     token: cfg.dsh.authToken,
+    // true=用户在 config.json 里显式填的；false=从日志猜的。猜来的不优先于离线铸造。
+    tokenExplicit: cfg.dsh.authTokenExplicit === true,
     header: cfg.dsh.authHeader,
     prefix: cfg.dsh.authPrefix,
     // 默认只允许把 launch token 交给回环地址；远程 DSH 需要显式 opt-in（见 dsh-client.ensureAuth）。
@@ -2304,7 +2431,6 @@ async function main() {
   };
 
   // 从 DSH settings 读取桥接模式；命名空间未注册时回退本地 state/mode.json
-  const VALID_MODES = ['chat', 'closed-agent', 'reserved', 'reserved2'];
   async function refreshMode() {
     try {
       const s = unwrap(await api.settings.describe({}), 'settings.describe');
@@ -2314,8 +2440,10 @@ async function main() {
         dshDefaultPreset = presetNs.value.default;
       }
       const ns = s.namespaces.find((n) => n.ns === 'qq-mode');
-      if (ns?.value && typeof ns.value.mode === 'string' && VALID_MODES.includes(ns.value.mode)) {
-        currentMode = ns.value.mode;
+      // 规范化后再比较：`simulation` 也走这里（见 MODE_INPUT_ALIASES）。
+      const fromDsh = ns?.value ? normalizeModeInput(ns.value.mode) : null;
+      if (fromDsh) {
+        currentMode = fromDsh;
         // DSH 设置页也可配置管理员 QQ；未设置该字段时不覆盖 config.json。
         if (ns.value.ownerQQ !== undefined) {
           try {
@@ -2335,7 +2463,8 @@ async function main() {
       }
     } catch {}
     const local = readJsonSafe(path.join(STATE_DIR, 'mode.json'), null);
-    if (local?.mode && VALID_MODES.includes(local.mode)) currentMode = local.mode;
+    const fromLocal = local ? normalizeModeInput(local.mode) : null;
+    if (fromLocal) currentMode = fromLocal;
     if (typeof local?.closedAgentPreset === 'string' && local.closedAgentPreset) {
       closedAgentPreset = local.closedAgentPreset;
     }
@@ -2485,7 +2614,7 @@ async function main() {
     if (st) {
       // 保留旧 token 在脱敏集合中，但撤销它的调用权限。
       st.agentToken = crypto.randomBytes(24).toString('hex');
-      KNOWN_AGENT_TOKENS.add(st.agentToken);
+      rememberAgentToken(key, st.agentToken);
       st.bootstrapSent = false;
       st.modelSeenSeqs = new Set();
     }
@@ -2654,14 +2783,44 @@ async function main() {
     const configuredToken = String(cfg.consoleToken ?? '').trim();
     const tokenValid = configuredToken.length >= 16 && configuredToken.length <= 128 && /^[A-Za-z0-9_-]+$/.test(configuredToken);
     let consoleToken = tokenValid ? configuredToken : loadOrCreateConsoleToken();
+    // 令牌必须非空才继续。下面鉴权处原来的写法是「令牌为空 ⇒ return true（放行）」，
+    // 注释写着"启动时已自动生成并持久化"—— 等于承认那一行不可达，可它是一条**失败开放**的分支：
+    // 一旦真的空了（写盘异常被吞、以后新增"关闭鉴权"之类的配置），控制台上那些
+    // 改配置 / 发消息 / 读聊天记录的接口会变成完全免鉴权，而 Host 白名单只挡跨机访问、
+    // 挡不住本机进程。这里改成失败关闭：宁可启动时报错，也不要静默开着一个无鉴权的管理 API。
+    if (!consoleToken) throw new Error('控制台令牌为空：拒绝以无鉴权方式启动控制台 API');
     if (!tokenValid && configuredToken) log(`控制台 config.consoleToken 长度/字符不合法，已忽略并回退到自动生成令牌`);
     if (!configuredToken) log(`控制台未配置 consoleToken，已自动生成：${String(consoleToken).slice(0, 6)}…（完整值保存在 state/console-token）`);
     // 二代会话级隔离：MCP 工具调用时若带 x-agent-token，则必须匹配该会话的 agentToken。
     // 控制台/管理端请求不带此头，仍走 consoleToken 管理通道。
+    //
+    // 定长比较：会话令牌同样是凭据，`===` 会在首个不同字符处短路，本机进程理论上
+    // 可用响应时延逐字节试探。与控制台令牌（见下方 timingSafeEqual）保持一致。
+    const tokenEq = (a, b) => {
+      if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+      const x = Buffer.from(a, 'utf8');
+      const y = Buffer.from(b, 'utf8');
+      return x.length === y.length && crypto.timingSafeEqual(x, y);
+    };
     const agentTokenOk = (key, token) => {
       const canonical = canonicalV2Key(key);
       const st = socialV2.conversations.get(canonical ?? key);
-      return !!st && !!st.agentToken && token === st.agentToken;
+      return !!st && !!st.agentToken && tokenEq(token, st.agentToken);
+    };
+    /**
+     * 令牌是否匹配**任意**一个活跃二代会话。
+     *
+     * 用途是集中式纵深防御（见下方 x-agent-call 关卡）：各端点自己那套
+     * `if (x-agent-token && !agentTokenOk(key, token))` 把关的是「这个令牌能不能动这个
+     * 会话」；这里把关的是「这到底是不是一次智能体调用」。两层都需要，因为前者在
+     * 端点漏写时会整个失效。
+     */
+    const isLiveAgentToken = (token) => {
+      if (typeof token !== 'string' || !token) return false;
+      for (const st of socialV2.conversations.values()) {
+        if (st?.agentToken && tokenEq(token, st.agentToken)) return true;
+      }
+      return false;
     };
     // 二代会话工具必须仍命中当前模式的白名单/准入；避免白名单移除后旧 agentToken 继续读状态。
     const v2SessionAllowed = isSessionAllowedInCurrentMode;
@@ -2765,7 +2924,7 @@ async function main() {
       // 令牌是 192 bit 随机值且只监听回环，所以这是纵深防御而非在野漏洞。
       const suppliedToken = String(url.searchParams.get('token') ?? req.headers['x-console-token'] ?? '');
       const tokenMatches = (() => {
-        if (!consoleToken) return true; // 未配置令牌时保持既有行为（启动时已自动生成并持久化）
+        if (!consoleToken) return false; // 上面已拒绝空令牌；真出现也只许失败关闭，绝不 return true
         const a = Buffer.from(suppliedToken, 'utf8');
         const b = Buffer.from(consoleToken, 'utf8');
         if (a.length !== b.length) return false;
@@ -2779,6 +2938,23 @@ async function main() {
           sendJson({ ok: false, error: '未授权：请提供控制台访问令牌' }, 401);
         }
         return;
+      }
+      // 智能体调用隔离（集中关卡）。
+      //
+      // 背景：控制台令牌是「管理端全权」，会话令牌是「只能动自己这个会话」。MCP 工具进程
+      // 两者都持有，所以「这次请求到底是智能体发的还是管理端发的」必须由请求自己声明。
+      // 各端点用 `if (x-agent-token && !agentTokenOk(...))` 做会话绑定校验，但那个写法在
+      // **头缺失时整条跳过** —— 而头缺失恰恰是模型没传 token 时的自然结果
+      // （旧版 mcp-snowluma-safe.js 用 `...(token ? {...} : {})` 直接省略了这个头）。
+      // 于是「漏传令牌」不是被拒绝，而是**升级成控制台全权**：典型的 confused deputy。
+      //
+      // 现在 MCP 端一律带上 x-agent-call: 1（缺令牌时 x-agent-token 为空串），这里只要看到
+      // 这个声明就要求令牌必须命中某个活跃会话，端点自己漏写校验也不会退回管理端。
+      if (req.headers['x-agent-call'] !== undefined) {
+        if (!isLiveAgentToken(req.headers['x-agent-token'])) {
+          sendJson({ ok: false, error: '未授权：智能体调用必须携带有效的会话令牌' }, 403);
+          return;
+        }
       }
       // CSRF 防护：所有写操作必须是 application/json，且（若带 Origin）必须来自本机页面。
       // 默认未配 consoleToken 时，这可阻止任意网页用表单/跨站请求触发
@@ -2859,7 +3035,11 @@ async function main() {
           // 带 agent token 的调用来自 QQ 群里的 AI：只能拿到它自己该知道的运行状态。
           // activity 是**全局**收发摘要（含其它群的发言片段与告警），ownerQQ/白名单属于管理信息，
           // 都不能给到会话级主体，否则 A 群的 AI 能读到 B 群的内容。
-          if (req.headers['x-agent-token']) {
+          // 判定「是不是智能体调用」必须同时看 x-agent-call：无令牌的智能体调用
+          // （旧只读工具的模式探测）不带 x-agent-token，但它同样**绝不能**拿到管理端字段
+          // —— ownerQQ / 白名单 / activity（含其它群的发言片段）是跨群管理信息。
+          // 只认 token 会让这类请求落到下面的完整对象上，等于把 A 群的 AI 变成管理端。
+          if (req.headers['x-agent-token'] || req.headers['x-agent-call'] !== undefined) {
             sendJson({
               mode: currentMode,
               role: rs.role ?? null,
@@ -2894,13 +3074,15 @@ async function main() {
         }
         if (req.method === 'POST' && url.pathname === '/api/mode') {
           const body = await readBody();
-          if (!['chat', 'closed-agent', 'reserved', 'reserved2'].includes(body.mode)) {
-            sendJson({ ok: false, error: 'mode 必须是 chat / closed-agent / reserved / reserved2' }, 400);
+          // 规范名与历史名都接受，落盘的始终是内部拼写（见 MODE_INPUT_ALIASES）。
+          const requestedMode = normalizeModeInput(body.mode);
+          if (!requestedMode) {
+            sendJson({ ok: false, error: `mode 必须是 ${VALID_MODES.join(' / ')}（simulation 为 reserved2 的规范名）` }, 400);
             return;
           }
           const existing = readJsonSafe(path.join(STATE_DIR, 'mode.json'), {});
           const next = {
-            mode: body.mode,
+            mode: requestedMode,
             // 未显式传 preset 时保留原值；原值也没有就留空（= 用 DSH 默认 preset）。
             ...(body.closedAgentPreset !== undefined
               ? { closedAgentPreset: String(body.closedAgentPreset ?? '') }
@@ -2911,36 +3093,40 @@ async function main() {
           closedAgentPreset = next.closedAgentPreset;
           // 写穿到 DSH 设置。refreshMode() 每 5 秒跑一次且以 DSH 的值为准（插件的 base 保证
           // 该命名空间永远有值），所以只写本地 state/mode.json 会在下一次轮询时被静默回滚。
+          // 写穿的是**内部拼写**（`simulation` 会写成 `reserved2`）：DSH 里那份值会被 refreshMode
+          // 读回来当 `currentMode` 用，存规范名会让下游那些 `=== 'reserved2'` 判断失效。
           let dshSynced = false;
           try {
             // unwrap() 在 result.ok 为 false 时直接抛错，所以能执行到下一行即代表写穿已成功
             // （不要在这里再判断 updated?.ok —— 解包后的值恒为真，那样的分支是死代码）。
-            unwrap(await api.settings.update({ ns: 'qq-mode', patch: { mode: body.mode } }), 'settings.update');
+            unwrap(await api.settings.update({ ns: 'qq-mode', patch: { mode: requestedMode } }), 'settings.update');
             dshSynced = true;
           } catch (error) {
             log(`控制台：模式写穿 DSH 设置失败（${error?.message ?? error}）；本次仅写本地，下次 DSH 轮询会覆盖回滚`);
           }
-          if (currentMode === 'reserved' && body.mode !== 'reserved') {
+          // 下面这两个判断比较的是「模式真的变了吗」。必须用归一后的值：拿 `body.mode` 比，
+          // 把 `simulation` 与 `reserved2` 当成两种模式，会在模式其实没变时清掉二代定时器与排队投递。
+          if (currentMode === 'reserved' && requestedMode !== 'reserved') {
             cleanupSocialForModeChange();
             log('控制台：模式离开一代仿真模式，清理社交状态');
           }
-          if (currentMode === 'reserved2' && body.mode !== 'reserved2') {
+          if (currentMode === 'reserved2' && requestedMode !== 'reserved2') {
             clearAllSocialV2Timers();
             drainAllPromptQueues('模式切换，已取消排队中的投递');
             log('控制台：模式离开二代仿真模式，清理 reserved2 定时器与排队投递');
           }
-          currentMode = body.mode;
-          lastMode = body.mode;
+          currentMode = requestedMode;
+          lastMode = requestedMode;
           reconcileSessionPolicies();
-          if (body.mode === 'reserved2') {
+          if (requestedMode === 'reserved2') {
             for (const key of socialV2.conversations.keys()) {
               setupSleepTimerV2(key);
               scheduleProactiveCheckV2(key);
             }
             log('控制台：模式进入二代仿真模式，重建有限睡眠定时器');
           }
-          log(`控制台：模式已设置为 ${body.mode}${next.closedAgentPreset ? `（closed-agent preset: ${next.closedAgentPreset}）` : ''}${dshSynced ? '' : ' [仅本地，DSH 未同步]'}`);
-          sendJson({ ok: true, mode: body.mode, closedAgentPreset: next.closedAgentPreset, dshSynced });
+          log(`控制台：模式已设置为 ${requestedMode}${next.closedAgentPreset ? `（closed-agent preset: ${next.closedAgentPreset}）` : ''}${dshSynced ? '' : ' [仅本地，DSH 未同步]'}`);
+          sendJson({ ok: true, mode: requestedMode, closedAgentPreset: next.closedAgentPreset, dshSynced });
           return;
         }
         if (req.method === 'POST' && url.pathname === '/api/role') {
@@ -3008,7 +3194,7 @@ async function main() {
           const body = await readBody();
           const next = applyRoleInjectLimit(body.maxInjectChars);
           const configFile = path.join(ROOT, 'config.json');
-          const file = readJsonSafe(configFile, null, true);
+          const file = readConfigObject(configFile);
           file.role = { ...(file.role ?? {}), maxInjectChars: next };
           atomicWriteJson(configFile, file);
           cfg.role = { ...(cfg.role ?? {}), maxInjectChars: next };
@@ -3402,7 +3588,7 @@ async function main() {
           const oldPreset = cfg.slang?.learnerPreset;
           const oldWorkspaceTitle = cfg.slang?.workspaceTitle;
           const configFile = path.join(ROOT, 'config.json');
-          const file = readJsonSafe(configFile, null, true);
+          const file = readConfigObject(configFile);
           const merged = { ...(file.slang ?? {}), ...body };
           if (typeof merged.enabled === 'boolean') merged.enabled = merged.enabled;
           else if (merged.enabled !== undefined) merged.enabled = merged.enabled === true;
@@ -3467,7 +3653,7 @@ async function main() {
           const toNum = (arr) => Array.isArray(arr) ? [...new Set(arr.map((x) => Number(String(x).trim())).filter((n) => Number.isFinite(n)))] : undefined;
           const configFile = path.join(ROOT, 'config.json');
           // fail-fast：配置文件损坏时直接 500，绝不回写，避免把整个配置清成只剩 allow/deny/ownerQQ
-          const file = readJsonSafe(configFile, null, true);
+          const file = readConfigObject(configFile);
           const allow = {
             private: toNum(body.allow?.private) ?? (file.allow?.private ?? []),
             groups: toNum(body.allow?.groups) ?? (file.allow?.groups ?? [])
@@ -3554,7 +3740,7 @@ async function main() {
           catch (error) { sendJson({ ok: false, error: error?.message ?? '思考强度无效' }, 400); return; }
           const configFile = path.join(ROOT, 'config.json');
           // fail-fast：配置损坏时直接 500，绝不回写（与白名单接口同语义）
-          const file = readJsonSafe(configFile, null, true);
+          const file = readConfigObject(configFile);
           file.dsh = { ...(file.dsh ?? {}), reasoningEffort: effort };
           atomicWriteJson(configFile, file);
           cfg.dsh = { ...(cfg.dsh ?? {}), reasoningEffort: effort };
@@ -3570,12 +3756,14 @@ async function main() {
           sendJson({
             security: cfg.security ?? { interceptNotify: true },
             // state/ 的 ACL 收紧结果：Windows 上改 ACL 需要管理员权限，未提权时会失败。
-            // 控制台据此显示警告与可复制的提权命令（而不是让用户以为已经安全）。
+            // 控制台据此显示警告与可复制的命令（而不是让用户以为已经安全）。
+            // 命令必须取自 state-acl 的**安全**版本：把 (OI)(CI) 授权和 /T 混在一句里
+            // 会把子文件 DACL 清空，用户照抄就会把自己的 state/ 弄坏。
             stateDir: {
               hardened: stateDirHardened,
               path: STATE_DIR,
               manualCommand: process.platform === 'win32'
-                ? `icacls "${STATE_DIR}" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F" /grant:r "Administrators:(OI)(CI)F" /T /C`
+                ? manualDirCommand(STATE_DIR)
                 : `chmod 700 "${STATE_DIR}"`
             }
           });
@@ -3591,7 +3779,7 @@ async function main() {
             return;
           }
           const configFile = path.join(ROOT, 'config.json');
-          const file = readJsonSafe(configFile, null, true);
+          const file = readConfigObject(configFile);
           const next = { ...(file.security ?? {}), ...body };
           if (typeof next.interceptNotify === 'boolean') next.interceptNotify = next.interceptNotify;
           else if (next.interceptNotify !== undefined) next.interceptNotify = Boolean(next.interceptNotify);
@@ -3623,7 +3811,7 @@ async function main() {
             return;
           }
           const configFile = path.join(ROOT, 'config.json');
-          const file = readJsonSafe(configFile, null, true);
+          const file = readConfigObject(configFile);
           // 手动令牌写入 config.json（用户可见、可再改）；随机令牌写入 state/console-token 并清空 config 中的手动值。
           file.consoleToken = generated ? '' : newToken;
           atomicWriteJson(configFile, file);
@@ -3693,7 +3881,7 @@ async function main() {
           const body = await readBody();
           const configFile = path.join(ROOT, 'config.json');
           // fail-fast：配置文件损坏时直接 500，绝不回写，避免把整个配置清成只剩 social
-          const file = readJsonSafe(configFile, null, true);
+          const file = readConfigObject(configFile);
           const merged = { ...(file.social ?? {}), ...body };
           // 新分句逻辑不再使用旧字段：保存时统一清理，避免旧配置残留
           for (const k of ['burstProbability', 'burstMaxMessages', 'followUpEnabled', 'followUpProbability', 'followUpDelayMinMs', 'followUpDelayMaxMs', 'followUpCooldownMs']) {
@@ -3819,8 +4007,20 @@ async function main() {
         if (req.method === 'POST' && url.pathname === '/api/socialV2/config') {
           const body = await readBody();
           const configFile = path.join(ROOT, 'config.json');
-          const file = readJsonSafe(configFile, null, true);
-          const current = file.socialV2 ?? {};
+          const file = readConfigObject(configFile);
+          // current 必须是「当前**生效**的 socialV2」，而不是文件里恰好写着的那一份。
+          //
+          // config.json 里没有 socialV2 段（或该段不是普通对象）时，旧写法 current={} 会让下面所有
+          // `current.xxx ?? 默认` 的兜底全部落空，并把只剩本次提交字段的段落盘。最危险的一处是工具开关
+          // 归一化：`typeof merged.tools[k] !== 'boolean'` 时写的是 `current.tools?.[k] !== false` ——
+          // current 为空 → undefined !== false → true，于是**一次控制台保存就把默认关闭的
+          // setStickerRemark / sendVoice 静默打开**（它们默认 false 是有意的：一个是风险操作，
+          // 一个是需要先准备语音库的强表达）。cfg.socialV2 是「文件 + 默认值」深度合并后的运行时配置，
+          // 用它兜底才和真正生效的设置一致（也就不会再出现"文件里没有 → 保存一次就变了"）。
+          const fileV2 = (file.socialV2 && typeof file.socialV2 === 'object' && !Array.isArray(file.socialV2))
+            ? file.socialV2
+            : null;
+          const current = fileV2 ?? ((cfg.socialV2 && typeof cfg.socialV2 === 'object') ? cfg.socialV2 : {});
           const merged = { ...current, ...body };
           // 子对象必须是非 null 对象；null/数组/基本类型会覆盖默认值导致工具开关被绕过，这里直接保留当前值。
           for (const sub of ['tools', 'wake', 'send', 'wait', 'proactive', 'sticker', 'feedback', 'context']) {
@@ -4017,8 +4217,7 @@ async function main() {
               api.events.forget?.(sid);
             }
             delete state.sessionPolicies[key];
-            const removedV2 = socialV2.conversations.get(key);
-            if (removedV2?.agentToken) KNOWN_AGENT_TOKENS.delete(removedV2.agentToken);
+            forgetAgentToken(key);
             socialV2.conversations.delete(key);
             seenForwardIds.delete(key);
           }
@@ -4403,7 +4602,11 @@ async function main() {
           }
           if (!st.bootstrapSent) st.bootstrapSent = true;
           saveSocialV2State();
-          sendWakePromptV2(key, reason);
+          // 和其它唤醒入口保持一致：sendWakePromptV2 是异步的，这里不 await（不能让 HTTP 回复
+          // 等一个可能卡几十秒的模型回合），但必须挂 catch。裸调用一旦 reject 就是
+          // unhandledRejection：Node 会打警告甚至按配置退出进程，而 HTTP 那边已经回了 {ok:true}，
+          // 表面上"唤醒成功"，实际上谁也不知道它失败了。
+          void sendWakePromptV2(key, reason).catch((error) => log(`[reserved2] 手动唤醒异常 ${key}:`, error?.message ?? error));
           log(`控制台：手动唤醒 ${key}（${reason}）`);
           sendJson({ ok: true, key, reason });
           return;
@@ -4558,8 +4761,11 @@ async function main() {
             : (isRawString ? [String(rawMessages).trim()].filter(Boolean) : []);
           const replyToMessageId = body.replyToMessageId;
           const atUserId = body.atUserId ?? null;
-          // 二代不再按空格自动分条：字符串就是一条消息；数组模式原样使用调用方间隔。
-          const gapMode = (isRawString && messages.length > 1) ? 'auto' : (body.gapMode === 'fixed' || body.gapMode === 'byLength' ? body.gapMode : 'auto');
+          // 二代不再按空格自动分条：字符串就是一条消息，数组模式原样使用调用方间隔。
+          // 旧写法是 `(isRawString && messages.length > 1) ? 'auto' : ...` —— 上面 messages 的构造
+          // 保证 isRawString 为真时 length 恒为 1，这个分支永远不可达，留着只会让人以为
+          // "字符串多段时有特殊间隔策略"。
+          const gapMode = (body.gapMode === 'fixed' || body.gapMode === 'byLength') ? body.gapMode : 'auto';
           const gapMs = Number(body.gapMs);
           const gaps = Array.isArray(body.gaps) ? body.gaps.map(Number) : [];
           if (!key || !messages.length) {
@@ -5112,8 +5318,8 @@ async function main() {
             st.recentMessages.push({
               messageId: sent.messageId ? String(sent.messageId) : null,
               sender: '我',
-              text: text.slice(0, 200),
-              plain: text.slice(0, 200),
+              text: truncateText(text, 200),
+              plain: truncateText(text, 200),
               quoteTargetIsSelf: false,
               isOwner: true,
               ownerLabel: '我',
@@ -5630,7 +5836,7 @@ async function main() {
           fTimes.push(fNow);
           feedbackTimes.set(key, fTimes.slice(-100));
           const maxLength = Math.max(1, Number(cfg.socialV2?.feedback?.maxLength) || 500);
-          const message = rawMessage.slice(0, maxLength);
+          const message = truncateText(rawMessage, maxLength);
           appendFeedbackEntry({ id: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8), key, level, message, time: new Date().toISOString() });
           log(`[reserved2] AI 反馈 (${key}) [${level}]: ${message.slice(0, 80)}`);
           appendActivity(`${key} [reserved2] AI 反馈 [${level}]：${message.slice(0, 80)}`);
@@ -6142,7 +6348,10 @@ async function main() {
           const isReply = url.pathname === '/api/send/reply';
           const targetId = isPrivate ? String(body.userId ?? '').trim() : String(body.groupId ?? '').trim();
           const message = unquoteJsonString(String(body.message ?? '').trim());
-          const replyToMessageId = isReply ? body.replyToMessageId : body.replyToMessageId;
+          // 引用 id 与端点无关：/api/send/reply 与另两个端点都允许带（是否真的引用由下游按 id 判断）。
+          // 旧写法 `isReply ? body.replyToMessageId : body.replyToMessageId` 两个分支一模一样，
+          // 保留 isReply 变量只是为了下面的端点语义判断，别再让人以为这里有过分支逻辑。
+          const replyToMessageId = body.replyToMessageId;
           const atUserId = body.atUserId ?? null;
           const key = isPrivate ? `private:${targetId}` : `group:${targetId}`;
           // 安全边界：发送工具只允许在 closed-agent（管理员私聊）或 reserved2（二代 AI 带会话令牌）下使用；
@@ -6281,8 +6490,7 @@ async function main() {
           wakeConfigUpdatedKeys.delete(key);
           markReadCalledKeys.delete(key);
           wakeConfigMissCount.delete(key);
-          const removedV2 = socialV2.conversations.get(key);
-          if (removedV2?.agentToken) KNOWN_AGENT_TOKENS.delete(removedV2.agentToken);
+          forgetAgentToken(key);
           socialV2.conversations.delete(key);
           seenForwardIds.delete(key);
           saveSocialV2State();
@@ -6342,10 +6550,10 @@ async function main() {
           slangSubmitTimes.clear();
           cancelAllSocialTimers();
           clearAllSocialV2Timers();
-          for (const st of socialV2.conversations.values()) {
-            if (st?.agentToken) KNOWN_AGENT_TOKENS.delete(st.agentToken);
-          }
+          // 清空工作区 = 所有会话连同 token 一起作废，两张表整体清掉（比逐会话摘除更不容易漏）。
           socialV2.conversations.clear();
+          CONVERSATION_TOKENS.clear();
+          KNOWN_AGENT_TOKENS.clear();
           saveSocialV2State();
           state.sessions = {};
           state.sessionPolicies = {};
@@ -6502,7 +6710,20 @@ async function main() {
         for (const piece of splitByPlaceholder(tok)) {
           // 占位符整块输出；普通文本仍按 safeMax 切
           if (piece.isPlaceholder) { out.push(piece.text); continue; }
-          for (let i = 0; i < piece.text.length; i += safeMax) out.push(piece.text.slice(i, i + safeMax));
+          for (let i = 0; i < piece.text.length;) {
+            let end = Math.min(i + safeMax, piece.text.length);
+            // 绝不在代理对（emoji、部分生僻字）中间下刀：硬切会产生「半个 emoji」，
+            // 两个孤立代理各自成为一条 QQ 消息、永远无法再拼回，群友看到的就是乱码方块。
+            // 退一格把整个字符让给下一段；若退成空串就不退（safeMax 极小时），
+            // 宁可硬切也要保证循环一定前进。逻辑内联在此，函数保持自包含
+            // —— test-voice.mjs 会把这个函数的源码单独 eval 出来测。
+            if (end < piece.text.length && end - i > 1) {
+              const last = piece.text.charCodeAt(end - 1);
+              if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+            }
+            out.push(piece.text.slice(i, end));
+            i += end > i ? end - i : safeMax;
+          }
         }
       } else if (cur.length + tok.length <= safeMax) {
         cur += tok;
@@ -6610,7 +6831,13 @@ async function main() {
           else await withTimeout(bot.sendGroupMessage(Number(id), text(escapeCqText(msg))), SEND_TIMEOUT_MS, `QQ发送 ${kind}:${id}`);
           sent.push(msg);
         })
-        .catch((error) => log(`QQ 发送失败 (${key}):`, error?.message ?? error));
+        .catch((error) => {
+          log(`QQ 发送失败 (${key}):`, error?.message ?? error);
+          // 与 sendToQQ 同样的失败记账。少了这一步，调用方 `lastSendSucceeded(key)`
+          // 会把「一条都没发出去」当成「我已经说过话了」：刷新 lastActiveMessageAt /
+          // lastAiReplyAt 并抑制后续接话，而群里什么都没收到 —— 静默丢回复。
+          lastSendFailed.set(key, true);
+        });
       if (!isLast) {
         const useLong = longProb > 0 && Math.random() < longProb;
         const delay = useLong ? randInt(longMin, longMax) : randInt(min, max);
@@ -7472,7 +7699,7 @@ async function main() {
         pendingThoughts: [],
         memberImpressions: {}
       };
-      KNOWN_AGENT_TOKENS.add(st.agentToken);
+      rememberAgentToken(key, st.agentToken);
       socialV2.conversations.set(key, st);
       scheduleProactiveCheckV2(key);
       setupSleepTimerV2(key);
@@ -7555,7 +7782,7 @@ async function main() {
           }
           // 仍使用默认唤醒配置的会话，在重启加载时同步到当前推荐/默认参数。
           refreshDefaultWakeConfigV2(st);
-          KNOWN_AGENT_TOKENS.add(st.agentToken);
+          rememberAgentToken(key, st.agentToken);
           socialV2.conversations.set(key, st);
           // 重启后从已持久化的消息与 seenForwardIds 字段重建“本会话见过的 forward id”
           {
@@ -7736,10 +7963,10 @@ async function main() {
           const set = new Set([...(existing.participants || []), ...extra.participants.map((p) => redactKnownTokensOnly(String(p)))]);
           existing.participants = [...set].slice(0, 10);
         }
-        if (extra.pendingQuestion) existing.pendingQuestion = redactKnownTokensOnly(String(extra.pendingQuestion)).slice(0, 200);
+        if (extra.pendingQuestion) existing.pendingQuestion = truncateText(redactKnownTokensOnly(String(extra.pendingQuestion)), 200);
       } else {
         st.activeTopics.push({
-          text: text.slice(0, 200),
+          text: truncateText(text, 200),
           lastMentionAt: Date.now(),
           participants: Array.isArray(extra.participants) ? extra.participants.map((p) => redactKnownTokensOnly(String(p))).slice(0, 10) : [],
           pendingQuestion: redactKnownTokensOnly(String(extra.pendingQuestion || '')).slice(0, 200)
@@ -7845,8 +8072,8 @@ async function main() {
     const arr = social.recentMessages.get(key);
     arr.push({
       sender,
-      text: String(textContent).slice(0, 200),
-      plain: String(plainText ?? textContent).slice(0, 200),
+      text: truncateText(String(textContent), 200),
+      plain: truncateText(String(plainText ?? textContent), 200),
       quoteTargetIsSelf: !!quoteTargetIsSelf,
       isOwner: !!isOwner,
       media: Array.isArray(media) ? media : [],
@@ -7863,7 +8090,7 @@ async function main() {
       social.pendingSummaries.set(key, { items: [], since: Date.now() });
     }
     const entry = social.pendingSummaries.get(key);
-    entry.items.push({ sender, text: String(textContent).slice(0, 200), plain: String(plainText ?? textContent).slice(0, 200), isOwner: !!isOwner, media: Array.isArray(media) ? media : [], messageId: messageRef ? String(messageRef) : '', hasMedia: Array.isArray(media) && media.length > 0, time: Date.now() });
+    entry.items.push({ sender, text: truncateText(String(textContent), 200), plain: truncateText(String(plainText ?? textContent), 200), isOwner: !!isOwner, media: Array.isArray(media) ? media : [], messageId: messageRef ? String(messageRef) : '', hasMedia: Array.isArray(media) && media.length > 0, time: Date.now() });
     if (entry.items.length > 60) entry.items.shift();
   }
 
@@ -8295,7 +8522,12 @@ async function main() {
     }
   }
 
-  if (isSocialEnabled() || cfg.social?.enabled !== false) {
+  // 旧写法是 `isSocialEnabled() || cfg.social?.enabled !== false` —— 恒等于右边那一项
+  // （isSocialEnabled() 本身就蕴含 cfg.social?.enabled !== false，左侧永远不可能单独为真），
+  // 留着只会让人误以为"reserved 模式下才启动循环"。这里启动的只是一个 5 秒心跳，
+  // 每跳自己会用 isSocialEnabled() 判断当前模式（见 socialLoopTick 第一行）；
+  // 真正决定启不启动的只有配置里的显式关闭开关。
+  if (cfg.social?.enabled !== false) {
     startSocialLoop();
   }
 
@@ -8319,7 +8551,13 @@ async function main() {
       if (!fs.existsSync(resolved)) return '';
       const stateStat = fs.statSync(ROLE_STATE_FILE);
       const roleStat = fs.statSync(roleFile);
-      const cacheKey = `${stateStat.mtimeMs}:${roleStat.mtimeMs}`;
+      // 缓存 key 必须带上**文件名与文件大小**，不能只看 mtime：
+      // ① 有些文件系统 mtime 只有秒级粒度（或时钟回拨），同一 tick 内把角色卡重写成新人格，
+      //    两个 mtime 完全相同 → 缓存命中 → 注入的还是旧人格，而且是每条提示词都错；
+      //    带上名字后，切换角色（例如 a.md → b.md）永远不会误命中。
+      // ② 同名的原地重写若长度变了（大多数编辑都会变），size 变化也能击穿缓存。
+      // 代价只是多几次 stat，比"热注入路径上一直发旧人格"划算得多。
+      const cacheKey = `${safeName}:${stateStat.mtimeMs}:${stateStat.size}:${roleStat.mtimeMs}:${roleStat.size}`;
       if (roleHintCache.key === cacheKey) return roleHintCache.raw;
       const raw = fs.readFileSync(roleFile, 'utf8');
       roleHintCache = { key: cacheKey, raw };
@@ -8333,7 +8571,7 @@ async function main() {
   function roleHintForMode(mode) {
     const selected = selectRoleText(roleRawContent(), mode);
     if (!selected) return '';
-    return selected.length > roleInjectMaxChars ? selected.slice(0, roleInjectMaxChars) : selected;
+    return selected.length > roleInjectMaxChars ? truncateText(selected, roleInjectMaxChars) : selected;
   }
   function currentRoleHint() {
     return roleHintForMode('v1');
@@ -8430,8 +8668,10 @@ async function main() {
     // 先按 〔二代〕/〔一代〕 标记筛小节；下面的逐行过滤只是给「没标记的老卡片」兜底。
     const raw = roleHintForMode('v2');
     if (!raw) return '';
-    // 一代仿真模式专用指令整行过滤，避免污染二代工具协议
-    const GEN1_ROLE_LINE_RE = /\[SILENT\]|空格分隔|按空格|用空格|空格分句|空格代表|自动转发|回复会自动|输出\s*\[SILENT\]/i;
+    // 一代仿真模式专用指令整行过滤，避免污染二代工具协议。
+    // 用 role-card.js 导出的那份（文件顶部已 import）：这里原先又抄了一份同源正则，
+    // 两份"哪行算一代指令"的安全相关过滤器一旦漂移，就会出现"selectRoleText 认为是二代内容、
+    // 这里却把一代指令漏进二代提示词"这种只在特定角色卡上复现的错。
     const lines = raw.split('\n');
     const kept = [];
     let inExampleSection = false;
@@ -8694,9 +8934,9 @@ async function main() {
       messageId: messageId != null ? String(messageId) : null,
       sender,
       userId: userId != null ? String(userId) : null,
-      text: String(textContent).slice(0, 200),
-      plain: String(plainContent ?? textContent).slice(0, 200),
-      tail: String(plainContent ?? textContent).slice(-200),
+      text: truncateText(String(textContent), 200),
+      plain: truncateText(String(plainContent ?? textContent), 200),
+      tail: truncateTextTail(String(plainContent ?? textContent), 200),
       quoteTargetIsSelf: !!quoteTargetIsSelf,
       isOwner: !!isOwner,
       ownerLabel: isOwner ? `管理员（ownerQQ ${cfg.ownerQQ ?? ''}）` : '',
@@ -8892,7 +9132,7 @@ async function main() {
     const safe = redactSensitive(parsed);
     let text;
     try { text = JSON.stringify(safe); } catch { text = String(safe); }
-    if (text.length > 2000) text = text.slice(0, 2000) + '…(truncated)';
+    if (text.length > 2000) text = truncateText(text, 2000) + '…(truncated)';
     return text;
   }
 
@@ -9538,8 +9778,7 @@ async function main() {
           wakeConfigUpdatedKeys.delete(key);
           markReadCalledKeys.delete(key);
           wakeConfigMissCount.delete(key);
-          const removedV2 = socialV2.conversations.get(key);
-          if (removedV2?.agentToken) KNOWN_AGENT_TOKENS.delete(removedV2.agentToken);
+          forgetAgentToken(key);
           socialV2.conversations.delete(key);
           seenForwardIds.delete(key);
           saveSocialV2State();
