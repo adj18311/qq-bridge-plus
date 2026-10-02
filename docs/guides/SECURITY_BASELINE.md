@@ -80,7 +80,41 @@
 | 路径校验（读点） | `roleRawContent()` 等 | 人格名在**读取点**也做 `sanitizeRoleName` + `path.resolve` 包含性校验（`state/current-role.json` 是用户可直接编辑的文件） |
 | 原型污染 | 记忆写入/加载 | `__proto__` / `constructor` / `prototype` 键在写入与加载两侧都被拒绝；配置合并用对象展开（不触发 setter） |
 
-### 6. 网络
+### 6. 与 DSH 沙箱的 ACL 交互（DSH 0.2.0 起；**这是有意的取舍，不是缺陷**）
+
+DSH 的 Windows 文件沙箱按**能力 SID** 授权：SID 由 `sha256(规范化工作区路径)` 派生
+（形如 `S-1-4-<a>-<b>`；同一个工作区路径每次会话派生出同一个 SID，**重命名工作区会换一个**），
+沙箱进程跑在 `WRITE_RESTRICTED` + Low 完整性的令牌里，**写权限要靠工作区根上那条
+可继承 ACE 沿继承链传下来**。DSH 只在首次进入工作区时下发一次
+（之后有 exact-ACE 跳过，不会重新下发），也从不修改任何对象的保护标志。
+
+由此产生一条必须知道的交互：
+
+| 事实 | 后果 |
+| --- | --- |
+| `harden-state-acl.mjs` 用 `/inheritance:r` 切断 `state/` 与 `config.json` 的继承链 | 这两处的 DACL 里**没有**能力 SID ⇒ **DSH 沙箱会话写不进去**（EPERM / Access denied），而无沙箱终端完全正常 |
+| 这是收紧凭据的**唯一手段**（Windows 上 `mode 0o600` 是空操作） | 取舍明确：**保住凭据不外泄** > 沙箱内可写 |
+
+因此本项目的规矩是：**任何从沙箱里跑的东西都不得写 `state/`**。
+测试夹具、探针、self-test 的临时产物一律落在系统临时目录
+（见 `scripts/probe-auth.mjs` 的 `probeWorkspaceDir`）。
+
+诊断：`npm run diagnose:acl` —— 只读扫描，列出全部被切断继承的路径并分成
+「有意收紧（`state/`、`config.json`）」与「非预期收紧」两类。
+
+> ⛔ **绝不要用 `/inheritance:e` 去"修好" `state/` 的沙箱写入**：恢复继承会把父目录的
+> 可继承 ACE 一起带回来，其中包含 `NT AUTHORITY\Authenticated Users: Modify` 与
+> `BUILTIN\Users: ReadAndExecute` —— 那正是收紧时要摘掉的两条，等于把控制台令牌、
+> SnowLuma OneBot 令牌与全部 QQ 聊天记录重新开放给本机任何已登录用户。
+
+> ⚠️ 已知的**非预期**收紧（2026-09-29 实测）：`plugins/qq-agent-presets/**` 与
+> `plugins/qq-mode-console/**` 的内容也被切断了继承（`plugins/` 自身没有）。
+> **本仓库没有任何脚本这么做**，来源不明（手工 icacls 或仓库外工具）。
+> 它的副作用是沙箱会话里改不动 L7 守卫（`qq-tool-restrict.mjs`）。
+> 这两处不含凭据，恢复继承不涉及泄密风险 —— 是否恢复由使用者决定（`npm run diagnose:acl`
+> 会打印命令）。`state/` 不在此列。
+
+### 7. 网络
 
 `src/safe-fetch.js`（仅暴露给 agent 的只读联网）：
 
@@ -106,15 +140,19 @@
 | R7 | **`self-test.js` 只证明链路通** | 不做断言 | 它是连通性探针，不是回归套件（回归在 `npm run test:audit`） |
 | R8 | **单人维护、无外部安全审计** | 有离线回归 + 本文档 | 计划在 QSH v1.0 发布前做一次外部/对抗式复审 |
 | R9 | **`state/` 的 ACL 收紧可能失败**（未提权且目录属主权限被策略收走时） | `scripts/harden-state-acl.mjs` 会自动提权重试一次；仍失败则明确告警 + 给出可复制命令 + 控制台告警条 | 改 ACL 属于需要特权的操作；**降级为"明确告警"而不是"阻断启动"**是刻意的取舍（否则用户会为了能启动而关掉整条安全链路）。QSH M2 会用口令派生 + HttpOnly Cookie 把最敏感的控制台凭据从明文落盘里拿掉 |
+| R10 | **收紧 `state/` 后，DSH 沙箱会话写不进 `state/`**（见 §2.6） | 有意取舍，非缺陷；诊断见 `npm run diagnose:acl` | 两者不可兼得：能力 SID 只能靠继承下发，而切断继承正是防"本机其他用户读令牌"的唯一手段。**代价已被接受并写进文档**，项目自己的测试夹具/探针据此改用系统临时目录 |
+| R11 | **`plugins/**` 内容被意外切断继承，沙箱里改不动 L7 守卫** | 来源不明（本仓库无此脚本）；`npm run diagnose:acl` 会列出并打印恢复命令 | 该处不含凭据，恢复继承无泄密风险；但若不恢复，被沙箱约束的 DSH agent 就无法维护工具守卫 —— 需要人工在无沙箱终端改 |
 
 ---
 
 ## 四、发布前必须跑的检查（回归清单）
 
 ```bash
-npm run test:audit          # 27 个离线回归脚本（含安全专项），必须全绿
-npm run verify:adaptation   # DSH 适配一致性（preset/工具守卫/MCP 挂载）
+npm run test:audit          # 30 个离线回归脚本（含安全专项），必须全绿
+npm run verify:adaptation   # DSH 适配一致性（preset/工具守卫/MCP 挂载/活 DSH 实测）
 npm run verify:persona      # 人格配置一致性
+npm run diagnose:acl        # ACL 收紧路径盘点（只读；需在**无沙箱**终端跑，见 §2.6）
+npm run scan:tool-names     # 守卫名单 vs 已安装 DSH 的真实工具名（每次升级 DSH 后跑）
 node --check src/bridge.js  # 语法门禁（大文件改动后必跑）
 ```
 
