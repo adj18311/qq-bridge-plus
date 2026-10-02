@@ -70,6 +70,28 @@ export const inject = ['tools']
  * 除了 MCP 工具就只有 `ask_user_question`、`todo_write`、`dev_mode_*`、
  * `dsh_rollback`、`dsh_snapshot`、`incident_resolved`。也就是说
  * **`dsh_snapshot`/`dsh_rollback` 真的进过仿真会话的 schema**——本名单初版漏了它们。
+ *
+ * 2026-09-29 针对 DSH 0.2.0-rc.2 重新对账（同样不是逐个打补丁，而是拿安装包重扫）。
+ * 对账工具：`node scripts/scan-dsh-tool-names.mjs`（可重复运行；它从已安装的
+ * `@deepseek-ai/dsh-*` 里抽真实工具名，与本名单求双向差）。
+ * 该轮结论：**旧名字全部还在**（0 个假名，0.1.7 那次替换后没有再次改名），
+ * 但 0.2.0 的包里多出 13 个「危险语义」名字是名单没覆盖的，逐条判定如下：
+ *
+ *   ① 真的会进仿真会话、必须隐藏的（它们在**全局层**，所有 preset 都继承）：
+ *      · `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`
+ *        —— `dsh-base` 的 `mcp-resources` 行**默认启用**（cordis.patch.yml 里没有
+ *        disabled），所以每个 QQ 会话都会继承这三个工具。`read_mcp_resource` 的
+ *        `server` 参数可以指向**任意已配置的 MCP server**：用户一旦挂了
+ *        filesystem 之类的能力型 MCP，QQ 群就通过它拿到了文件读取权。
+ *        这正是 L7 要挡的那类越权路径，因此必须从 schema 里隐藏。
+ *   ② 会派生 agent / 执行外部代码（当前只在 DSH 自带 preset 里挂载，QQ preset 不挂；
+ *      列进来是**回归网**：别的 composition 一旦把它们推进全局层就被挡住）：
+ *      · `subagent_codex` / `subagent_claude_code`（Codex / Claude Code 子智能体）
+ *      · `spawn_teammate` / `team_task_create|get|list|update`（实验性 Team 模式）
+ *   ③ 等于把插件装载权交出去 ⇒ 任意代码执行：
+ *      · `plugin_manager`（安装/卸载/启停插件，内部会 spawn pnpm）
+ *   ④ 无人值守的自我调度（`dsh-schedule`，0.2.0 起是可选 bundle）：
+ *      · `schedule_create` / `schedule_list` / `schedule_update` / `schedule_delete`
  */
 const LOCAL_EXECUTION_TOOLS = [
   // shell / 进程
@@ -93,6 +115,16 @@ const LOCAL_EXECUTION_TOOLS = [
   // SAFE_EXACT 允许的无害模型侧工具，两边不能自相矛盾。
   'job_list', 'job_output', 'job_kill', 'skill', 'present',
   'get_goal', 'create_goal', 'update_goal',
+  // 0.2.0 新增对账（见上方长注释的 4 类判定）：
+  //   ① 全局层默认启用 ⇒ 真的会进仿真会话
+  'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
+  //   ② 派生 agent / 执行外部代码
+  'subagent_codex', 'subagent_claude_code',
+  'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
+  //   ③ 插件装载权（= 任意代码执行）
+  'plugin_manager',
+  //   ④ 无人值守的自我调度
+  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
   // 已装但当前未进 bundles 的插件（一旦加回就是新口子）
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
 ]

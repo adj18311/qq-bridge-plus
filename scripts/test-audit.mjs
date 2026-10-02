@@ -8,6 +8,12 @@ const tests = [
   'test-audit-bridge.mjs', 'test-audit-protocol.mjs', 'test-audit-protocol-helpers.mjs',
   'test-audit-security.mjs', 'test-audit-security-mcp.mjs',
   'test-audit-setup.mjs', 'test-audit-setup-guards.mjs',
+  // DSH 会话队列（inbox 投影）解析：0.2.0 把队列从 control baseline 的
+  // `value.queues[<id>]` 挪进了 `value.projections[<id>].values.inbox`。
+  // 认错形状的后果不是"少清几条"，而是**每一次退役会话都抛错**、旧任务继续跑，
+  // 且只留下一行日志 —— 必须有登记期断言钉住（活 DSH 侧的实测见
+  // scripts/test-dsh-session-retire.mjs）。
+  'test-dsh-inbox-projection.mjs',
   'test-md-to-plain.mjs', 'test-slang-learn.mjs', 'test-mux-reconnect.mjs',
   'test-token-economy.mjs', 'test-qq-model-view.mjs', 'test-qq-preset-contract.mjs',
   'test-reply-wait.mjs', 'test-preset-prompt.mjs', 'test-role-card.mjs',
@@ -36,6 +42,10 @@ const tests = [
   //    这是唯一挡住"绕过桥接直连 OneBot HTTP"的东西（见 QSH_PLAN.md §0.1/§5.2），
   //    所以必须在每次回归里跑，而不是一次性验收。
   'test-preset-local-tools.mjs',
+  // qq-mode-console 的 settings 契约：0.2.0 删除了 ctx.settings.register()，
+  // 命名空间改为由 loader entry id + 导出的 Config 推导。断言三点前提都在，
+  // 并且那条已删除的 API 不会被照旧注释加回来。
+  'test-qq-mode-plugin.mjs',
 ];
 let failed = 0;
 for (const test of tests) {

@@ -8,7 +8,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dshModulesDir } from './dsh-modules.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const tmpHome = path.join(ROOT, 'state', 'setup-dsh-test-home');
+// 夹具放系统临时目录，**不要**放仓库的 state/：harden-state-acl.mjs 会把 state/ 的
+// 继承 ACE 去掉（只留当前用户 / SYSTEM / Administrators），于是 DSH 沙箱的能力 SID
+// 不在 ACL 里，在沙箱内跑这个测试会直接 EPERM 建目录。
+const tmpHome = path.join(os.tmpdir(), 'qq-bridge-setup-test-home');
 fs.rmSync(tmpHome, { recursive: true, force: true });
 fs.mkdirSync(path.join(tmpHome, 'profiles', 'web'), { recursive: true });
 fs.mkdirSync(path.join(tmpHome, 'plugins'), { recursive: true });

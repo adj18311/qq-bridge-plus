@@ -1,33 +1,11 @@
 // 对比探测：逐条验证桥接实际使用的 RPC 参数形状在新版 DSH 上是否被接受。
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { probeCookie, probeRpc, probeWorkspaceDir } from './probe-auth.mjs';
 
-const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
-function discoverToken() {
-  const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
-  const logsDir = path.join(home, 'guard', 'logs');
-  let files;
-  try {
-    files = fs.readdirSync(logsDir).filter((n) => /^server-.*\.out\.log$/.test(n))
-      .map((n) => ({ n, m: fs.statSync(path.join(logsDir, n)).mtimeMs })).sort((a, b) => b.m - a.m);
-  } catch { return ''; }
-  for (const { n } of files) {
-    try { const m = fs.readFileSync(path.join(logsDir, n), 'utf8').match(/[?&]token=([A-Za-z0-9_-]+)/); if (m) return m[1]; } catch {}
-  }
-  return '';
-}
-const token = process.argv[2] || discoverToken();
-const res = await fetch(`${BASE}/?token=${token}`, { redirect: 'manual' });
-const cookie = res.headers.get('set-cookie').split(';')[0];
-
+// 鉴权与 RPC 引导统一走 probe-auth.mjs（旧的「读 guard 日志抓 launch token」在
+// DSH 0.1.7 起已失效，会让探针一律 401 —— 见该文件头部说明）。
+const rawRpc = probeRpc(probeCookie());
 async function rpc(endpoint, args) {
-  const r = await fetch(`${BASE}/api/${endpoint}`, {
-    method: 'POST', headers: { cookie, 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'client-request', rpcId: 'p' + Math.random().toString(36).slice(2, 8), method: endpoint, payload: { args } })
-  });
-  const j = await r.json();
-  const slot = j.result;
+  const slot = await rawRpc(endpoint, args);
   if (slot?.ok) return { ok: true, value: slot.value };
   return { ok: false, code: slot?.error?.code, msg: slot?.error?.message };
 }
@@ -48,8 +26,8 @@ function shapeOf(r) {
 }
 
 console.log('=== 1. session/create（桥接用 { cwd }） ===');
-const cwd = path.join(process.cwd(), 'state', 'probe-015');
-fs.mkdirSync(cwd, { recursive: true });
+// 探测工作区建在系统临时目录：state/ 的 ACL 被收紧过，沙箱里写不进去。
+const cwd = probeWorkspaceDir('rpc-compat');
 const created = report('session/create {cwd}', await rpc('session/create', { request: { cwd } }), '(待清理)');
 const sessionId = created.ok ? created.value.sessionId : null;
 

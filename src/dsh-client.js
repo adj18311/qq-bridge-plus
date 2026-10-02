@@ -176,6 +176,7 @@ const METHOD_ARG_WRAPPERS = {
   'session/page': 'request',
   'session/search': 'request',
   'session/follow': 'request',
+  'session/projections': 'request',
   'workspace/create': 'request',
   'workspace/rename': 'request',
   'workspace/delete': 'request',
@@ -197,6 +198,72 @@ function endpointOf(method) {
  * 该值只影响首帧大小，不影响后续增量事件。
  */
 export const FOLLOW_SNAPSHOT_MESSAGES = 200;
+
+/**
+ * 从一份 Session 投影值里取出待处理的 inbox 项（`next-turn` + `next-step`）。
+ *
+ * DSH 0.2.0 的投影形状（`SessionProjectionValues.inbox`，见 dsh-agent 的
+ * `InboxWireState`）：`{ 'next-turn': UserMessage[], 'next-step': UserMessage[] }`，
+ * 每条是一个序列化后的 `UserMessage`，**带 `id`（MessageId）** —— 这正是
+ * `session/updateQueue` 的 `itemId` 需要的值。
+ *
+ * 与 0.1.7 的差异（这就是线上「停止旧会话失败: invalid session/control baseline」的根因）：
+ * 控制流 baseline 曾经把待处理队列平铺在 `value.queues[<sessionId>]`，0.2.0 起
+ * 统一并入投影表 `value.projections[<sessionId>].values`，队列本身变成 `inbox` 键。
+ * 只认旧字段的实现会在**每一次**退役/重置会话时抛错，队列清不掉 ⇒ 旧任务继续跑。
+ *
+ * @param values - 单个会话的投影值（`SessionProjectionValues`）。
+ * @returns 待处理项数组；该项能力缺失（无 agent / 无 inbox 投影）时为空数组。
+ * @throws 当 inbox 存在但结构不是两个数组字段时——结构变了必须显式失败，
+ *         否则会静默漏掉待处理消息（正是上面那个缺陷的形态）。
+ */
+export function inboxItemsOfProjections(values) {
+  if (values === null || typeof values !== 'object') return [];
+  const inbox = values.inbox;
+  // 能力缺失（会话没有活动 agent / 未注册 inbox 投影）⇒ 没有待处理项，不是错误。
+  if (inbox === undefined) return [];
+  if (inbox === null || typeof inbox !== 'object' || Array.isArray(inbox)) {
+    throw new Error('invalid session inbox projection');
+  }
+  const items = [];
+  for (const boundary of ['next-turn', 'next-step']) {
+    const list = inbox[boundary];
+    if (list === undefined) continue;
+    if (!Array.isArray(list)) throw new Error('invalid session inbox projection');
+    items.push(...list);
+  }
+  return items;
+}
+
+/**
+ * 校验并抽出待处理项的 `itemId` 列表。
+ * @throws 当任何一项缺少可用的字符串 id 时——`session/updateQueue` 需要 MessageId，
+ *         拿不到就等于清不掉队列，必须显式失败而不是静默跳过。
+ */
+export function inboxItemIds(items) {
+  return items.map((item) => {
+    const id = item?.id;
+    if (typeof id !== 'string' || !id) throw new Error('invalid session inbox item');
+    return id;
+  });
+}
+
+/**
+ * 从 `session/control` 开场 baseline 帧里取出指定会话的待处理项。
+ *
+ * 0.2.0 的帧形状：`{ type:'baseline', value:{ projections:{ <sessionId>:{ asOfSeq, values } } } }`。
+ * baseline 只包含**当前挂在宿主注册表里**的会话；不在其中即「没有活动 agent」⇒ 无待处理项。
+ *
+ * @throws 当 baseline 的投影表结构不符时（契约变更必须显式失败）。
+ */
+export function controlBaselineInboxItems(frame, sessionId) {
+  const projections = frame?.value?.projections;
+  if (projections === null || typeof projections !== 'object' || Array.isArray(projections)) {
+    throw new Error('invalid session/control baseline');
+  }
+  if (!Object.hasOwn(projections, sessionId)) return [];
+  return inboxItemsOfProjections(projections[sessionId]?.values);
+}
 
 /** 把旧 payload 包装成新协议要求的 { args }，并补新版必填字段。 */
 function wrapArgs(method, payload) {
@@ -383,9 +450,9 @@ export class NodeApiClient extends AbstractApiClient {
     try {
       // 为取消当前 turn 留出时间，即使 control 流没有及时返回 baseline。
       const queueSignal = AbortSignal.any([sig, AbortSignal.timeout(Math.min(5000, timeoutMs))]);
-      const items = await this._readSessionQueue(sessionId, queueSignal);
-      for (const itemId of new Set(items.map((item) => item?.id))) {
-        if (typeof itemId !== 'string' || !itemId) throw new Error('invalid session/control queue item');
+      // _readSessionQueue 已把 inbox 项校验成 MessageId 列表（取不到 id 会直接抛错）。
+      const itemIds = await this._readSessionQueue(sessionId, queueSignal);
+      for (const itemId of new Set(itemIds)) {
         const response = await this.callUnary('session/updateQueue', {
           sessionId, itemId, action: { kind: 'remove' }
         }, sig);
@@ -406,10 +473,43 @@ export class NodeApiClient extends AbstractApiClient {
     return { removed };
   }
 
+  /**
+   * 读取一个会话的待处理 inbox 项（退役/重置前要清掉的队列）。
+   *
+   * 两条路，都解析同一份 `inbox` 投影（见 {@link inboxItemsOfProjections}）：
+   * 1. **主路径 `session/projections`**（DSH 0.2.0 起的一元 RPC，非激活读取）：
+   *    `{request:{sessionId}}` → `{ asOfSeq, values } | null`。一条普通 HTTP RPC，
+   *    可取消、可超时、可单测，不需要为「看一眼队列」开一条 WebSocket。
+   * 2. **回退 `session/control`**：该 endpoint 不存在（更早的 DSH）时，退回全宿主
+   *    控制流的开场 baseline，从 `value.projections[sessionId].values` 取同一份数据。
+   *
+   * 历史教训：这里曾经只认 `value.queues[sessionId]`（0.1.7 的形状），0.2.0 把它并入
+   * 投影表之后，每次退役会话都抛 "invalid session/control baseline"，队列清不掉、
+   * 旧任务继续烧 token。所以现在的解析放在**具名导出**里，由 test-dsh-client-* 直接钉住。
+   */
   async _readSessionQueue(sessionId, signal) {
     await this.ensureAuth(signal);
-    // 建 socket 前先检查取消状态：已经取消的等待不应该再开一条连接。
-    signal.throwIfAborted();
+    signal?.throwIfAborted();
+    try {
+      const response = await this.callUnary('session/projections', { sessionId }, signal);
+      if (response.result?.ok) {
+        // value === null ⇒ 会话不在宿主注册表里（已归档/从未挂载）⇒ 没有待处理项。
+        return inboxItemIds(inboxItemsOfProjections(response.result.value?.values));
+      }
+      // `session/not-found` 同样意味着没有队列可清；其余错误交给回退路径判定。
+      if (response.result?.error?.code === 'session/not-found') return [];
+      // endpoint 不存在之类的协议级错误 ⇒ 走 control 流回退。
+    } catch (error) {
+      signal?.throwIfAborted();
+      // 一元 RPC 失败（旧 DSH 不认这个 endpoint / 网关拒绝）时回退，不把异常当结论。
+      void error;
+    }
+    return this._readSessionQueueViaControl(sessionId, signal);
+  }
+
+  /** 回退路径：全宿主 `session/control` 流的开场 baseline。 */
+  async _readSessionQueueViaControl(sessionId, signal) {
+    signal?.throwIfAborted();
     const url = new URL('/api/remote.mux', this.baseUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { cookie: this.cookie } });
@@ -419,7 +519,7 @@ export class NodeApiClient extends AbstractApiClient {
       const finish = (error, items) => {
         if (settled) return;
         settled = true;
-        signal.removeEventListener('abort', abort);
+        signal?.removeEventListener('abort', abort);
         socket.removeEventListener('open', open);
         socket.removeEventListener('message', message);
         socket.removeEventListener('error', failed);
@@ -440,11 +540,7 @@ export class NodeApiClient extends AbstractApiClient {
           if (frame.type === 'error' || frame.type === 'end') {
             finish(new Error(`session/control ended before baseline${frame.error?.code ? ` (${frame.error.code})` : ''}`));
           } else if (frame.type === 'item' && frame.value?.type === 'baseline') {
-            const queues = frame.value.value?.queues;
-            if (!queues || typeof queues !== 'object' || Array.isArray(queues)) throw new Error('invalid session/control baseline');
-            const items = Object.hasOwn(queues, sessionId) ? queues[sessionId] : [];
-            if (!Array.isArray(items)) throw new Error('invalid session/control queue');
-            finish(null, items);
+            finish(null, inboxItemIds(controlBaselineInboxItems(frame.value, sessionId)));
           }
         } catch (error) { finish(error); }
       };
@@ -452,8 +548,8 @@ export class NodeApiClient extends AbstractApiClient {
       socket.addEventListener('message', message);
       socket.addEventListener('error', failed);
       socket.addEventListener('close', failed);
-      signal.addEventListener('abort', abort, { once: true });
-      if (signal.aborted) abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
     });
   }
 

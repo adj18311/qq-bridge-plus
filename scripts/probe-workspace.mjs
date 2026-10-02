@@ -1,29 +1,13 @@
 // 验证 workspace/session RPC 参数形状与返回值结构（对照 bridge.js 实际用法）。
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { probeCookie, probeRpc, probeWorkspaceDir } from './probe-auth.mjs';
 
-const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
-function tok() {
-  const d = path.join(os.homedir(), '.dsh', 'guard', 'logs');
-  try {
-    const f = fs.readdirSync(d).filter((n) => /^server-.*\.out\.log$/.test(n))
-      .map((n) => ({ n, m: fs.statSync(path.join(d, n)).mtimeMs })).sort((a, b) => b.m - a.m);
-    for (const { n } of f) { try { const m = fs.readFileSync(path.join(d, n), 'utf8').match(/[?&]token=([A-Za-z0-9_-]+)/); if (m) return m[1]; } catch {} }
-  } catch {}
-  return '';
-}
-const t = tok();
-const r0 = await fetch(`${BASE}/?token=${t}`, { redirect: 'manual' });
-const cookie = r0.headers.get('set-cookie').split(';')[0];
-async function rpc(e, a) {
-  const r = await fetch(`${BASE}/api/${e}`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'x' + Math.random().toString(36).slice(2, 8), method: e, payload: { args: a } }) });
-  return (await r.json()).result;
-}
+// 鉴权与 RPC 引导统一走 probe-auth.mjs（旧的「读 guard 日志抓 launch token」在
+// DSH 0.1.7 起已失效，会让探针一律 401 —— 见该文件头部说明）。
+const rpc = probeRpc(probeCookie());
 const sh = (r, n = 400) => r.ok ? JSON.stringify(r.value).slice(0, n) : `${r.error.code}: ${r.error.message}`;
 
-const dir = path.join(process.cwd(), 'state', 'agents');
-fs.mkdirSync(dir, { recursive: true });
+// 探测工作区建在系统临时目录：state/ 的 ACL 被收紧过，沙箱里写不进去。
+const dir = probeWorkspaceDir('workspace');
 
 console.log('=== workspace/create {path} ===');
 const ws = await rpc('workspace/create', { request: { path: dir } });

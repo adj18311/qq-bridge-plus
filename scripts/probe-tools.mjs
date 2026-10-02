@@ -3,32 +3,17 @@
 //  2. 注入一条 prompt，要求 agent 调 mcp__snowluma-host__snowluma_status（不依赖 SnowLuma 在线）
 //  3. 观测 turn 事件里的 tool/call 与 tool/result，确认 MCP 工具真的可调用
 //  4. 同时确认本地危险工具（pwsh/bash 等）不在工具面里
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { probeCookie, probeRpc, probeMuxSocket, probeWorkspaceDir } from './probe-auth.mjs';
 
-const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
-function tok() {
-  const d = path.join(os.homedir(), '.dsh', 'guard', 'logs');
-  try {
-    const f = fs.readdirSync(d).filter((n) => /^server-.*\.out\.log$/.test(n))
-      .map((n) => ({ n, m: fs.statSync(path.join(d, n)).mtimeMs })).sort((a, b) => b.m - a.m);
-    for (const { n } of f) { try { const m = fs.readFileSync(path.join(d, n), 'utf8').match(/[?&]token=([A-Za-z0-9_-]+)/); if (m) return m[1]; } catch {} }
-  } catch {}
-  return '';
-}
-const t = tok();
-const r0 = await fetch(`${BASE}/?token=${t}`, { redirect: 'manual' });
-const cookie = r0.headers.get('set-cookie').split(';')[0];
-async function rpc(e, a) {
-  const r = await fetch(`${BASE}/api/${e}`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'x' + Math.random().toString(36).slice(2, 8), method: e, payload: { args: a } }) });
-  return (await r.json()).result;
-}
+// 鉴权与 RPC 引导统一走 probe-auth.mjs（旧的「读 guard 日志抓 launch token」在
+// DSH 0.1.7 起已失效，会让探针一律 401 —— 见该文件头部说明）。
+const cookie = probeCookie();
+const rpc = probeRpc(cookie);
 
 const PRESET = process.argv[2] || 'qq-chat';
-const dir = path.join(process.cwd(), 'state', 'e2e');
-fs.mkdirSync(dir, { recursive: true });
+// 探测工作区建在系统临时目录：state/ 的 ACL 被收紧过，沙箱里写不进去。
+const dir = probeWorkspaceDir('tools');
 const ws = await rpc('workspace/create', { request: { path: dir } });
 const wsId = ws.value.workspace.workspaceId;
 const model = await rpc('session/selectModel', { request: { sessionId: 'x', provider: 'x', model: 'x' } }); // 仅探测形状，忽略
@@ -42,8 +27,7 @@ console.log(`session ${sessionId} (preset=${PRESET})`);
 const sm = await rpc('session/selectModel', { request: { sessionId, provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' } });
 console.log('selectModel ->', sm.ok ? JSON.stringify(sm.value.selected) : `FAIL ${sm.error.code}: ${sm.error.message}`);
 
-const url = new URL('/api/remote.mux', BASE); url.protocol = 'ws:';
-const socket = new WebSocket(url, { headers: { cookie } });
+const socket = probeMuxSocket(cookie);
 const streamId = randomUUID();
 const eventStreamId = randomUUID();
 const toolCalls = [];
