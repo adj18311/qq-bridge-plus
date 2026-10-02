@@ -20,11 +20,16 @@
 > [`v0.1.5`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.5)；**DSH 0.1.7-rc.2** 用
 > [`v0.1.7`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.7)。
 >
-> v0.2.0 修的主要是 **0.2.0 把会话待处理队列从 `session/control` 的 `value.queues[<id>]` 挪进了
-> `value.projections[<id>].values.inbox`**：旧代码认死前者，于是**每一次**退役/重置 QQ 会话都会抛
-> `invalid session/control baseline` —— 队列清不掉、旧任务继续在 DSH 里跑，而桥接日志里只有一行警告。
+> v0.2.0 修的主要是**会话待处理队列读不出来**：桥接退役/重置 QQ 会话时要先清掉 DSH 侧没跑的队列，
+> 而那段解析认的是一个**从来不存在的字段**（`session/control` baseline 的 `value.queues[<id>]`）——
+> 于是**每一次**退役都抛 `invalid session/control baseline`，队列清不掉、旧任务继续在 DSH 里跑，
+> 而日志里只有一行警告。**注意：这不是 0.2.0 引入的**——该代码随 v0.1.7 发布，报错日志早于
+> 0.2.0-rc.2 的发布，0.2.0 只是把它翻了出来。现在读队列以一元 RPC `session/projections` 为主路径、
+> 以 `projections[<id>].values.inbox` 为回退形状，并补了两条回归网。
 > 同一轮还按 0.2.0 的真实工具清单重新对账了 QQ 安全守卫（新增 15 个必须隐藏的工具名，
 > 含全局层默认启用的 `read_mcp_resource`、`plugin_manager`、`subagent_codex` 等）。
+>
+> 逐条改动说明见 [docs/guides/DSH_020_ADAPTATION.md](docs/guides/DSH_020_ADAPTATION.md)。
 >
 > 本次更新的完整说明见 [**Release v0.2.0**](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.2.0)。
 >

@@ -72,12 +72,21 @@ DSH/                         ← 工作区根（不是仓库根）
 docs/
 ├── README.md     # 文档索引（每篇一句话 + 是否仍然有效）  ← 先看这个
 ├── FOLDER_MAP.md # 本文件
-├── guides/       # 面向使用者/运维：PROJECT_GUIDE / DSH_SETUP / VOICE / TOKEN_USAGE_CONSOLE / CONSOLE-UI-TESTING
+├── guides/       # 面向使用者/运维：DSH_SETUP / DSH_020_ADAPTATION / SECURITY_BASELINE / TOKEN_USAGE_CONSOLE / CONSOLE-UI-TESTING / PRIVACY / PROJECT_GUIDE / VOICE
 ├── design/       # 设计与规划：GEN2_SIMULATION_PLAN / SOCIAL_MODE_PLAN / DSH_QQ_TOOLS_PLAN / 真人语感策略
 ├── research/     # 调研：SnowLuma功能调研 / 免打扰 / 表情包 / 本地模型选型
 ├── audits/       # 审查与优化报告（最新的全项目体检是 AUDIT_REPORT_2026-09-20）
 └── legacy/       # 历史归档（已被取代 / 问题已全部修复的旧报告）
 ```
+
+> ⚠️ **哪些文档真的会进公开仓库**：`.gitignore` 第 52–64 行把
+> `docs/audits/`、`docs/design/`、`docs/legacy/`、`docs/research/` 以及
+> `docs/guides/PROJECT_GUIDE.md`、`docs/guides/VOICE.md` **整体排除**了
+> （原因写在那里：这批文档里扫出过多份含本机真实路径的内容）。
+> 也就是说：**只有 `docs/README.md`、`docs/FOLDER_MAP.md` 与 `docs/guides/` 下的其余几篇会出现在 GitHub 上**，
+> 上面那份索引里指向 `audits/` `design/` `legacy/` `research/` 的链接**对公开读者是死链**，只在本机有效。
+> 因此：**要公开的新文档请放 `docs/guides/`**（新写的 `DSH_020_ADAPTATION.md` 就放这里）；
+> 放进那四个目录 = 只在本机可见，`git add` 会直接被 .gitignore 挡下。
 
 规则：**根目录只留 `README.md` / `README.en.md` / `RULES.md` 三个文档**，其余一律进 `docs/` 对应子目录，
 并在 [README.md](README.md) 索引里登记一行（含「仍然有效 / 被谁取代」）。
