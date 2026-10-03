@@ -368,6 +368,94 @@ HTTP transport 下起作用，而三个 MCP server 全是 stdio。清掉是为�
 
 ---
 
+## 附：v0.2.1 —— SnowLuma 上游健康、客户端库升级、全新 clone 可移植性
+
+v0.2.0 发布后，有人反馈「**QQ 注入失败**」。调查后修了三类问题。
+**这一节与 DSH 无关**，属于 SnowLuma 侧观测能力与打包质量。
+
+### A. 起因与结论：那个报障**不是**本桥接造成的
+
+「注入」在这个技术栈里只发生在一处：**SnowLuma 用原生组件挂进 QQ 客户端进程**
+（它日志里叫 `[Hook]`，载体是安装目录的 `native/snowluma-win32-x64.{dll,node}`）。
+本桥接**没有任何原生/注入面**：7 个依赖全为纯 JS，`src/` 里没有 `.dll`/`.node`/FFI/进程注入，
+也不启动、不控制 SnowLuma 或 QQ（v0.1.5 起按 EULA §5.4 移除了启停工具）。
+
+但**桥接让这个失败无法诊断** —— 这才是要修的：
+
+| SnowLuma 的 `[Hook]` 退化时 | 桥接此前看到的现象 |
+| --- | --- |
+| 进程与 OneBot WebSocket **都还活着** | `bot.on('open')` 打过「SnowLuma 已连接」 |
+| 但收不到 QQ 侧数据（`receive path stale`） | 群里一条消息都不来 |
+| 它自己报 `good=false` | 桥接**从不读 `good`**；没有看门狗（对比：DSH 有 5 秒探活）、`/api/status` 没有字段、控制台没有指示、文档没有排查分支 |
+
+⇒ 症状是「接了但没反应」，而**没有任何证据指向 SnowLuma**，于是被报成「qq-bridge 注入失败」。
+用户自己的 SnowLuma 日志里 `receive path stale` 出现过 4 次（3 次自愈）—— 这个状态是**常态化偶发**，
+不是别人的特殊环境。
+
+**修复**：桥接现在把上游健康报出来（`/api/status.snowluma` + 控制台「运行总览」卡片 +
+「访问与安全」告警条 + 边沿触发日志），并明确指向 SnowLuma 的 `[Hook]` 日志。判定分两级：
+`good=false` 是**确认**；「连心跳都没有」是**另一个故障面**（进程/WS 层面），措辞分开。
+
+### B. 上游健康的两处实现错误（做完就发现是错的，已修）
+
+这两条值得单独记，因为它们是**同一个失败形态的复现** —— "看起来在工作，其实永远不会触发"：
+
+| 错法 | 后果 | 正确做法 |
+| --- | --- | --- |
+| `good` 取自 **`get_login_info`** | 它只返回 `{user_id, nickname}`，`good` 永远 `undefined`；而 SDK **只校验 status/retcode 信封、不校验 data 载荷** ⇒ 不报错、`good` 永远停在 `null`，那条"权威信号"整条是**死代码** | 取自 **`get_status`**（`{online, good}`），以及**每 30 秒心跳载荷里的 `status.good`** |
+| 用心跳/事件**静默**判断 hook 死活 | 心跳由 SnowLuma **自己的定时器无条件**发出（`HEARTBEAT_INTERVAL = 3e4`），不经过 QQ 事件流水线 ⇒ 静默**永远不触发**，检测不到它声称要检测的东西 | 接收链路的健康度只在 `status.good` 里；静默只能说明**进程/WS 卡住**，是另一个故障面 |
+
+两条都实测核对过 SnowLuma 1.14.9 运行时源码，并用 `npm run probe:heartbeat` 连真实网关验证：
+`status = {"online":true,"good":true}`、`interval = 30000`。
+新增 `test-snowluma-upstream-health.mjs`（9 项）把这两条钉住 —— 特别是**反面断言**：
+不得从 `get_login_info` 取 `good`、静默分支不得把结论指向 `[Hook]`。
+
+### C. 客户端库升级 1.14.9/1.14.10 → 1.14.20
+
+- 上游 1.14.9→1.14.20 共 **139 次提交 / 300 个文件**。逐面核对（含 190→195 动作目录双向 diff）：
+  **无移除动作、无参数改名、无入站事件形状变化、无 stdout 风险**（`@snowluma/mcp` 在 `src/` 里零引用，
+  且它只往 stderr 写）。
+- **上游打包 bug 仍在**（dist 相对导入缺 `.js`），`postinstall` 补丁依旧必需（仍命中 13 个文件）。
+- 顺带修两处**只影响升级运行时之后**的正确性问题：
+  `markdown` 段落此前落到 default 分支、被喂字面量 `[markdown]`（上游 1.14.17 `1934e4e7` 起带 `data.text`）；
+  图片段落读的是 camelCase `subType` 而线上字段是 snake_case `sub_type`（一直是空串，且不报错）。
+- 新增 `npm run probe:heartbeat`：只读探针，验证心跳字段是否真的存在。
+
+### D. 端点自愈会覆盖用户写的 `wsUrl`
+
+`applyHealedTokens` 会把**发现到的** `wsUrl` 无条件写回 `config.json`。主场景（换账号端口变了）是对的，
+但它不区分「配置里是过期值」与「用户就是要指向别处」。实测踩到：把 `wsUrl` 指向死端口想让它别连，
+启动后仍被改回真实端点并连上 —— **想跑第二实例/指向另一份 SnowLuma 安装时会连错账号**。
+新增 `snowluma.followDiscoveredEndpoint`（默认 `true`＝保持既有行为），设 `false` 则只自愈 token、绝不动 URL。
+
+### E. 全新 clone 上 `npm run test:audit` 会失败 7 个脚本（真实的打包缺陷）
+
+用一个真的 `git clone` 复现的（作者机器上全绿，所以一直没人发现）：
+
+| 原因 | 影响的脚本 |
+| --- | --- |
+| 引用 `../voice-tool/...` —— 语音工具是**仓库上一级**的独立工具，不在本仓库里，测试却按固定相对路径读它 | 6 个 |
+| 读 `config.json` —— 它按设计是 gitignore 的，仓库里只有 `config.example.json` | 2 个（其中一个被前一个崩溃掩盖了） |
+
+⇒ 任何照 README 克隆的人跑自检都会看到一堆红，**看起来像"这个项目装出来就是坏的"**。
+
+**修复**：新增 `scripts/voice-tool-locator.mjs` 统一解析位置（支持 `QQ_BRIDGE_VOICE_TOOL_DIR` 覆盖），
+缺目录时**明确跳过**（`⏭ 跳过…（这是跳过，不是通过）`）而不是崩溃；`config.json` 相关断言改为
+只断言 `config.example.json` 的**出厂默认** —— 顺带修掉一个语义错误：原先它断言的是**用户当前状态**，
+于是用户按文档打开「AI 发语音」之后测试就会变红（测试不该因为用户用了功能而失败）。
+
+验证（两种模式都 **31/31**）：把工具目录指向不存在时输出 19 条明确的跳过、依旧 31/31。
+另用**负向对照**确认这是诚实跳过而非刷绿：故意破坏一个仓库内断言 → 仍然 `exit=1`。
+
+### F. 顺带记录：HTTP token 与 WS token 是两个不同的值
+
+SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，而 `config.json` 只能存一个（存 HTTP 的）。
+所以桥接**每次启动的首次 WS 连接几乎必然失败一次**（`连接断开(1006)` → 自愈 → `已连接`）。
+这条序列是正常的，日志文案已改清楚；真正会一直连不上的是**自愈无从下手**
+（`homeDir` 没配/被移动/读不到 `config/onebot_<QQ>.json`）—— 那才要查。
+
+---
+
 ## 附：本文没有覆盖的
 
 - **不是适配范围**：依赖告警、沙箱 ACL（见 §7）。

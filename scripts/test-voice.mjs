@@ -14,6 +14,8 @@ import {
   AUDIO_EXTS, describeAudio, formatBytes, formatDuration,
   inspectAudio, isAudioFile, listAudioFiles, parseTargetKey, resolveAudioSource
 } from '../src/send-voice-lib.js';
+// 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
+import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -108,14 +110,29 @@ console.log('## 音频校验（体积/空文件）');
 
 console.log('## 配置项（AI 发语音默认关闭，等语音库准备好再开）');
 {
-  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
-  ok(cfg.socialV2?.tools?.sendVoice === false, 'config.json tools.sendVoice=false（默认不给 AI 发语音）');
-  ok(cfg.socialV2?.voice?.enabled === false, 'config.json voice.enabled=false（默认总闸关闭）');
-  ok(cfg.socialV2?.voice?.allowAbsolutePath === false, 'AI 通道默认禁止绝对路径（安全默认）');
-  ok(Number(cfg.socialV2?.voice?.maxPerHour) > 0, '语音有每小时限流');
-  const ex = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  // 这一段查的是**「出厂默认就应该是关的」**这类契约。该契约的权威声明是
+  // `config.example.json` —— 它随仓库发布、代表本项目承诺的默认值。
+  //
+  // ⚠️ 刻意**只查 example，不查用户的 config.json**（早期版本查的是后者，两个毛病）：
+  //   ① 全新 clone 里根本没有 config.json（它是 .gitignore 的本机配置）⇒ 直接 ENOENT 崩溃，
+  //      于是"照 README 克隆完跑自检"会看到假红；
+  //   ② 更要紧的是语义错了：AI 发语音是**受支持的功能**，用户按文档打开它之后，
+  //      这条断言会去断言**用户的当前状态**并失败 —— 测试不该因为用户用了功能而变红。
+  // 用户当前值只做提示，不参与判定。
+  const exCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  ok(exCfg.socialV2?.tools?.sendVoice === false, 'config.example.json tools.sendVoice=false（出厂默认不给 AI 发语音）');
+  ok(exCfg.socialV2?.voice?.enabled === false, 'config.example.json voice.enabled=false（出厂默认总闸关闭）');
+  ok(exCfg.socialV2?.voice?.allowAbsolutePath === false, '出厂默认禁止绝对路径（安全默认）');
+  ok(Number(exCfg.socialV2?.voice?.maxPerHour) > 0, '出厂默认带每小时限流');
+  try {
+    const localCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+    console.log(`  ℹ  你本机的值（仅供参考，不参与判定）：tools.sendVoice=${localCfg.socialV2?.tools?.sendVoice} / voice.enabled=${localCfg.socialV2?.voice?.enabled}`);
+  } catch {
+    console.log('  ℹ  本机没有 config.json（不入库）——本段只查随仓库发布的出厂默认');
+  }
+  const cfg = exCfg;
+  const ex = exCfg;
   ok(ex.socialV2?.voice?.dir === 'audio', 'config.example.json 含 voice 段');
-  ok(ex.socialV2?.voice?.enabled === false && ex.socialV2?.tools?.sendVoice === false, 'config.example.json 同样是默认关闭');
   // 代码里的默认值也必须一致，否则删掉 config.json 里那两行就会变回"默认开"
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
   ok(/sendVoice: false,/.test(bridgeSrc), 'bridge.js 里 tools 默认 sendVoice: false');
@@ -159,9 +176,10 @@ console.log('## 安全边界（AI 通道来源限制）');
 }
 
 console.log('## 独立工具（不依赖桥接；已拆到仓库上一级 voice-tool/）');
-{
-  const VOICE_TOOL = path.resolve(ROOT, '..', 'voice-tool');
-  const standalone = path.join(VOICE_TOOL, 'voice-cli.mjs');
+if (!hasVoiceTool()) {
+  skipVoiceTool('独立工具的结构断言（voice-cli.mjs 存在性、零依赖、OneBot 动作、共享内核指向、两个启动器）');
+} else {
+  const standalone = voiceToolPath('voice-cli.mjs');
   ok(fs.existsSync(standalone), 'voice-tool/voice-cli.mjs 存在（独立直连 SnowLuma）');
   const src = fs.readFileSync(standalone, 'utf8');
   ok(!/send-voice-lib/.test(src), '独立工具不 import 桥接模块（真正零依赖）');
@@ -172,8 +190,8 @@ console.log('## 独立工具（不依赖桥接；已拆到仓库上一级 voice-
   ok(/readline/.test(src), '独立工具带交互菜单');
   // 共享内核只有一份实现：工具必须引 qq-bridge 的，而不是自带副本
   ok(/from '\.\.\/qq-bridge\/src\/voice-core\.js'/.test(src), '独立工具的语音内核指向 qq-bridge（单一实现）');
-  ok(fs.existsSync(path.join(VOICE_TOOL, '发语音.cmd')), 'voice-tool/发语音.cmd 双击启动器存在');
-  ok(fs.existsSync(path.join(VOICE_TOOL, 'config.example.json')), 'voice-tool/config.example.json 存在');
+  ok(fs.existsSync(voiceToolPath('发语音.cmd')), 'voice-tool/发语音.cmd 双击启动器存在');
+  ok(fs.existsSync(voiceToolPath('config.example.json')), 'voice-tool/config.example.json 存在');
   ok(fs.existsSync(path.join(ROOT, '..', '发语音-图形界面.cmd')), '上级 发语音-图形界面.cmd 启动器存在');
 }
 
@@ -301,6 +319,15 @@ console.log('## 回归：AI 通道的语音库响应不许带出绝对路径（P
 
 if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
   console.log('## live：桥接 voice 端点 dry-run');
+  if (!fs.existsSync(path.join(ROOT, 'config.json'))) {
+    // live 段要打**真的**桥接：端口、consoleToken、白名单群号、语音库目录全部来自
+    // 用户本机 config.json。config.example.json 给不出这些（groups 是空的），
+    // 硬跑只会得到"前置条件不足"这种假失败 —— 如实跳过（措辞与 skipVoiceTool 同款）。
+    console.log('  ⏭  跳过：live 段需要本机 config.json（端口/consoleToken/白名单群号/语音库目录）');
+    console.log('     原因：config.json 被 .gitignore（含真实 QQ 号/token），config.example.json 给不出这些值');
+    console.log('     想跑这段：先照 config.example.json 建好自己的 config.json，再设 QQ_BRIDGE_TEST_LIVE=1。');
+    console.log('     注意：这是**跳过，不是通过** —— 这台机器上没有覆盖到 live 链路。');
+  } else {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
     const port = Number(cfg.consolePort) || 3100;
@@ -334,6 +361,7 @@ if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
     }
   } catch (e) {
     ok(false, `live 端点检查异常: ${e.message}`);
+  }
   }
 }
 

@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import {
   discoverSnowLumaConnection, persistToken, readOneBotHttpTokens, readOneBotTokens, snowLumaHomeCandidates
 } from '../src/snowluma-conn.js';
+// 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
+import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let pass = 0;
@@ -19,6 +21,9 @@ const ok = (cond, name, extra = '') => {
   if (cond) { pass += 1; console.log(`  ✅ ${name}${extra ? ' — ' + extra : ''}`); }
   else { fail += 1; console.error(`  ❌ ${name}${extra ? ' — ' + extra : ''}`); }
 };
+// 工具不在本仓库里时返回 null，让下面几条桥接侧断言仍能照跑（读源码不该因为
+// 一个不在仓库里的目录而整个抛掉）。
+const readTool = (rel) => (hasVoiceTool() ? fs.readFileSync(voiceToolPath(rel), 'utf8') : null);
 
 console.log('## home 目录推断');
 {
@@ -99,13 +104,14 @@ console.log('## token 写回 config.json');
 
 console.log('## 独立工具确实用它（源码级）');
 {
-  // 独立工具已拆到仓库上一级 voice-tool/；共享内核仍是本仓库 src/snowluma-conn.js
-  const VOICE_TOOL = path.resolve(ROOT, '..', 'voice-tool');
+  // 独立工具的入口文件在仓库上一级的 voice-tool/；共享内核仍是本仓库 src/snowluma-conn.js
   for (const rel of ['voice-cli.mjs', 'voice-gui.mjs']) {
-    const src = fs.readFileSync(path.join(VOICE_TOOL, rel), 'utf8');
+    const src = readTool(rel);
+    if (src === null) { skipVoiceTool(`${rel} 是否引入自发现模块（snowluma-conn.js / discoverSnowLumaConnection）`); continue; }
     ok(/snowluma-conn\.js/.test(src), `${rel} 引入自发现模块`);
     ok(/discoverSnowLumaConnection/.test(src), `${rel} 调用自动发现`);
   }
+  // ↓ 下面两条查的是本仓库的 bridge.js，与工具在不在无关，照跑。
   const bridge = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
   ok(/healTokenIfStale/.test(bridge), 'bridge 有 token 自愈');
   ok(/persistToken/.test(bridge), 'bridge 会把有效 token 写回 config.json');

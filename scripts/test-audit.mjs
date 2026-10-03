@@ -46,6 +46,12 @@ const tests = [
   // 命名空间改为由 loader entry id + 导出的 Config 推导。断言三点前提都在，
   // 并且那条已删除的 API 不会被照旧注释加回来。
   'test-qq-mode-plugin.mjs',
+  // SnowLuma 上游健康（被误诊成「qq-bridge 注入失败」的那个失败形态）：
+  //   · good 必须取自心跳 status.good / get_status —— 取自 get_login_info 会**静默失效**
+  //     （SDK 不校验 data 载荷，good 会永远停在 null，整条权威信号变成死分支）；
+  //   · 静默检测不得冒充 hook 检测（心跳是 SnowLuma 本地定时器无条件发的）；
+  //   · 客户端库版本不得低于 bot_status 出现的版本。
+  'test-snowluma-upstream-health.mjs',
 ];
 let failed = 0;
 for (const test of tests) {

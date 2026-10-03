@@ -4,10 +4,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+// 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
+import { hasVoiceTool, skipVoiceTool, voiceToolDir, voiceToolPath } from './voice-tool-locator.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// 独立发语音工具已拆到仓库上一级的 voice-tool/：入口文件在那边，共享内核仍是本仓库 src/。
-const VOICE_TOOL = path.resolve(ROOT, '..', 'voice-tool');
+// 独立发语音工具的入口文件在仓库上一级的 voice-tool/，共享内核仍是本仓库 src/。
 let pass = 0;
 let fail = 0;
 const ok = (cond, name, extra = '') => {
@@ -16,18 +17,33 @@ const ok = (cond, name, extra = '') => {
 };
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const exists = (rel) => fs.existsSync(path.join(ROOT, rel));
-const readTool = (rel) => fs.readFileSync(path.join(VOICE_TOOL, rel), 'utf8');
-const existsTool = (rel) => fs.existsSync(path.join(VOICE_TOOL, rel));
+// 工具不在本仓库里时这两个返回 null —— 调用方必须先 hasVoiceTool() 守一道，
+// 免得"文件不存在"被误当成断言失败（那是跳过，不是失败）。
+const readTool = (rel) => (hasVoiceTool() ? fs.readFileSync(voiceToolPath(rel), 'utf8') : null);
+const existsTool = (rel) => (hasVoiceTool() ? fs.existsSync(voiceToolPath(rel)) : null);
 
 console.log('## 文件清单（独立工具 = 上一级 voice-tool/，共享内核 = 本仓库 src/）');
-for (const rel of ['voice-gui.mjs', 'voice-cli.mjs', 'public/voice.html', '发语音.cmd',
-  'config.example.json', 'config.json', 'README.md']) {
-  ok(existsTool(rel), `voice-tool/${rel}`);
+if (!hasVoiceTool()) {
+  skipVoiceTool('voice-tool/ 的文件清单（voice-gui.mjs / voice-cli.mjs / public/voice.html / 发语音.cmd / config.example.json / config.json / README.md）');
+} else {
+  for (const rel of ['voice-gui.mjs', 'voice-cli.mjs', 'public/voice.html', '发语音.cmd',
+    'config.example.json', 'config.json', 'README.md']) {
+    ok(existsTool(rel), `voice-tool/${rel}`);
+  }
 }
-for (const rel of [path.join('..', '发语音-图形界面.cmd'),
-  path.join('..', 'voice-tool', 'voice-gui.mjs'),
-  path.join('..', 'voice-tool', 'voice-cli.mjs'),
-  'src/voice-core.js', 'src/send-voice-lib.js',
+// 这个启动器在仓库**上一级**（和 voice-tool/ 并排），同样不在本仓库里
+{
+  const rel = path.join('..', '发语音-图形界面.cmd');
+  if (fs.existsSync(path.join(ROOT, rel))) ok(true, rel);
+  else skipVoiceTool(`上级启动器 ${rel}`);
+}
+// 这两条与上面「voice-tool/ 文件清单」重复，但保留（由上一级视角再确认一次）
+for (const [rel, toolRel] of [['..\\voice-tool\\voice-gui.mjs', 'voice-gui.mjs'],
+  ['..\\voice-tool\\voice-cli.mjs', 'voice-cli.mjs']]) {
+  if (hasVoiceTool()) ok(fs.existsSync(voiceToolPath(toolRel)), rel);
+  else skipVoiceTool(`入口 ${rel}`);
+}
+for (const rel of ['src/voice-core.js', 'src/send-voice-lib.js',
   'scripts/send-voice.mjs', 'scripts/test-voice.mjs', 'scripts/test-voice-gui.mjs',
   'scripts/test-encoding.mjs', 'scripts/test-console-static.mjs']) {
   ok(exists(rel), rel);
@@ -59,7 +75,9 @@ console.log('## 模块依赖解析');
 }
 
 console.log('## 独立工具：交互菜单不许自我递归（P1，曾让工具完全不可用）');
-{
+if (!hasVoiceTool()) {
+  skipVoiceTool('voice-cli.mjs 的交互菜单断言（q() 是否自我递归、ask() 形参名）');
+} else {
   // 由来：一次批量替换把 `await ask(rl, prompt)` 改成了 `await q(prompt)`，
   // 而 q 就是那个包装函数本身 → 双击发语音.cmd 的第一个提示就 RangeError。
   // 这类"函数调用自己"的笔误静态查最省事，而且不依赖交互终端。
@@ -75,17 +93,20 @@ console.log('## 各入口 import 的符号都真实存在');
   const core = await import(pathToFileURL(path.join(ROOT, 'src/voice-core.js')).href);
   // 桥接侧入口用 ROOT 相对路径；独立工具入口在 voice-tool/（经 ../qq-bridge/src/ 引共享内核）
   const entries = [
-    { base: VOICE_TOOL, rel: 'voice-gui.mjs' },
-    { base: VOICE_TOOL, rel: 'voice-cli.mjs' },
-    { base: ROOT, rel: 'scripts/send-voice.mjs' },
-    { base: ROOT, rel: 'src/bridge.js' }
+    { base: voiceToolDir(), rel: 'voice-gui.mjs', tool: true },
+    { base: voiceToolDir(), rel: 'voice-cli.mjs', tool: true },
+    { base: ROOT, rel: 'scripts/send-voice.mjs', tool: false },
+    { base: ROOT, rel: 'src/bridge.js', tool: false }
   ];
-  for (const { base, rel } of entries) {
-    const src = fs.readFileSync(path.join(base, rel), 'utf8');
+  for (const { base, rel, tool } of entries) {
+    const file = path.join(base, rel);
+    // 工具不在本仓库里时这两个入口文件本来就不存在 —— 跳过（不是失败）。
+    if (!fs.existsSync(file)) { skipVoiceTool(`入口 ${rel}（在仓库上一级的 voice-tool/ 里）`); continue; }
+    const src = fs.readFileSync(file, 'utf8');
     const blocks = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'([^']*(?:voice-core|send-voice-lib)[^']*)'/g)];
     if (!blocks.length) { ok(true, `${rel} 不直接依赖语音共享库`); continue; }
     // 独立工具必须指向 qq-bridge 的共享内核，而不是自己复制一份
-    if (base === VOICE_TOOL) {
+    if (tool) {
       ok(blocks.every((m) => m[2].includes('qq-bridge/src/')), `${rel} 从 qq-bridge/src/ 引共享内核（不复制实现）`);
     }
     const names = blocks.flatMap((m) => m[1].split(',').map((s) => s.trim()).filter(Boolean));
@@ -123,11 +144,23 @@ console.log('## qq-bridge 语音系统：MCP 工具与开关映射');
   const bridge = read('src/bridge.js');
   ok(/sendVoice: 'qq_send_voice \/ qq_list_voices'/.test(bridge), 'qq_get_prompt 的 toolMap 含语音工具');
   ok(/'sendVoice'\]/.test(bridge), 'config API 的 toolFlags 含 sendVoice');
-  const cfg = JSON.parse(read('config.json'));
-  ok(cfg.socialV2?.tools?.sendVoice === false, 'config.json: tools.sendVoice=false（默认关）');
-  ok(cfg.socialV2?.voice?.enabled === false, 'config.json: voice.enabled=false（默认关）');
   const ex = JSON.parse(read('config.example.json'));
-  ok(ex.socialV2?.tools?.sendVoice === false && ex.socialV2?.voice?.enabled === false, 'config.example.json 同样默认关');
+  // 这一段查的是**「出厂默认就该是关的」**这类契约 —— 权威声明是随仓库发布的
+  // config.example.json。**刻意不查用户的 config.json**（早期版本查的是它，两个毛病）：
+  //   ① 它是 .gitignore 的本机配置，全新 clone 里不存在 ⇒ 读取直接崩；
+  //   ② AI 发语音是受支持的功能，用户按文档打开后，断言**用户当前状态**的测试会变红
+  //      —— 测试不该因为用户用了功能而失败；
+  //   ③ 用户编辑器给 config.json 写个 UTF-8 BOM 也会让裸 JSON.parse 崩
+  //      （桥接自己的 readJsonSafe 有去 BOM，所以生产路径不受影响，但脚本读法粗糙）。
+  // 用户当前值只提示、不判定（见下）。
+  ok(ex.socialV2?.tools?.sendVoice === false, 'config.example.json: tools.sendVoice=false（出厂默认关）');
+  ok(ex.socialV2?.voice?.enabled === false, 'config.example.json: voice.enabled=false（出厂默认关）');
+  try {
+    const local = JSON.parse(read('config.json').replace(/^\uFEFF/, ''));
+    console.log(`  ℹ  你本机的值（仅供参考，不参与判定）：tools.sendVoice=${local.socialV2?.tools?.sendVoice} / voice.enabled=${local.socialV2?.voice?.enabled}`);
+  } catch {
+    console.log('  ℹ  本机没有 config.json（不入库）—— 本段只查随仓库发布的出厂默认');
+  }
 }
 
 console.log('## qq-bridge 语音系统：控制台与 preset');
@@ -159,7 +192,9 @@ console.log('## 文档');
 }
 
 console.log('## 独立工具的配置解析（env → voice-tool/config.json → ../qq-bridge/config.json → 默认值）');
-{
+if (!hasVoiceTool()) {
+  skipVoiceTool('voice-cli.mjs / voice-gui.mjs 的配置解析断言（5 个环境变量、两个 config.json 的读取顺序、SnowLuma 默认路径、共享内核指向）及其 config.json/config.example.json 一致性');
+} else {
   const cli = readTool('voice-cli.mjs');
   const gui = readTool('voice-gui.mjs');
   for (const [label, src] of [['voice-cli.mjs', cli], ['voice-gui.mjs', gui]]) {

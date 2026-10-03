@@ -109,7 +109,9 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 | `snowluma.wsUrl` | SnowLuma OneBot **WebSocket** 地址（如 `ws://127.0.0.1:3001`） |
 | `snowluma.httpUrl` | OneBot **HTTP API** 地址（如 `http://127.0.0.1:3000`）；不要填 WebSocket 端口，否则会报 HTTP 426 |
 | `snowluma.accessToken` | OneBot accessToken，未配置留空 |
-| `snowluma.launcherPath` / `homeDir` | SnowLuma 启动脚本与安装目录（供 agent 自动启动/停止） |
+| `snowluma.followDiscoveredEndpoint` | 默认 `true`。换 QQ 账号后 token 与端口都会变，桥接会自愈：重新发现并**跟随** SnowLuma 的端点（同时写回 `config.json`）。**想跑第二个实例 / 指向另一份 SnowLuma 安装（多账号、测试）时设为 `false`** —— 那时只自愈 token，绝不动 URL，也不写回 URL。详见「已知行为」 |
+| `snowluma.silenceWarnMs` | 上游静默告警阈值（毫秒），默认 `600000`（10 分钟）。已连接但这么久没收到任何事件包（含心跳）时打警告；这只是**提示**，不确定性的判断交给 `good` |
+| `snowluma.launcherPath` / `homeDir` | SnowLuma 安装目录（用于 token/端点自发现）。⚠️ 桥接**不会**启动或停止 SnowLuma（见 `LICENSE`） |
 | `agentPreset` | QQ 会话使用的 DSH agent preset，默认 `qq-chat`（改性格见下文） |
 | `socialV2.agentPreset` | `reserved2` 模式使用的 DSH agent preset，默认 `qq-chat-v2` |
 | `workspaceTitle` | QQ 会话在 DSH 界面中的归组名称，默认「QQ 聊天」 |
@@ -271,6 +273,66 @@ qq-bridge/
 > node voice-cli.mjs            # 交互菜单
 > node voice-gui.mjs            # 图形界面（本地小服务 + 浏览器 UI）
 > ```
+
+## SnowLuma 版本与上游健康（「连上了但收不到消息」）
+
+「注入」在这个技术栈里只发生在一处：**SnowLuma 用原生组件挂进 QQ 客户端进程**（它自己日志里叫
+`[Hook]`，载体是安装目录的 `native/snowluma-win32-x64.{dll,node}`）。**本桥接没有任何原生/注入面**
+（依赖全为纯 JS，源码里没有 `.dll` / `.node` / FFI / 进程注入），也不启动、不控制 SnowLuma 或 QQ ——
+所以「QQ 注入失败」不可能是本桥接造成的。但**桥接过去无法把这个失败讲清楚**，于是它经常被误报成
+「qq-bridge 的问题」。现在桥接会主动把上游健康报出来。
+
+### 已知行为：连上了 ≠ 收得到
+
+SnowLuma 的 `[Hook]` 会退化：它的进程和 OneBot WebSocket **都还活着**，但收不到 QQ 侧的数据。
+它自己的日志长这样：
+
+```
+WARN [Hook] receive path stale: PID=… UIN=… silentFor=136193ms; reporting good=false
+WARN [Hook] process enumeration timed out after 4000ms (worker abandoned)
+```
+
+这时桥接这边**一切正常**：WebSocket 通、日志打过 `SnowLuma 已连接`、控制台没有异常，但群里一条消息都不来。
+桥接现在对此做两件事：
+
+1. 每 60 秒问一次 `get_login_info`，读 SnowLuma **自评**的 `good` 字段（它判定接收链路陈旧时会报 `good=false`）；
+   同时用 `bot_status`（SnowLuma 1.14.17 起新增的账号会话边沿事件）与「距最近一个上游事件包的时长」做旁证。
+2. 判定退化时：日志打**明确指向 SnowLuma `[Hook]`** 的警告、控制台「运行总览」出现 `SnowLuma 上游` 卡片、
+   「访问与安全」页出现告警条，`GET /api/status` 的 `snowluma` 字段给出 `degraded` / `good` / `hint`。
+
+排查顺序：控制台看 `SnowLuma 上游` 卡片 → 看 SnowLuma 的 `logs/snowluma-*.log` 里的 `[Hook]` 行 → 升级 SnowLuma。
+
+### 版本要求
+
+| 组件 | 要求 | 说明 |
+| --- | --- | --- |
+| SnowLuma **运行时**（QQ 网关本体） | **建议 ≥ 1.14.17**（最新 1.14.20） | 1.14.17 刷过打包的原生组件（`chore(native): refresh bundled runtime files`、`fix(windows): restore sending on current QQ builds`）。**升级 SnowLuma 是使用者自己的事**：本桥接只探测、不部署（见 [LICENSE](LICENSE) 与 [RULES.md](RULES.md)） |
+| `@snowluma/sdk` / `@snowluma/mcp`（本仓库依赖） | 已钉 `^1.14.20` | 客户端库；OneBot v11 是稳定契约，新库可连旧运行时（本项目实测：库 1.14.20 + 运行时 1.14.9 可正常收发） |
+| 一次性提示 | 1.14.17 起才有 `bot_status` | 桥接对老运行时**优雅降级**：订阅不到就只靠 `good` 与静默检测 |
+
+### 已知行为：HTTP token 与 WS token 是**两个不同的值**
+
+SnowLuma 同一个账号的 **HTTP token（默认 3000 端口）与 WebSocket token（默认 3001 端口）并不相同**
+（实测；`snowluma.accessToken` 里通常只能存一个 —— 存的是 HTTP 那个）。因此：
+
+- **桥接每次启动的首次 WS 连接几乎必然失败一次**（日志里 `SnowLuma 连接断开（code=1006）` →
+  `SnowLuma 首次连接未成功（将在后台自动重连并尝试自愈 WS token）`），随后自愈重新发现 WS token、
+  重连成功，才打出 `SnowLuma 已连接`。**这条序列是正常的，不是故障。**
+- 真正会一直连不上的情况：**自愈无从下手** —— `snowluma.homeDir` 没配 / 被移动 / 读不到
+  SnowLuma 的 `config/onebot_<QQ号>.json`，或权限不足。这时日志里会有 `token 自愈失败`，
+  而 QQ 侧表现为**完全收不到消息**。先确认 `homeDir` 指向真正的 SnowLuma 安装目录。
+
+### 已知行为：端点自愈会覆盖你写的 `wsUrl`
+
+换 QQ 账号后 OneBot 端口与 token 都会变，所以桥接在连不上时会自愈：重新发现 SnowLuma 的端点并
+**写回 `config.json`**。这在主场景下是对的，但它不区分「配置里是个过期值」和「你就是要指向别处」——
+想跑第二个实例或指向另一份 SnowLuma 安装时会连错账号。要关掉：
+
+```json
+"snowluma": { "followDiscoveredEndpoint": false }
+```
+
+关掉后**只自愈 token**（换账号仍能恢复），绝不动 URL、也不写回 URL。
 
 ## 已知限制
 

@@ -96,6 +96,16 @@
 
 ## 常见问题
 
+- **每次启动日志里都先报一次「连接断开（1006）」再报「已连接」**：**这是正常的，不是故障**。原因：SnowLuma 同一账号的 **HTTP token（默认 3000 端口）与 WS token（默认 3001 端口）是两个不同的值**，而 `config.json` 的 `snowluma.accessToken` 只能存一个（存的是 HTTP 那个）。所以 WS 首次连接会被拒 → 触发 token 自愈（重新发现 WS token）→ 重连成功。真正有问题的是**自愈也失败**：日志里会出现 `token 自愈失败`，QQ 侧完全收不到消息。那时先确认 `config.json` 的 `snowluma.homeDir` 指向真正的 SnowLuma 安装目录（自愈要从它的 `config/onebot_<QQ号>.json` 里读 WS token）。
+- **QQ 上毫无反应，但桥接日志说「SnowLuma 已连接」**：这几乎总是 **SnowLuma 侧的 `[Hook]` 收不到 QQ 数据**，不是桥接的问题。桥接的 WebSocket 连的是 SnowLuma，SnowLuma 再通过原生组件挂进 QQ 客户端进程；中间这层退化时 SnowLuma 进程与它的 WebSocket 都还活着，所以桥接这边看不出异常。
+  1. 打开控制台「运行总览」，看 **`SnowLuma 上游`** 卡片：`已连接 · 未接收` 就是这个状态；「访问与安全」页会有对应告警条与处置建议。`GET /api/status` 的 `snowluma` 字段（`degraded` / `good` / `hint`）给的是同一份判断。
+  2. 去看 **SnowLuma 自己的日志** `logs/snowluma-*.log`，搜 `[Hook]`：
+     - `receive path stale: … reporting good=false` —— 收不到数据（会自愈，也可能不自愈）
+     - `process enumeration timed out after 4000ms` —— 连 QQ 进程都枚举不到
+     - 正常应有 `login detected: PID=…` + `pipe connected: PID=…`
+  3. **升级 SnowLuma**（见 [../../README.md](../../README.md) 的「SnowLuma 版本与上游健康」）：1.14.17 刷过打包的原生组件，建议 ≥ 1.14.17。**升级 SnowLuma 是你自己的事**——本桥接只探测、不部署。
+  4. 顺带确认 QQ 客户端本身是登录状态、没有被顶号；SnowLuma 1.14.17 起会通过 `bot_status` 事件把账号上下线告诉我们，桥接日志里会打「QQ 账号会话已离线」。
+  > 桥接**没有**任何原生/注入面（依赖全纯 JS，源码里没有 `.dll`/`.node`/FFI/进程注入），也不启动、不控制 SnowLuma 或 QQ，所以「QQ 注入失败」不可能是本桥接造成的。
 - **看不到 `qq-mode` 设置卡片**：这是**已知限制**，不是配置错误。DSH 的 `settings.plugin.item` 槽位只渲染「host 已注册的命名空间 ∩ 声明了该 key 的卡片」，而卡片必须由插件的**浏览器半**（`package.json` 的 `dsh.client` + `lib/client.js`）注册；`plugins/qq-mode-console` 目前只有 host 半。反复重跑 `setup-dsh.mjs` 或重启 DSH 都不会让卡片出现。要真正修好需补一个 `lib/client.js`。
 - **改了模式却不生效 / 5 秒后被改回去**：**此问题已在 `src/bridge.js` 修复**（桥接需重启后生效）。历史成因：`refreshMode()` 每 5 秒被 `checkDsh` 调用一次，先读 DSH 的 `qq-mode` 命名空间，只要有合法值就**直接 return，完全忽略本地 `state/mode.json`**；而命名空间的默认值始终存在，所以 DSH 侧永远有值 —— 于是控制台写本地文件会在下一次轮询被覆盖回滚。现在 `POST /api/mode` 会**写穿到 DSH 设置**（`api.settings.update({ ns: 'qq-mode', patch: { mode } })`），响应里新增 `dshSynced` 字段；若写穿失败（DSH 未运行等）会记日志并保留本地值。注意 `settings/update` 在 0.2.0 是**多参数** RPC：args 是 `{ ns, patch, expectedRevision }` 平铺，**不是** `{ request: {...} }`（传 request 会被网关拒为 `gateway/arguments-invalid`）。同源问题：`closedAgentPreset` 在 DSH schema 里不存在，原先也因这个提前 return 而失效，现已改为始终以本地 `state/mode.json` 为准。若仍看到回滚，检查桥接日志里是否有「写穿 DSH 设置失败」。
 - **MCP 工具没有出现**：确认 `cordis.patch.yml` 中三个 MCP 条目的路径指向当前仓库，并重启 DSH。

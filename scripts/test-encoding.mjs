@@ -5,10 +5,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
+import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// 独立发语音工具（voice-gui.mjs / voice-cli.mjs / 发语音.cmd）已拆到仓库上一级的 voice-tool/
-const VOICE_TOOL = path.resolve(ROOT, '..', 'voice-tool');
 let pass = 0;
 let fail = 0;
 const ok = (cond, name, extra = '') => {
@@ -16,16 +16,32 @@ const ok = (cond, name, extra = '') => {
   else { fail += 1; console.error(`  ❌ ${name}${extra ? ' — ' + extra : ''}`); }
 };
 
+// 这批 .cmd 里有三个不在本仓库里（两个在仓库上一级、一个在上一级 voice-tool/），
+// 全新 clone 上它们本就不存在 —— 那时应"跳过"而不是判失败；仓内的 .cmd 缺了才是真失败。
+const OUTSIDE_REPO_LAUNCHERS = new Set(['发语音-图形界面.cmd', '重启DSH-加载语音工具.cmd']);
+const launcherKind = (f) => {
+  const abs = path.resolve(f);
+  const inRepo = abs === ROOT || abs.startsWith(ROOT + path.sep);
+  if (inRepo) return 'repo';
+  return OUTSIDE_REPO_LAUNCHERS.has(path.basename(abs)) ? 'parent' : 'tool';
+};
+
 const launchers = [
   path.join(ROOT, '..', '发语音-图形界面.cmd'),
   path.join(ROOT, '..', '重启DSH-加载语音工具.cmd'),
-  path.join(VOICE_TOOL, '发语音.cmd'),
+  voiceToolPath('发语音.cmd'),
 ];
 
 console.log('## 启动器文件编码（乱码根因）');
 for (const f of launchers) {
   const label = path.basename(f);
-  if (!fs.existsSync(f)) { ok(false, `${label} 存在`); continue; }
+  if (!fs.existsSync(f)) {
+    const kind = launcherKind(f);
+    if (kind === 'parent') skipVoiceTool(`上级启动器 ${label}（和 voice-tool/ 并排，不在本仓库里）`);
+    else if (kind === 'tool') skipVoiceTool(`voice-tool/${label}（独立发语音工具不在本仓库里）`);
+    else ok(false, `${label} 存在`);
+    continue;
+  }
   const buf = fs.readFileSync(f);
   const nonAscii = [];
   for (let i = 0; i < buf.length; i++) if (buf[i] > 0x7f) nonAscii.push(i);
@@ -36,13 +52,15 @@ for (const f of launchers) {
 }
 
 console.log('## Node 侧 UTF-8 输出');
-{
+if (!hasVoiceTool()) {
+  skipVoiceTool('voice-gui.mjs / voice-cli.mjs 的 chcp 65001 与中文文案断言（两个入口都在仓库上一级的 voice-tool/ 里）');
+} else {
   // 界面服务：中文提示由 node 打印。Windows 控制台按本地代码页（936/GBK）解码，
   // 而 Node 写 UTF-8 —— 必须显式把控制台切到 UTF-8，否则启动横幅就是乱码。
-  const gui = fs.readFileSync(path.join(VOICE_TOOL, 'voice-gui.mjs'), 'utf8');
+  const gui = fs.readFileSync(voiceToolPath('voice-gui.mjs'), 'utf8');
   ok(/chcp/.test(gui) && /65001/.test(gui), 'voice-gui.mjs 把控制台切到 UTF-8（chcp 65001）');
   ok(/process\.stdout\.isTTY/.test(gui), 'voice-gui.mjs 只在真控制台时切编码（不干扰管道）');
-  const cli = fs.readFileSync(path.join(VOICE_TOOL, 'voice-cli.mjs'), 'utf8');
+  const cli = fs.readFileSync(voiceToolPath('voice-cli.mjs'), 'utf8');
   ok(/chcp/.test(cli) && /65001/.test(cli), 'voice-cli.mjs 把控制台切到 UTF-8（chcp 65001）');
   ok(/process\.stdout\.isTTY/.test(cli), 'voice-cli.mjs 只在真控制台时切编码（不干扰管道）');
   // 中文文案仍然齐全（没被"改成 ASCII"误伤到产品文案）

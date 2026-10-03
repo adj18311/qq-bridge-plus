@@ -11,12 +11,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { safeJoinLibrary, sanitizeUploadName, uniqueLibraryPath } from '../src/voice-core.js';
+// 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
+import { hasVoiceTool, skipVoiceTool, voiceToolDir, voiceToolPath } from './voice-tool-locator.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-// 独立发语音工具已拆到仓库上一级的 voice-tool/：入口（voice-gui.mjs / voice-cli.mjs /
-// public/voice.html）都在那边，共享内核仍由本仓库 src/voice-core.js 提供。
-const VOICE_TOOL = path.resolve(ROOT, '..', 'voice-tool');
+// 独立发语音工具的入口（voice-gui.mjs / voice-cli.mjs / public/voice.html）都在仓库上一级的
+// voice-tool/；共享内核仍由本仓库 src/voice-core.js 提供。
 
 let pass = 0;
 let fail = 0;
@@ -27,7 +28,6 @@ const ok = (cond, name, extra = '') => {
 
 console.log('## 参数解析（曾经把 --port 解析成 1 的坑）');
 {
-  const src = fs.readFileSync(path.join(VOICE_TOOL, 'voice-gui.mjs'), 'utf8');
   // 复刻 voice-gui.mjs 的解析逻辑并验证
   const parse = (argv) => {
     const flags = new Map();
@@ -49,7 +49,13 @@ console.log('## 参数解析（曾经把 --port 解析成 1 的坑）');
   const f2 = parse(['--port=3215', '--allow-delete']);
   ok(Number(f2.get('port')) === 3215, '`--port=3215` 生效');
   ok(f2.get('allow-delete') === true, '`--allow-delete` 生效');
-  ok(src.includes('Number.isInteger(PORT)'), '非法端口会被拦下（不会静默绑到奇怪端口）');
+  // 这条要读工具自己的源码；上面 4 条是复刻的解析逻辑，不依赖工具目录，照跑。
+  if (!hasVoiceTool()) {
+    skipVoiceTool('voice-gui.mjs 源码里的非法端口守卫 Number.isInteger(PORT)');
+  } else {
+    const src = fs.readFileSync(voiceToolPath('voice-gui.mjs'), 'utf8');
+    ok(src.includes('Number.isInteger(PORT)'), '非法端口会被拦下（不会静默绑到奇怪端口）');
+  }
 }
 
 console.log('## 安全：路径穿越与文件名净化');
@@ -81,8 +87,10 @@ console.log('## 安全：路径穿越与文件名净化');
 }
 
 console.log('## 前端页面结构');
-{
-  const htmlPath = path.join(VOICE_TOOL, 'public', 'voice.html');
+if (!hasVoiceTool()) {
+  skipVoiceTool('voice-tool/public/voice.html 的界面结构与前端接口断言');
+} else {
+  const htmlPath = voiceToolPath('public', 'voice.html');
   ok(fs.existsSync(htmlPath), 'voice-tool/public/voice.html 存在');
   const html = fs.readFileSync(htmlPath, 'utf8');
   for (const id of ['libList', 'tgtList', 'sendBtn', 'drop', 'dryRun', 'history', 'gwDot', 'toast']) {
@@ -100,8 +108,10 @@ console.log('## 前端页面结构');
 }
 
 console.log('## 服务端接线');
-{
-  const src = fs.readFileSync(path.join(VOICE_TOOL, 'voice-gui.mjs'), 'utf8');
+if (!hasVoiceTool()) {
+  skipVoiceTool('voice-gui.mjs 的服务端接线断言（host/令牌比较/上传净化/删除接口校验）');
+} else {
+  const src = fs.readFileSync(voiceToolPath('voice-gui.mjs'), 'utf8');
   ok(/server\.listen\(PORT, HOST/.test(src), '只监听指定 host');
   ok(/const HOST = '127\.0\.0\.1'/.test(src), 'HOST 固定为 127.0.0.1（不暴露到局域网）');
   ok(/timingSafeEqual/.test(src), '令牌比较用 timingSafeEqual');
@@ -117,8 +127,10 @@ console.log('## 服务端接线');
 }
 
 console.log('## 独立命令行的删除能力');
-{
-  const cli = fs.readFileSync(path.join(VOICE_TOOL, 'voice-cli.mjs'), 'utf8');
+if (!hasVoiceTool()) {
+  skipVoiceTool('voice-cli.mjs 的删除能力断言（cmdRemove 的穿越校验/--yes/非 TTY 不卡死）');
+} else {
+  const cli = fs.readFileSync(voiceToolPath('voice-cli.mjs'), 'utf8');
   ok(/async function cmdRemove/.test(cli), '有 cmdRemove');
   ok(/remove.*rm.*delete|cmd === 'remove'/.test(cli), '注册了 remove 命令');
   const fn = cli.slice(cli.indexOf('async function cmdRemove'), cli.indexOf('async function cmdCheck'));
@@ -138,15 +150,15 @@ console.log('## 共享库符号完整性（防"用了但没 import"）');
   const symbols = Object.keys(core).filter((k) => typeof core[k] === 'function' || /^[A-Z_]+$/.test(k));
   // 入口清单：桥接侧用 ROOT 相对路径，独立工具侧用 voice-tool 相对路径（base 决定去哪找）。
   const entrypoints = [
-    { base: ROOT, rel: 'scripts/send-voice.mjs' },
-    { base: VOICE_TOOL, rel: 'voice-cli.mjs' },
-    { base: VOICE_TOOL, rel: 'voice-gui.mjs' },
-    { base: ROOT, rel: 'src/bridge.js' }
+    { file: path.join(ROOT, 'scripts/send-voice.mjs') },
+    { file: voiceToolPath('voice-cli.mjs') },
+    { file: voiceToolPath('voice-gui.mjs') },
+    { file: path.join(ROOT, 'src/bridge.js') }
   ];
-  for (const { base, rel } of entrypoints) {
-    const file = path.join(base, rel);
-    if (!fs.existsSync(file)) continue;
-    const src = fs.readFileSync(file, 'utf8');
+  for (const { file: entryFile } of entrypoints) {
+    const rel = path.relative(ROOT, entryFile).replace(/\\/g, '/');
+    if (!fs.existsSync(entryFile)) continue;
+    const src = fs.readFileSync(entryFile, 'utf8');
     // 独立工具经 ../qq-bridge/src/ 引用共享库，桥接侧经 ./ 或 ../src/，两种都要认
     const importedBlock = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'[^']*(?:send-voice-lib|voice-core)\.js'/g)]
       .map((m) => m[1]).join(',');
@@ -164,12 +176,16 @@ console.log('## 共享库符号完整性（防"用了但没 import"）');
 
 if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
   console.log('## live：起真服务验证鉴权与 dry-run');
+  if (!hasVoiceTool()) {
+    // 起真服务需要工具入口文件本身；没有它就无从谈起（不是被测代码失败）。
+    skipVoiceTool('live 段要真的 spawn voice-tool/voice-gui.mjs 起一个随机端口服务，而工具目录不在本仓库里');
+  } else {
   const port = 3300 + Math.floor(Math.random() * 200);
   let child;
   let spawnError = null;
   try {
-    child = spawn(process.execPath, [path.join(VOICE_TOOL, 'voice-gui.mjs'), '--no-open', '--port', String(port)], {
-      cwd: VOICE_TOOL, stdio: ['ignore', 'pipe', 'pipe']
+    child = spawn(process.execPath, [voiceToolPath('voice-gui.mjs'), '--no-open', '--port', String(port)], {
+      cwd: voiceToolDir(), stdio: ['ignore', 'pipe', 'pipe']
     });
     child.on('error', (e) => { spawnError = e; });
   } catch (error) {
@@ -231,6 +247,7 @@ if (process.env.QQ_BRIDGE_TEST_LIVE === '1') {
     ok(false, `live 服务检查异常: ${e.message}`);
   } finally {
     try { child.kill(); } catch {}
+  }
   }
   }
 }

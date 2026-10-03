@@ -2,10 +2,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
+import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// 独立发语音工具已拆到仓库上一级的 voice-tool/（qq-bridge 只保留共享内核 src/voice-core.js）
-const VOICE_TOOL = path.resolve(ROOT, '..', 'voice-tool');
 const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
 
 let bad = 0;
@@ -47,8 +47,11 @@ try { new Function(big); ok(true, '主 script 语法可解析', `${big.length} �
 catch (e) { ok(false, '主 script 语法', e.message); }
 
 console.log('## 语音图形界面的音量控件');
-{
-  const voice = fs.readFileSync(path.join(VOICE_TOOL, 'public', 'voice.html'), 'utf8');
+if (!hasVoiceTool()) {
+  // 这一整段查的是独立工具自己的页面（voice.html），仓库里没有它。
+  skipVoiceTool('voice.html 的音量控件断言（volRange/volLabel/volReset/normBox/loudnessSel/previewBtn、滑块范围、事件绑定、前端 JS 可解析）');
+} else {
+  const voice = fs.readFileSync(voiceToolPath('public', 'voice.html'), 'utf8');
   const ids = [...voice.matchAll(/\sid="([A-Za-z0-9_-]+)"/g)].map((m) => m[1]);
   const dups = [...new Set(ids.filter((v, i) => ids.indexOf(v) !== i))];
   ok(dups.length === 0, 'voice.html ID 唯一', dups.length ? `重复：${dups.join(', ')}` : `共 ${ids.length} 个`);

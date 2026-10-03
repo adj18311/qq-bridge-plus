@@ -480,6 +480,9 @@ h1 {
 #metricMode {
   font-size:22px
 }
+#metricSnowluma {
+  font-size:19px
+}
 .grid {
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
@@ -1091,6 +1094,9 @@ tr:last-child td {
   #metricMode {
     font-size:18px
   }
+  #metricSnowluma {
+    font-size:16px
+  }
   .card {
     padding:22px
   }
@@ -1186,7 +1192,13 @@ tr:last-child td {
   .metric:nth-child(2) {
     border-right:0
   }
+  .metric:nth-child(4) {
+    border-right:0
+  }
   .metric:nth-child(3) {
+    border-bottom:0
+  }
+  .metric:nth-child(5) {
     border-bottom:0
   }
   .metric strong {
@@ -1195,6 +1207,9 @@ tr:last-child td {
   }
   #metricMode {
     font-size:20px
+  }
+  #metricSnowluma {
+    font-size:17px
   }
   .metric small {
     font-size:10px
@@ -1774,8 +1789,9 @@ button:active:not(:disabled) {
         <div class="search-wrap"><label class="sr-only" for="consoleSearch">搜索功能或参数</label><input id="consoleSearch" type="search" placeholder="搜索功能或参数…" autocomplete="off" aria-controls="searchResults" aria-expanded="false"><div id="searchResults" class="search-results" hidden></div></div>
       </div>
       <div id="connectionAlert" class="connection-alert" role="alert" hidden></div>
-      <div id="overviewSummary" class="overview-summary" data-page="overview">
+      <div id="overviewSummary" class="overview-summary span-all" data-page="overview">
         <div class="metric"><span>DSH 连接</span><strong id="metricDsh">连接中</strong><small id="metricDshHint">等待服务响应</small></div>
+        <div class="metric"><span>SnowLuma 上游</span><strong id="metricSnowluma">读取中</strong><small id="metricSnowlumaHint">等待网关健康上报</small></div>
         <div class="metric"><span>当前运行模式</span><strong id="metricMode">—</strong><small id="metricRole">正在读取角色</small></div>
         <button class="metric metric-link" data-view="sessions"><span>已建立会话</span><strong id="metricSessions">—</strong><small>查看会话映射 <span aria-hidden="true">↗</span></small></button>
         <button class="metric metric-link" data-view="sessions" data-target="section-pending"><span>待处理请求</span><strong id="metricPending">—</strong><small>提问与工具审批 <span aria-hidden="true">↗</span></small></button>
@@ -2453,6 +2469,13 @@ button:active:not(:disabled) {
         <button id="stateDirReharden" class="small">重新检测</button>
         <span class="meta" id="stateDirMsg"></span>
       </div>
+      <div id="snowlumaWarn" style="display:none;margin-top:10px;padding:8px 10px;border-left:3px solid var(--warn,#d08700);background:rgba(208,135,0,.08)">
+        <b>⚠️ QQ 网关连着，但收不到 QQ 的数据</b>
+        <div class="meta" style="margin:4px 0" id="snowlumaWarnHint"></div>
+        <div class="meta" id="snowlumaWarnDiag">最近一个上游事件包：<b id="snowlumaWarnPkt">unknown</b>；SnowLuma 自评接收链路 good=<b id="snowlumaWarnGood">unknown</b>。</div>
+        <div class="meta" style="margin:4px 0">这是 <b>SnowLuma 自己那边</b>的问题：它的 <code>[Hook]</code> 没能从 QQ 客户端取到数据，所以桥接的 WebSocket 连上了却始终没有内容可收。桥接没有原生 / 注入组件，也不改 SnowLuma，一条上游事件包都不会替你凭空造出来。</div>
+        <div class="meta">排查：打开 SnowLuma 的 <code>logs/snowluma-*.log</code>，搜 <code>[Hook]</code>，看有没有 <code>receive path stale</code> / <code>process enumeration timed out</code> 这类行；顺带考虑<b>升级 SnowLuma</b>（新版运行时对 hook 的兜底更好）。桥接这边不用重启。</div>
+      </div>
     </section>
 <section id="section-token" data-page="access" class="card">
       <h2>控制台访问令牌</h2>
@@ -2625,6 +2648,58 @@ async function api(path, method, body, _retried = 0) {
   return res.json();
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// 上游静默时长的人话渲染：只用于 SnowLuma 健康提示（秒 / 分钟 / 小时）。
+function fmtAgoMs(ms) {
+  if (ms === null || ms === undefined || ms === '') return '未知';
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return '未知';
+  if (n < 1000) return '刚刚';
+  if (n < 60_000) return Math.round(n / 1000) + ' 秒';
+  if (n < 3_600_000) return Math.round(n / 60_000) + ' 分钟';
+  if (n < 86_400_000) return Math.round(n / 3_600_000) + ' 小时';
+  return Math.round(n / 86_400_000) + ' 天';
+}
+// SnowLuma 上游健康：控制台是唯一的可视化出口（桥接侧只有日志）。
+// 旧版桥接的 /api/status 没有 snowluma 字段，一律当「未知」处理，不抛错。
+function renderSnowlumaHealth(sl) {
+  const el = document.getElementById('snowlumaWarn');
+  const strong = document.getElementById('metricSnowluma');
+  const hint = document.getElementById('metricSnowlumaHint');
+  if (!el || !strong || !hint) return;
+  if (!sl || typeof sl !== 'object') {
+    el.style.display = 'none';
+    strong.textContent = '未知';
+    strong.className = '';
+    hint.textContent = '桥接未上报上游健康（旧版桥接）';
+    return;
+  }
+  const degraded = sl.degraded === true;
+  const connected = sl.connected === true;
+  const ago = sl.lastPacketAgoMs;
+  const receiving = Number.isFinite(ago);
+  const goodText = sl.good === true ? 'good=true' : sl.good === false ? 'good=false' : 'good 未知';
+  if (degraded) {
+    strong.textContent = '已连接 · 未接收';
+    strong.className = 'err';
+    hint.textContent = '网关连着，但 QQ 侧数据没到';
+  } else if (!connected) {
+    strong.textContent = '未连接';
+    strong.className = 'err';
+    hint.textContent = '连不上 QQ 网关，请先启动 SnowLuma';
+  } else {
+    strong.textContent = '正常 · 接收中';
+    strong.className = 'ok';
+    hint.textContent = (receiving ? '最近一份上游事件包在 ' + fmtAgoMs(ago) + '前 · ' : '')
+      + (sl.good === false ? 'good=false' : sl.good === true ? 'good=true' : 'good 未上报');
+  }
+  if (!degraded) { el.style.display = 'none'; return; }
+  document.getElementById('snowlumaWarnHint').textContent = sl.hint
+    || '桥接与 QQ 网关的 WebSocket 连着，但一直收不到 QQ 侧的数据。';
+  document.getElementById('snowlumaWarnPkt').textContent = (receiving ? fmtAgoMs(ago) + '前' : '从未收到')
+    + (sl.lastPacketKind ? '（' + sl.lastPacketKind + '）' : '');
+  document.getElementById('snowlumaWarnGood').textContent = goodText;
+  el.style.display = '';
+}
 
 async function refresh() {
   try {
@@ -4296,6 +4371,7 @@ function updateOverview(status, modeLabel) {
   document.getElementById('metricDsh').textContent = status.dshReady ? '已连接' : '未连接';
   document.getElementById('metricDsh').className = status.dshReady ? 'ok' : 'err';
   document.getElementById('metricDshHint').textContent = status.dshReady ? '桥接状态已同步' : '请检查 DSH 是否运行';
+  renderSnowlumaHealth(status.snowluma);
   document.getElementById('metricMode').textContent = modeLabel.replace('模式', '');
   document.getElementById('metricRole').textContent = '角色 · ' + (status.role || '默认人格');
   document.getElementById('accessSummary').textContent = '管理员 ' + (status.ownerQQ || '未设置') + ' · ' + (status.allowGroups || []).length + ' 个白名单群 · ' + (status.allowPrivate || []).length + ' 位白名单好友';
@@ -4313,6 +4389,11 @@ function setConnectionError(error) {
   document.getElementById('metricDsh').textContent = '连接中断';
   document.getElementById('metricDsh').className = 'err';
   document.getElementById('metricDshHint').textContent = '当前状态可能已过期';
+  // 上游健康也一起过期：桥接都联系不上时，别让上一次的 SnowLuma 结论继续挂着。
+  document.getElementById('metricSnowluma').textContent = '未知';
+  document.getElementById('metricSnowluma').className = '';
+  document.getElementById('metricSnowlumaHint').textContent = '当前状态可能已过期';
+  document.getElementById('snowlumaWarn').style.display = 'none';
   const alert = document.getElementById('connectionAlert');
   alert.textContent = error.message === '未授权' ? '访问令牌无效或已取消输入。请使用启动日志中的控制台链接重新打开。' : '无法连接桥接服务，当前显示的是上次同步结果。请检查桥接是否运行，再点击右上角刷新。';
   alert.hidden = false;
