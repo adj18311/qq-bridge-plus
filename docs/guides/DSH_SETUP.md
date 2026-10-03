@@ -103,8 +103,8 @@
      - `receive path stale: … reporting good=false` —— 收不到数据（会自愈，也可能不自愈）
      - `process enumeration timed out after 4000ms` —— 连 QQ 进程都枚举不到
      - 正常应有 `login detected: PID=…` + `pipe connected: PID=…`
-  3. **升级 SnowLuma**（见 [../../README.md](../../README.md) 的「SnowLuma 版本与上游健康」）：1.14.17 刷过打包的原生组件，建议 ≥ 1.14.17。**升级 SnowLuma 是你自己的事**——本桥接只探测、不部署。
-  4. 顺带确认 QQ 客户端本身是登录状态、没有被顶号；SnowLuma 1.14.17 起会通过 `bot_status` 事件把账号上下线告诉我们，桥接日志里会打「QQ 账号会话已离线」。
+  3. **再考虑升级 SnowLuma**（见 [../../README.md](../../README.md) 的「SnowLuma 版本与上游健康」）。⚠️ 但先别指望它：**实测注入用的原生组件在 1.14.9 与 1.14.20 之间逐字节完全相同**，升级只换 JS 层，**不会修「原生 hook 挂不上 QQ」**。**升级 SnowLuma 是你自己的事**——本桥接只探测、不部署。
+  4. 顺带确认 QQ 客户端本身是登录状态、没有被顶号；较新的 SnowLuma（**1.14.20 已确认**）会通过 `bot_status` 事件把账号上下线告诉我们，桥接日志里会打「QQ 账号会话已离线」。
   > 桥接**没有**任何原生/注入面（依赖全纯 JS，源码里没有 `.dll`/`.node`/FFI/进程注入），也不启动、不控制 SnowLuma 或 QQ，所以「QQ 注入失败」不可能是本桥接造成的。
 - **看不到 `qq-mode` 设置卡片**：这是**已知限制**，不是配置错误。DSH 的 `settings.plugin.item` 槽位只渲染「host 已注册的命名空间 ∩ 声明了该 key 的卡片」，而卡片必须由插件的**浏览器半**（`package.json` 的 `dsh.client` + `lib/client.js`）注册；`plugins/qq-mode-console` 目前只有 host 半。反复重跑 `setup-dsh.mjs` 或重启 DSH 都不会让卡片出现。要真正修好需补一个 `lib/client.js`。
 - **改了模式却不生效 / 5 秒后被改回去**：**此问题已在 `src/bridge.js` 修复**（桥接需重启后生效）。历史成因：`refreshMode()` 每 5 秒被 `checkDsh` 调用一次，先读 DSH 的 `qq-mode` 命名空间，只要有合法值就**直接 return，完全忽略本地 `state/mode.json`**；而命名空间的默认值始终存在，所以 DSH 侧永远有值 —— 于是控制台写本地文件会在下一次轮询被覆盖回滚。现在 `POST /api/mode` 会**写穿到 DSH 设置**（`api.settings.update({ ns: 'qq-mode', patch: { mode } })`），响应里新增 `dshSynced` 字段；若写穿失败（DSH 未运行等）会记日志并保留本地值。注意 `settings/update` 在 0.2.0 是**多参数** RPC：args 是 `{ ns, patch, expectedRevision }` 平铺，**不是** `{ request: {...} }`（传 request 会被网关拒为 `gateway/arguments-invalid`）。同源问题：`closedAgentPreset` 在 DSH schema 里不存在，原先也因这个提前 return 而失效，现已改为始终以本地 `state/mode.json` 为准。若仍看到回滚，检查桥接日志里是否有「写穿 DSH 设置失败」。

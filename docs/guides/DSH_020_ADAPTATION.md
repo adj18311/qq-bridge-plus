@@ -417,7 +417,8 @@ v0.2.0 发布后，有人反馈「**QQ 注入失败**」。调查后修了三类
   且它只往 stderr 写）。
 - **上游打包 bug 仍在**（dist 相对导入缺 `.js`），`postinstall` 补丁依旧必需（仍命中 13 个文件）。
 - 顺带修两处**只影响升级运行时之后**的正确性问题：
-  `markdown` 段落此前落到 default 分支、被喂字面量 `[markdown]`（上游 1.14.17 `1934e4e7` 起带 `data.text`）；
+  `markdown` 段落此前落到 default 分支、被喂字面量 `[markdown]`（上游 1.14.17 的 changelog 里列为 `1934e4e7`；
+  **实测 1.14.20 的线上段落是 `data:{content}`**，桥接读 `d.text ?? d.content`，两个形状都覆盖）；
   图片段落读的是 camelCase `subType` 而线上字段是 snake_case `sub_type`（一直是空串，且不报错）。
 - 新增 `npm run probe:heartbeat`：只读探针，验证心跳字段是否真的存在。
 
@@ -453,6 +454,47 @@ SnowLuma 同一账号的 **HTTP token（3000）与 WS token（3001）不同**，
 所以桥接**每次启动的首次 WS 连接几乎必然失败一次**（`连接断开(1006)` → 自愈 → `已连接`）。
 这条序列是正常的，日志文案已改清楚；真正会一直连不上的是**自愈无从下手**
 （`homeDir` 没配/被移动/读不到 `config/onebot_<QQ>.json`）—— 那才要查。
+
+### G. 运行时升到 1.14.20 的实测（2026-10-03）
+
+把用户的运行时从 1.14.9 升到 1.14.20 并逐项实测（**安装/启动由用户自己做**，本次只做了下载、校验、
+迁移与核对）。结论：
+
+| 检查 | 证据 |
+| --- | --- |
+| 包完整性 | `SnowLuma-v1.14.20-win-x64-lite.zip` SHA256 == 官方发布资产 `digest` |
+| **原生组件跨版本未变** | 官方 1.14.9 包 == 本机 1.14.9 == 官方 1.14.20，`native/snowluma-win32-x64.{dll,node}` 与 `websocket-win32-x64.node` **逐字节相同**；`index.mjs` 7,062,899 → 7,476,546 B |
+| 配置迁移无损 | 桥接的 `readOneBotTokens()` 在新装目录解析出两个账号，HTTP/WS token 与旧装**逐一相同** |
+| 心跳主信号仍成立 | `status = {"online":true,"good":true}`、`interval = 30000` |
+| `bot_status` 真的出现了 | 1.14.9：**0** 次；1.14.20：**3** 次（带 `sub_type`/`user_id`） |
+| 桥接连通 | 走完「首次 1006 → 自愈 WS token → 已连接」；`/api/status.snowluma` 给出 `good:true`、**`goodSource:"heartbeat"`** |
+| 收到 QQ 消息 | `lastPacketKind: message/group`；静默态下正确「仅入库不唤醒」 |
+| **完整往返** | 唤醒 → DSH 建会话并挂 `qq-chat-v2` → 工具发送 `成功 1/1 条` → 群里实际出现两条回复 |
+
+> ⚠️ **更正**：本文 v0.2.1 附录 A 曾暗示「升级 SnowLuma 可能修注入（1.14.17 刷新过原生组件）」。
+> 字节级证据表明**原生组件根本没有变**，那条推断是错的。升级只换 JS 层
+> （事件流水线订阅更全、`bot_status`、markdown 带 text、收发修复），
+> **不会修「原生 hook 挂不上 QQ」**——那类问题要走 SnowLuma 自己的排查（QQ 版本、杀软拦注入、权限）。
+
+### H. 版本号方案（自本版起）
+
+主版本号与 DSH 同步，后缀 `rN` 表示「同一 DSH 版本下桥接的第 N 次发布」：
+
+| 标签 | 说明 |
+| --- | --- |
+| `v0.2.0` | r1 —— DSH 0.2.0-rc.2 适配 |
+| `v0.2.1` | r2 —— 采用本方案**之前**的一次性发布（标签已推送，**不改写**） |
+| `v0.2.0-r3` | r3 —— 本版（上游健康 + 客户端库升级 + clone 可移植性 + 1.14.20 实测） |
+
+`package.json` 是 `"private": true`（不发布到 npm），所以 `0.2.0-r3` 这种 prerelease 写法
+不产生 npm 语义影响；版本号与标签保持一致，便于 `verify:adaptation` 对账。
+
+### I. 本次**未**修的问题（留给下次，避免把一个缺陷混进已验证的改动里）
+
+工具流水里 `mcp__snowluma__qq_wait_for_messages` 出现过 `ok:false` 且
+`error: "\"Error: [object Object]\""`（2026-09-28、2026-10-03 各一次）。错误对象被 `String()` 成了
+`[object Object]`，**运维与智能体都看不到任何信息** —— 属于与本轮同一个「失败不可读」的主题，
+但它与 SnowLuma 升级无关，故未并入本版。
 
 ---
 
