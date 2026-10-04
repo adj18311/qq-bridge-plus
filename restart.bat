@@ -12,7 +12,9 @@ rem 只因控制台端口冲突才被挡下，其中一个还把 social-v2.json 
 rem 这里改成按 PID（读锁文件）+ 按 *bridge.js* 兜底两条路一起杀。
 powershell -NoProfile -Command "$lock = Join-Path '%~dp0' 'state\bridge.lock'; $pids = @(); if (Test-Path $lock) { $raw = (Get-Content $lock -Raw).Trim(); if ($raw -match '^\d+$') { $pids += [int]$raw } }; Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*bridge.js*' -and $_.CommandLine -notlike '*mcp-*' -and $_.CommandLine -notlike '*node_modules*' } | ForEach-Object { $pids += $_.ProcessId }; $pids | Sort-Object -Unique | ForEach-Object { Write-Host ('  kill PID ' + $_); Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
 rem 等旧实例真的退出（并放开控制台端口）再删锁；否则「锁删了但进程还活着」就是双实例。
-timeout /t 3 /nobreak >nul
+rem 原 `timeout /t 3 /nobreak` 在 stdin 被重定向时报 'Input redirection is not supported'
+rem 并直接跳过等待 → 锁已删而旧进程未退,出现双实例窗口。改用无 stdin 依赖的睡眠。
+powershell -NoProfile -Command "Start-Sleep -Seconds 3"
 powershell -NoProfile -Command "$live = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*bridge.js*' -and $_.CommandLine -notlike '*mcp-*' -and $_.CommandLine -notlike '*node_modules*' }; if ($live) { Write-Host '仍有桥接进程存活：'; $live | ForEach-Object { Write-Host ('  PID ' + $_.ProcessId + '  ' + $_.CommandLine) }; exit 1 } else { exit 0 }"
 if errorlevel 1 (
     echo.

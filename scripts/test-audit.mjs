@@ -19,6 +19,8 @@ const tests = [
   'test-reply-wait.mjs', 'test-preset-prompt.mjs', 'test-role-card.mjs',
   // 令牌账本 / 价目表 与 体检修复回归（纯函数，无外部依赖）
   'test-token-usage.mjs', 'test-hardening.mjs',
+  // 跨会话共享记忆补丁（抽取式断言：补丁被升级覆盖 / 标记被改名时直接 FAIL）
+  'test-shared-memory.mjs',
   // 语音发送（纯函数 + 端点存在性；真发语音只在 --live 或 CLI 里做）
   'test-voice.mjs',
   // 音量：参数校验 + 真的调用 ffmpeg 调音量 + 自算 RMS 验证增益
@@ -37,6 +39,12 @@ const tests = [
   'test-encoding.mjs',
   // 控制台乱码机制（UTF-8 字节被按 GBK 解码）+ chcp 修复
   'test-console-encoding.mjs',
+  // 守护自愈（2026-10-04 21:16 那次 21 分钟离线的钉子）：桥接 exit 2 后 start.bat
+  //   必须继续拉起（不再 `pause` + `exit /b 2` 自我终止）。桩进程只跑在临时目录、
+  //   不碰线上端口；自带 50s 硬超时（见 test-start-guard.mjs:30 / :133），
+  //   单跑约 21s，在本审计的每脚本 60s 上限内。⚠️ 手工跑不算数：它必须进聚合门禁，
+  //   否则「守护不能自杀」会悄悄回归。
+  'test-start-guard.mjs',
   // 🔴 铁律 L7（仿真会话不得拥有本地执行能力）：注册期断言——
   //    preset 挂了守卫、守卫的 restrict 名单覆盖全部已知本地工具、且执行期一律拒绝。
   //    这是唯一挡住"绕过桥接直连 OneBot HTTP"的东西（见 QSH_PLAN.md §0.1/§5.2），
