@@ -8,6 +8,15 @@ config.json
 *.log
 *.bak
 *.bak-*
+# 本地补丁备份：src/bridge.js.before-<用途>-<ISO时间戳> 等
+# （本地回滚/对照产物，每份数百 KB；重放记录里只引用文件名，不要求文件入库）
+*.before-*
+# 本机控制台令牌的副本（内容等于 state/console-token，state/ 已忽略，这里再兜一层）
+令牌.txt
+# AgentTeams 团队运行态（任务清单 / 成员报告 / 邮箱：本地过程数据）
+.agent-teams/
+# SnowLuma 网关本地安装（第三方 bundle + 本机账号配置 + 日志：体积大且含个人配置）
+SnowLuma/
 
 # Local development / planning / research docs (not part of public project)
 /PROJECT_GUIDE.md
@@ -62,6 +71,22 @@ docs/qq-bridge-PUBLISH_PLAN.md
 docs/qq-bridge-SECURITY_AUDIT.md
 docs/guides/PROJECT_GUIDE.md
 docs/guides/VOICE.md
+
+# ── 本轮（2026-10-04 t19）新增的内部过程文档：含本机绝对路径 / 真 QQ 号 / 个人配置 ──
+# 判断依据：privacy-scan 实测这些文件命中「本机绝对路径（Windows 用户目录）」、
+# 「疑似令牌/密钥（高熵串）」（后者其实是备份文件名里的 ISO 时间戳，见 scripts/privacy-rules.json），
+# 或含真白名单 QQ 号。它们是**本机过程记录**（交接提示 / 任务表 / 复盘 / 团队 checklist / 评审记录），
+# 不是承重文档 —— 承重的三份仍入库：LOCAL_PATCHES.md / SHARED_MEMORY_REPLAY.md / SHARED_MEMORY_PATCH.md。
+# 注意：docs/README.md 里对这些条目的登记必须写明「本文件不在公开仓库里」（照 docs/audits/* 的先例），
+# 否则索引会指向没有被提交的文件。
+docs/guides/HANDOFF_PROMPT.md
+docs/guides/NEXT-TASKS.md
+docs/guides/NEXT-TASKS-ROUND2.md
+docs/guides/UPGRADE-RETRO-2026-10-04.md
+docs/guides/TEAM_RUN_CHECKLIST.md
+docs/guides/REVIEW_OUT_OF_TEAM_2026-10-04.md
+# 一次性核对脚本：硬编码了真白名单 QQ 号（只在本机跑过，不发布）
+/scripts/check-whitelist-mode-allowed.mjs
 
 # 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
 audio/

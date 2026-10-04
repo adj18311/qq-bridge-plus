@@ -1,0 +1,7 @@
+# 批处理必须是 CRLF：cmd.exe 解析 LF-only 批处理的 goto/标签会出错，
+# 而 start.bat 是本项目的守护脚本（2026-10-04 的离线事故复盘见本机过程文档
+# docs/guides/UPGRADE-RETRO-2026-10-04.md 缺陷①，该文档 .gitignore 保护、不入库；
+# 可复跑的离线回归是入库的 scripts/test-start-guard.mjs）。
+# 实测（git ls-files --eol）：索引里 start.bat / restart.bat 是 LF、只有工作区是 CRLF ⇒
+# autocrlf=false 的 clone 会拿到 LF-only 的 .bat。这一行让检出恒为 CRLF。
+*.bat text eol=crlf
