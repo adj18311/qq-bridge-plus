@@ -17,6 +17,14 @@
 | [guides/TOKEN_USAGE_CONSOLE.md](guides/TOKEN_USAGE_CONSOLE.md) | 控制台「令牌与花费」看板：数据来源、计价口径（峰谷分时）、API、配置 | ✅ |
 | [guides/CONSOLE-UI-TESTING.md](guides/CONSOLE-UI-TESTING.md) | 控制台离线预览（`npm run preview:console`）与离线浏览器回归（`npm run test:console-ui`）怎么用 | ✅ 2026 整理时自 `scripts/` 移入 |
 | [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) | **安全基线与威胁模型**：威胁主体、已实现的边界（准入/工具面/出站/控制台/落盘/网络）、已知残余风险、发布前回归清单、改动检查单 | ✅ **改动安全相关代码前必读**（2026-09-20 新增） |
+| [guides/LOCAL_PATCHES.md](guides/LOCAL_PATCHES.md) | **本地改动清单与重打方式**：跨会话共享记忆、记忆每日快照+回滚、activeHours 主动机会时间窗、restart.bat stdin 修复、DSH profile 的 yun-xi-gpt retryPolicy —— 升级桥接包/重装插件后照着重打 | ✅ 2026-10-04 新增 |
+| [guides/SHARED_MEMORY_REPLAY.md](guides/SHARED_MEMORY_REPLAY.md) | **可重放记录**：7 处核心改动的「唯一锚点 + 改动前/后」、备份文件名、升级后重打步骤；锚点表由 `npm run test:shared-memory` 逐条机器核对 | ✅ 2026-10-04 新增 |
+| [guides/SHARED_MEMORY_PATCH.md](guides/SHARED_MEMORY_PATCH.md) | **跨会话共享记忆（本地补丁）**：补丁点清单（7 处核心 + 依赖的 memory-update / memory-query / 续期循环）、写入口径、共享域配置、升级脆弱性与回归检查点、`npm run test:shared-memory` 怎么跑 | ✅ 2026-10-04 新增 |
+| [guides/UPGRADE-RETRO-2026-10-04.md](guides/UPGRADE-RETRO-2026-10-04.md) | **2026-10-04 这一轮的复盘**：9 条缺陷（现象/根因/修复/证据 file:line，含守护自杀离线 20 分钟、快照兜底名、端点 fail-open、日志文案、印象 uid 开关、脏会话、控制台面板、改名 uid 行为断言、`start.bat` 5s 分支缺兜底）+ 三条实测事实（并发假红、N2 残余边界、面板懒加载/预览局限）+ 8 条作业纪律改进 + 下一轮候选 | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机路径与真 QQ 号，仅本机） |
+| [guides/TEAM_RUN_CHECKLIST.md](guides/TEAM_RUN_CHECKLIST.md) | **团队作业 checklist**：开工前 / 进行中 / 收尾三段，每条都给可执行命令与通过标准（含冻结工作区跑审计、`file mtime` vs 进程启动时间判"是否生效"、端点 403/200 矩阵） | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机路径，仅本机） |
+| [guides/REVIEW_OUT_OF_TEAM_2026-10-04.md](guides/REVIEW_OUT_OF_TEAM_2026-10-04.md) | **三处团队外改动的独立评审**（`restart.bat` / DSH profile 的 `yun-xi-gpt` retryPolicy / `SnowLuma/index.mjs` 的 historySync 探测容错）：逐处 file:line 结论与 verdict、残余风险、未核实点、被评审文件与备份的绝对路径 + SHA256 | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机绝对路径，仅本机） |
+| [guides/NEXT-TASKS-ROUND2.md](guides/NEXT-TASKS-ROUND2.md) | **第 2 轮待办（含根因）**：读端点 create-on-read 会给非白名单 key 建会话、SnowLuma 跳过数不进 `failedSessions`、mark-read 容错、historySync 的 TRACE 诊断、`adminOnlyV2Paths` 注释、快照面板静态断言、N2 残余边界、守护 vs 测试桩的排障经验、守护「真控制台」路径未覆盖、**会话「忙」可无限期且唤醒被静默暂存**、控制台令牌轮换 —— 每条给现象/证据 `file:line`/为什么本轮不做/建议做法 | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机路径与真 QQ 号，仅本机） |
+| ——（未登记行）`guides/HANDOFF_PROMPT.md` / `guides/NEXT-TASKS.md` | 本机内部交接提示与**第 1 轮**任务表（入口文档，不对外） | ⚠️ **不在公开仓库里**（`.gitignore` 保护，仅本机；因此不在上表单独登记，避免索引指向未提交的文件） |
 
 ## design/ —— 设计与规划（读设计意图用）
 
