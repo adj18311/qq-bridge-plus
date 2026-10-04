@@ -180,9 +180,16 @@ console.log('## qq-bridge 语音系统：控制台与 preset');
 
 console.log('## 文档');
 {
-  const voice = read(path.join('docs', 'guides', 'VOICE.md'));
-  for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
-    ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
+  // 这份文档不在本仓库的工作区里（git ls-files 未跟踪它；它是随 voice-tool/ 一起外置的文档）。
+  // 按本项目一贯口径：文件不存在是「跳过」，不是「失败」——否则整轮聚合回归会被一份
+  // 根本不在仓库里的文档拖红（t16-F12）。
+  if (!exists(path.join('docs', 'guides', 'VOICE.md'))) {
+    skipVoiceTool('docs/guides/VOICE.md 的关键词断言（该文档未随本仓库跟踪/检出）');
+  } else {
+    const voice = read(path.join('docs', 'guides', 'VOICE.md'));
+    for (const needle of ['图形界面', 'voice-gui.mjs', 'voice-cli.mjs', '默认是关的', '发语音-图形界面.cmd']) {
+      ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
+    }
   }
   const readme = read('README.md');
   ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');
