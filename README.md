@@ -17,18 +17,97 @@
 
 > **本仓库版本 `0.3.0`**，基线是上游 `v0.2.0-r3`。上游那段版本说明（DSH 版本适配部分）同样适用。
 >
-> 相对上游多出来的东西：
->
-> | 改动 | 解决什么 |
-> | --- | --- |
-> | [卡忙自愈看门狗](docs/guides/BUSY_WATCHDOG.md) | 会话被判"忙"之后卡死、消息被静默暂存，以前只能人工重启 |
-> | 跨会话共享记忆 | 以前群和私聊各记一份，同一个人换个会话就"失忆" |
-> | 记忆每日快照 + 回滚 | 记忆被写坏时能退回前一天 |
-> | 控制台记忆快照面板 | 存档 / 回滚在网页上点，不用进命令行 |
-> | 主动机会时间窗 `activeHours` | 深夜不主动开口 |
-> | 三处加固 | 快照端点缺管理端校验、`start.bat` 遇到 exit 2 会自我终止、记忆快照写失败时静默 |
->
-> 相对上游的完整清单在 [CHANGELOG.md](CHANGELOG.md)；改动细节与"跟着上游升级后怎么重打"在 [docs/guides/LOCAL_PATCHES.md](docs/guides/LOCAL_PATCHES.md) 和 [docs/guides/SHARED_MEMORY_PATCH.md](docs/guides/SHARED_MEMORY_PATCH.md)。
+## 相对上游改了什么
+
+六处。每条给出：原来是什么问题、现在怎么做、怎么配、细节在哪。
+
+### 卡忙自愈看门狗
+
+原来：桥接判断"某个会话在忙"有四条判据 —— `pendingWakeTimer`、`pendingWakeKeys`、`promptQueues`、`v2TurnStartAt`/`collectors` —— 其中只有第二条带 30 分钟租约，另外三条没有超时。只要它们的"结束信号"丢了（DSH 掉线重连、桥接重启正好撞在回合中途、客户端异常退出），这个会话就永久卡在忙态：之后所有唤醒被静默暂存，QQ 那头的感受是"它不理我了"，只能人工重启桥接。2026-10-05 早上就这么卡了 25 分钟。
+
+现在：每 10 秒扫一次，用"有没有新的 DSH 事件流帧"判活动（QQ 进来的新消息不算，否则群里刷屏时永远不会触发）。5 分钟没帧先记一行日志，15 分钟释放忙标记并把这段时间积压的唤醒按正常投递路径重排，30 分钟是硬上限。同一条 `(reason, seq)` 只补发一次，不会因为"残留定时器 + 补发"撞车而把同一句话回两遍。
+
+```json
+"socialV2": {
+  "busyWatchdog": {
+    "enabled": true,
+    "warnMs": 300000,
+    "releaseMs": 900000,
+    "hardCapMs": 1800000
+  }
+}
+```
+
+阈值在桥接启动时读进内存，改完要重启 `node src/bridge.js`。不想要这个机制就把 `enabled` 设成 `false`，行为退回上游那样。
+
+细节：[docs/guides/BUSY_WATCHDOG.md](docs/guides/BUSY_WATCHDOG.md)（判据表、三档时间点的取值理由、日志字段怎么读、已知限制、测试怎么跑）
+
+### 跨会话共享记忆
+
+原来：话题和人物印象各存各的会话。同一个人在群里聊过，私聊里再问一遍，agent 完全不记得。
+
+现在：有一个跨会话的共享桶（话题、人物印象、控制台确认过的目标）。写印象时要么目标确实是本会话成员，要么是你在控制台确认过的 uid，否则拒写；印象的主键是 uid，改昵称不会再留下两条记录。印象超过 30 天没再确认就丢弃、超过 7 天没确认就弱化；话题在 24 小时内没被再提起就淘汰。
+
+```json
+"socialV2": {
+  "sharedMemory": {
+    "enabled": true,
+    "keys": [],
+    "migrate": true,
+    "topicMax": 200,
+    "impressionMax": 100,
+    "impressionTtlMs": 2592000000,
+    "impressionStaleMs": 604800000
+  }
+}
+```
+
+`keys` 留空表示所有群和私聊都在共享域里；填 `["group:123456", "private:654321"]` 就只共享这几个会话。`migrate` 控制是否把已有的会话内记忆并进共享桶。
+
+细节：[docs/guides/SHARED_MEMORY_PATCH.md](docs/guides/SHARED_MEMORY_PATCH.md)（补丁点清单、写入口径、共享域配置、升级脆弱性）与 [docs/guides/SHARED_MEMORY_REPLAY.md](docs/guides/SHARED_MEMORY_REPLAY.md)（可重放记录 + 锚点表，由 `npm run test:shared-memory` 逐条机器核对）
+
+### 记忆每日快照与回滚
+
+原来：记忆被写坏（误删、写串、回滚需求）只能手工改 `state/social-v2.json`。
+
+现在：按本地日期自动存快照，默认保留 30 天，可以从任意一份回滚回来。快照内容 = 共享桶 + 每个会话的话题与印象，带生成时间戳，文件放在 `state/memory-snapshots/`。写快照失败会记日志（以前是静默失败，出事时看不出发生过什么）。
+
+```json
+"socialV2": {
+  "memory": {
+    "snapshotEnabled": true,
+    "snapshotKeepDays": 30
+  }
+}
+```
+
+### 控制台记忆快照面板
+
+在控制台的 socialV2 页里，可以直接看到快照列表、点"立即存档"、点"回滚"（回滚有二次确认）。面板是懒加载的，不打开不占资源。命令行也能用同样的能力，见控制台 API。
+
+### 主动机会时间窗
+
+原来：agent 自己找话题主动开口的检查不分昼夜，凌晨也可能冒出来说话。
+
+现在：`socialV2.proactive.activeHours` 给主动机会划一段时间窗，窗口外跳过检查。被 @、被点名、被提问、拍一拍、私聊这些照旧不受影响。
+
+```json
+"socialV2": {
+  "proactive": {
+    "activeHours": { "start": 7, "end": 23 }
+  }
+}
+```
+
+### 三处加固
+
+- **快照相关端点补上管理端校验**：列表、存档、回滚这些端点此前只校验控制台令牌；现在还需要 `x-console-admin` 头。原来的写法实际上等于 fail-open。
+- **`start.bat` 守护脚本**：子进程以 exit 2 退出时守护会自我终止，结果桥接离线后再没有人把它拉起来（实测离线了 20 分钟）；顺带修掉"等子进程 5 秒"那段实际只等了 76 毫秒的问题。
+- **记忆快照写失败不再静默**：写不进去会在日志里留一行，而不是悄悄丢掉。
+
+改动都有回归测试：`npm run test:audit` 覆盖 34 个脚本，其中共享记忆 160 条断言、看门狗 35 例，另有独立对抗 harness `node scripts/verify-busy-watchdog.mjs`。
+
+相对上游的完整清单在 [CHANGELOG.md](CHANGELOG.md)；"跟着上游升级后怎么把这些补丁重打回去"在 [docs/guides/LOCAL_PATCHES.md](docs/guides/LOCAL_PATCHES.md)。
 
 > ⚠️ **当前版本 `v0.2.0`，适配 DSH 0.2.0-rc.2**（在该版本上逐项实测：`npm run verify:adaptation`）。
 > 鉴权用 `~/.dsh` 里持久化的浏览器会话签名密钥**离线铸造 Cookie** —— DSH 0.1.7 起进程启动 token
