@@ -192,7 +192,13 @@ console.log('## 文档');
     }
   }
   const readme = read('README.md');
-  ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');
+  // 独立工具不在本仓库时，README 不该再写那两个入口（它只会说明「本仓库不含该工具」）——
+  // 与上面 VOICE.md 同样的口径：工具/文档不存在就跳过，不把聚合回归拖红。
+  if (hasVoiceTool()) {
+    ok(readme.includes('voice-gui.mjs') && readme.includes('voice-cli.mjs'), 'README 含两个语音工具的入口说明');
+  } else {
+    skipVoiceTool('README 里的两个语音工具入口说明（独立工具不在本仓库，README 只说明本仓库不含该工具）');
+  }
   ok(/AI 发语音默认关闭/.test(readme), 'README 已知限制说明默认关闭');
   ok(read('docs/README.md').includes('FOLDER_MAP.md'), 'docs/README.md 索引链接到 FOLDER_MAP.md');
   ok(exists(path.join('docs', 'FOLDER_MAP.md')), 'docs/FOLDER_MAP.md 存在');

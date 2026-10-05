@@ -11,12 +11,13 @@
 >
 > 🔒 QQ 会话的权限边界与安全承诺见 **[RULES.md](RULES.md)**。
 >
-> 🎤 独立的「发语音」工具已拆到仓库上一级的 **`../voice-tool/`**（命令行 `voice-cli.mjs` / 图形界面 `voice-gui.mjs`），不再依赖 qq-bridge 运行。
+> 🎤 **发**语音由 `socialV2.voice.enabled` 控制、音频放在 `audio/`（默认关闭）；独立的语音工具已从项目拆出，不在本仓库。
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
-> **本仓库版本 `0.3.0`**，基线是上游 `v0.2.0-r3`。上游那段版本说明（DSH 版本适配部分）同样适用。
->
+> **本仓库版本 `0.3.0`**，基线是上游 `v0.2.0-r3`，适配 DSH `0.2.0-rc.2`（`npm run verify:adaptation`）。
+> 首次使用看下面两节：[安装与配置](#安装与配置)、[完整启动流程](#完整启动流程从零开始)。
+
 ## 相对上游改了什么
 
 六处。每条给出：原来是什么问题、现在怎么做、怎么配、细节在哪。
@@ -109,30 +110,17 @@
 
 相对上游的完整清单在 [CHANGELOG.md](CHANGELOG.md)；"跟着上游升级后怎么把这些补丁重打回去"在 [docs/guides/LOCAL_PATCHES.md](docs/guides/LOCAL_PATCHES.md)。
 
-> ⚠️ **当前版本 `v0.2.0`，适配 DSH 0.2.0-rc.2**（在该版本上逐项实测：`npm run verify:adaptation`）。
-> 鉴权用 `~/.dsh` 里持久化的浏览器会话签名密钥**离线铸造 Cookie** —— DSH 0.1.7 起进程启动 token
-> 只存在于内存、不再落盘，旧版「从 guard 日志里读 token」的方式已失效。agent preset 是 DSH 0.1.7 起的
-> `@deepseek-ai/dsh-agent-preset` Cordis 行（`~/.dsh/.agent-presets/` 目录机制已废）。协议代次
-> （Cookie 鉴权 / 斜杠 RPC / `/api/remote.mux` 事件流）自 DSH `0.1.2-alpha.1` 起引入，与更早的点号
-> endpoint 协议不兼容 —— **DSH `0.1.1-rc.2` 及更早**请改用 tag
-> [`v0.1.0`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0)；**DSH 0.1.5-rc.1** 用
-> [`v0.1.5`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.5)；**DSH 0.1.7-rc.2** 用
-> [`v0.1.7`](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.7)。
+> **本仓库版本 `0.3.0`，适配 DSH `0.2.0-rc.2`**（在该版本上逐项实测：`npm run verify:adaptation`）。相对上游 `v0.2.0-r3` 的差异见上一节与 [CHANGELOG.md](CHANGELOG.md)。
 >
-> v0.2.0 修的主要是**会话待处理队列读不出来**：桥接退役/重置 QQ 会话时要先清掉 DSH 侧没跑的队列，
-> 而那段解析认的是一个**从来不存在的字段**（`session/control` baseline 的 `value.queues[<id>]`）——
-> 于是**每一次**退役都抛 `invalid session/control baseline`，队列清不掉、旧任务继续在 DSH 里跑，
-> 而日志里只有一行警告。**注意：这不是 0.2.0 引入的**——该代码随 v0.1.7 发布，报错日志早于
-> 0.2.0-rc.2 的发布，0.2.0 只是把它翻了出来。现在读队列以一元 RPC `session/projections` 为主路径、
-> 以 `projections[<id>].values.inbox` 为回退形状，并补了两条回归网。
-> 同一轮还按 0.2.0 的真实工具清单重新对账了 QQ 安全守卫（新增 15 个必须隐藏的工具名，
-> 含全局层默认启用的 `read_mcp_resource`、`plugin_manager`、`subagent_codex` 等）。
+> 和 DSH 版本强相关、现在仍然成立的三件事：
 >
-> 逐条改动说明见 [docs/guides/DSH_020_ADAPTATION.md](docs/guides/DSH_020_ADAPTATION.md)。
+> - **鉴权**：用 `~/.dsh` 里持久化的浏览器会话签名密钥**离线铸造会话 Cookie**。DSH 0.1.7 起进程启动 token 只存在于内存，旧文档里"从 guard 日志读 token"的做法已失效。
+> - **agent preset**：DSH 0.1.7 起是 `@deepseek-ai/dsh-agent-preset` 的 Cordis 行，由本仓库 `plugins/qq-agent-presets/` 生成并插进 profile；`~/.dsh/.agent-presets/` 目录机制已废。
+> - **协议代次**：Cookie 鉴权 + 斜杠 RPC + `/api/remote.mux` 事件流自 DSH `0.1.2-alpha.1` 引入，与更早的"点号 endpoint"协议不兼容。
 >
-> 本次更新的完整说明见 [**Release v0.2.0**](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.2.0)。
+> **要接更老的 DSH**（`0.1.1-rc.2` 及更早 / `0.1.5-rc.1` / `0.1.7-rc.2`）时本仓库没有对应版本，请改用上游的 tag [v0.1.0](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.0) / [v0.1.5](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.5) / [v0.1.7](https://github.com/Derpyu520/qq-bridge/releases/tag/v0.1.7)。
 >
-> 默认分支 `main` **就是**本版本，`git clone` 直接拿到，无需切换分支。
+> 默认分支 `main` 就是这个版本，`git clone` 直接拿到。
 
 ```
 QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──► DSH Web API (127.0.0.1:3080/api)
@@ -144,7 +132,7 @@ QQ 消息 ──► SnowLuma（OneBot v11 WS）──► 本桥接进程 ──�
 
 📽️ [AI 仿真群友 - 项目介绍视频](https://github.com/Derpyu520/qq-bridge/releases/download/v0.1.5/project-intro.mp4)（约 11 MB）
 
-> 视频改由 **Release 附件**托管，不在仓库里——只想安装桥接的人不必再下载这 11 MB（它此前占整个仓库体积的 88%）。
+> 这是**上游**的介绍视频（放在上游 Release 的附件里），讲的是基础项目本身；本仓库没有另做视频。
 
 ## 架构
 
@@ -220,6 +208,10 @@ npm install        # 安装依赖（postinstall 会自动修补 @snowluma/sdk �
 | `sendDelayMs` | QQ 连续发送间隔，防止触发频率限制 |
 | `consolePort` | 本地控制台端口，默认 `3100` |
 | `consoleToken` | 控制台访问令牌；留空时启动自动生成并保存到 `state/console-token` |
+| `socialV2.busyWatchdog` | 卡忙自愈看门狗：`enabled` / `warnMs` / `releaseMs` / `hardCapMs` / `checkIntervalMs` / `rearmCooldownMs` / `maxRearmPerHour`。见 [docs/guides/BUSY_WATCHDOG.md](docs/guides/BUSY_WATCHDOG.md) |
+| `socialV2.sharedMemory` | 跨会话共享记忆：`enabled` / `keys`（留空＝全域）/ `migrate` / `topicMax` / `impressionMax` / `impressionTtlMs` / `impressionStaleMs` |
+| `socialV2.memory.snapshotEnabled` / `snapshotKeepDays` | 记忆每日快照与保留天数（默认开、30 天） |
+| `socialV2.proactive.activeHours` | 主动机会时间窗，例如 `{ "start": 7, "end": 23 }`；窗口外不主动开口 |
 
 > ⚠️ `allowAllWhenEmpty: true` 表示「白名单没填就全部放行」——把 agent 接入 QQ 等于把账号控制权交给了模型，建议先填白名单。
 
@@ -244,8 +236,8 @@ node scripts/setup-dsh.mjs
 
 2. **装桥接并复制配置**
    ```bash
-   git clone https://github.com/Derpyu520/qq-bridge.git
-   cd qq-bridge
+   git clone https://github.com/adj18311/qq-bridge-plus.git
+   cd qq-bridge-plus
    npm install
    ```
    Windows CMD 用 `copy config.example.json config.json`，其他平台用 `cp config.example.json config.json`。
@@ -305,6 +297,7 @@ npm start          # 或双击 start.bat（守护模式：崩溃自动重启，�
 12:00:02 [bridge] 新会话 private:12345678 -> sess_xxxx
 12:00:02 [bridge] 已投递 private:12345678: 你好
 12:00:20 [bridge] agent 回复 (private:12345678) 42 字
+12:00:21 [bridge] [watchdog] 已启动（checkIntervalMs=10000 warnMs=300000 releaseMs=900000 hardCapMs=1800000 enabled=true）
 ```
 
 ## 自测（不需要 SnowLuma / QQ）
@@ -315,7 +308,7 @@ npm start          # 或双击 start.bat（守护模式：崩溃自动重启，�
 npm run test:audit
 ```
 
-reserved2 的 token 开销优化、消息水位协议、升级及回退说明（该专项分析为本地文档，未随仓库发布。）专项离线回归可运行 `npm run test:token`，已包含在上面的完整回归中。
+reserved2 的 token 开销优化、消息水位协议、升级及回退，专项离线回归可运行 `npm run test:token`（已包含在上面的完整回归里）。
 
 控制台「令牌与花费」看板的账本与价目表回归（峰谷分时、幂等折叠、基线合并、压缩与容错）：
 
@@ -324,7 +317,15 @@ npm run test:tokens        # 单元测试
 npm run test:console-ui    # 离线浏览器回归（含看板渲染与逐轮下钻）
 ```
 
-本轮审查与修复明细为本地审计文档，未随仓库发布。升级后会为没有权限元数据的历史映射重建一次 QQ 会话；模式或 preset 变化也会自动重建，避免保留旧权限。旧历史仍在 DSH 中。
+本仓库新增的两块也各有回归：
+
+```bash
+npm run test:shared-memory                 # 跨会话共享记忆（160 条断言，含锚点表机器核对）
+node scripts/test-busy-watchdog.mjs        # 卡忙自愈看门狗（35 例）
+node scripts/verify-busy-watchdog.mjs      # 看门狗独立对抗 harness（真定时器 + 真帧链路）
+```
+
+升级后会为没有权限元数据的历史映射重建一次 QQ 会话；模式或 preset 变化也会自动重建，避免保留旧权限。旧历史仍在 DSH 中。
 
 验证 DSH 侧链路是否打通（会创建一个独立测试会话，不影响现有会话）：
 
@@ -382,7 +383,7 @@ qq-bridge/
   SnowLuma/                     # 第三方 QQ 网关，需自行安装（见「前置条件」）
 ```
 
-> 🎤 **本仓库不含独立的「发语音」工具**：它已从项目里拆出去（原本在仓库上一级的 `../voice-tool/`），
+> 🎤 **本仓库不含独立的「发语音」工具**：它已从项目里拆出去，
 > 只把共享内核留在仓库里 —— `src/voice-core.js` 与 `src/snowluma-conn.js`。
 > **收到**的语音仍是占位文本；**发**语音需要自己准备音频并打开 `socialV2.voice.enabled`。
 
@@ -451,7 +452,7 @@ SnowLuma 同一个账号的 **HTTP token（默认 3000 端口）与 WebSocket to
 
 - agent 回复在回合结束时一次性发送（不做流式逐字转发）；回复超过 `socialV2.send.maxMessageChars`（默认 500 字，可用 `social.maxReplyChars` 调整）自动按句读/URL 边界分段
 - 图片及部分表情可以通过安全下载接入多模态模型；语音/视频以及无法取得图片字节的消息仍使用占位文本
-- **发**语音是支持的（独立工具的图形界面 / 命令行 / AI 工具，见 `docs/README.md` 的文档索引）；但**收**到的语音目前只显示占位文本，不做语音转写入上下文
+- **收**到的语音只显示占位文本，不做语音转写入上下文；**发**语音需要自己把音频放进 `audio/` 并打开 `socialV2.voice.enabled`（独立的语音工具已拆出，不在本仓库）
 - **AI 发语音默认关闭**（`socialV2.voice.enabled` 与 `tools.sendVoice` 默认 `false`）：先把音频放进 `audio/`，再到控制台打开开关；你自己发语音不受这个开关影响
 - agent 的 Markdown 回复会转成纯文本（链接保留 `文字 (url)` 形式）
 - `@snowluma/sdk` 的 npm 发布版存在 ESM 扩展名 bug，本仓库通过 postinstall 补丁修复（见 `scripts/patch-snowluma-sdk.mjs`）
