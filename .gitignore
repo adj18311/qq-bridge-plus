@@ -91,3 +91,13 @@ docs/guides/REVIEW_OUT_OF_TEAM_2026-10-04.md
 # 语音库（用户个人音频素材，config.json 的 socialV2.voice.dir 指向此处）
 audio/
 
+# ── 备份包 / 压缩包不进仓库（2026-10-05 加固）────────────────────────────────
+# 本机全量备份包（如 D:\BigFish Clone.zip）含 config.json、state/console-token、
+# state/social-v2.json、SnowLuma 数据等敏感内容，绝不能进仓库、更不能随发布外流。
+# 现状：仓库内没有任何被跟踪的压缩包（git ls-files 实测 0 个），故直接拒绝新增；
+# 将来若确需入库某个压缩包，用 git add -f 显式破例。
+*.zip
+*.7z
+*.rar
+*.tar.gz
+*.tgz
