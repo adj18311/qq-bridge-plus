@@ -235,7 +235,11 @@
       "checkIntervalMinMs": 1800000,
       "checkIntervalMaxMs": 5400000,
       "idleThresholdMs": 900000,
-      "probability": 0.3
+      "probability": 0.3,
+      "activeHours": {
+        "start": 7,
+        "end": 23
+      }
     },
     "feedback": {
       "maxLength": 500,
@@ -249,6 +253,28 @@
       "wakeMessageLimit": 12,
       "wakeRecentLimit": 4,
       "wakeMaxChars": 6000
+    },
+    "memory": {
+      "snapshotEnabled": true,
+      "snapshotKeepDays": 30
+    },
+    "sharedMemory": {
+      "enabled": true,
+      "keys": [],
+      "migrate": true,
+      "topicMax": 200,
+      "impressionMax": 100,
+      "impressionTtlMs": 2592000000,
+      "impressionStaleMs": 604800000
+    },
+    "busyWatchdog": {
+      "enabled": true,
+      "warnMs": 300000,
+      "releaseMs": 900000,
+      "hardCapMs": 1800000,
+      "checkIntervalMs": 10000,
+      "rearmCooldownMs": 60000,
+      "maxRearmPerHour": 3
     }
   }
 }

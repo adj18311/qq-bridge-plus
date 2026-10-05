@@ -10,6 +10,21 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
+> **这个仓库是什么**：上游 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的改进版，基线是上游 `v0.2.0-r3`，本仓库版本号 `0.3.0`。下面那段上游版本说明（DSH 版本适配部分）同样适用。
+>
+> 相对上游多出来的东西：
+>
+> | 改动 | 解决什么 |
+> | --- | --- |
+> | [卡忙自愈看门狗](docs/guides/BUSY_WATCHDOG.md) | 会话被判"忙"之后卡死、消息被静默暂存，以前只能人工重启 |
+> | 跨会话共享记忆 | 以前群和私聊各记一份，同一个人换个会话就"失忆" |
+> | 记忆每日快照 + 回滚 | 记忆被写坏时能退回前一天 |
+> | 控制台记忆快照面板 | 存档 / 回滚在网页上点，不用进命令行 |
+> | 主动机会时间窗 `activeHours` | 深夜不主动开口 |
+> | 三处加固 | 快照端点缺管理端校验、`start.bat` 遇到 exit 2 会自我终止、记忆快照写失败时静默 |
+>
+> 相对上游的完整清单在 [CHANGELOG.md](CHANGELOG.md)；改动细节与"跟着上游升级后怎么重打"在 [docs/guides/LOCAL_PATCHES.md](docs/guides/LOCAL_PATCHES.md) 和 [docs/guides/SHARED_MEMORY_PATCH.md](docs/guides/SHARED_MEMORY_PATCH.md)。
+
 > ⚠️ **当前版本 `v0.2.0`，适配 DSH 0.2.0-rc.2**（在该版本上逐项实测：`npm run verify:adaptation`）。
 > 鉴权用 `~/.dsh` 里持久化的浏览器会话签名密钥**离线铸造 Cookie** —— DSH 0.1.7 起进程启动 token
 > 只存在于内存、不再落盘，旧版「从 guard 日志里读 token」的方式已失效。agent preset 是 DSH 0.1.7 起的
@@ -343,6 +358,10 @@ SnowLuma 同一个账号的 **HTTP token（默认 3000 端口）与 WebSocket to
 - **AI 发语音默认关闭**（`socialV2.voice.enabled` 与 `tools.sendVoice` 默认 `false`）：先把音频放进 `audio/`，再到控制台打开开关；你自己发语音不受这个开关影响
 - agent 的 Markdown 回复会转成纯文本（链接保留 `文字 (url)` 形式）
 - `@snowluma/sdk` 的 npm 发布版存在 ESM 扩展名 bug，本仓库通过 postinstall 补丁修复（见 `scripts/patch-snowluma-sdk.mjs`）
+- 看门狗会把"十几分钟没有任何 DSH 帧"的合法长回合当成卡住，最坏结果是同一句话回两次（详见 [docs/guides/BUSY_WATCHDOG.md](docs/guides/BUSY_WATCHDOG.md)）。不丢消息，`socialV2.busyWatchdog.enabled=false` 可关掉
+- 卡在 `v2TurnStartAt` / `collectors` 的会话，看门狗只报警不释放，要人工重启桥接
+- 离线队列上限 50 条，满了丢最旧的一条（原本行为）
+- 共享记忆与记忆快照是本仓库的补丁，不在上游代码里：跟着上游升级会冲突，重打步骤见 `docs/guides/LOCAL_PATCHES.md`
 
 ## 合规提醒
 

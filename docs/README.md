@@ -17,6 +17,7 @@
 | [guides/TOKEN_USAGE_CONSOLE.md](guides/TOKEN_USAGE_CONSOLE.md) | 控制台「令牌与花费」看板：数据来源、计价口径（峰谷分时）、API、配置 | ✅ |
 | [guides/CONSOLE-UI-TESTING.md](guides/CONSOLE-UI-TESTING.md) | 控制台离线预览（`npm run preview:console`）与离线浏览器回归（`npm run test:console-ui`）怎么用 | ✅ 2026 整理时自 `scripts/` 移入 |
 | [guides/SECURITY_BASELINE.md](guides/SECURITY_BASELINE.md) | **安全基线与威胁模型**：威胁主体、已实现的边界（准入/工具面/出站/控制台/落盘/网络）、已知残余风险、发布前回归清单、改动检查单 | ✅ **改动安全相关代码前必读**（2026-09-20 新增） |
+| [guides/BUSY_WATCHDOG.md](guides/BUSY_WATCHDOG.md) | **卡忙自愈看门狗**：四条忙判据、"活动＝DSH 流帧"的理由、两档阈值与硬上限、释放后怎么补发去重、配置项、日志怎么读、怎么禁用与回滚、已知限制、测试怎么跑 | ✅ 2026-10-05 新增（本仓库相对上游的新功能） |
 | [guides/LOCAL_PATCHES.md](guides/LOCAL_PATCHES.md) | **本地改动清单与重打方式**：跨会话共享记忆、记忆每日快照+回滚、activeHours 主动机会时间窗、restart.bat stdin 修复、DSH profile 的 yun-xi-gpt retryPolicy —— 升级桥接包/重装插件后照着重打 | ✅ 2026-10-04 新增 |
 | [guides/SHARED_MEMORY_REPLAY.md](guides/SHARED_MEMORY_REPLAY.md) | **可重放记录**：7 处核心改动的「唯一锚点 + 改动前/后」、备份文件名、升级后重打步骤；锚点表由 `npm run test:shared-memory` 逐条机器核对 | ✅ 2026-10-04 新增 |
 | [guides/SHARED_MEMORY_PATCH.md](guides/SHARED_MEMORY_PATCH.md) | **跨会话共享记忆（本地补丁）**：补丁点清单（7 处核心 + 依赖的 memory-update / memory-query / 续期循环）、写入口径、共享域配置、升级脆弱性与回归检查点、`npm run test:shared-memory` 怎么跑 | ✅ 2026-10-04 新增 |
