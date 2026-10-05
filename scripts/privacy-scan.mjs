@@ -63,6 +63,12 @@ const DEFAULT_RULES = {
     //    今后新增的真实泄漏不会被扫出来。要收紧，正确做法是给扫描器加
     //    「文件 + 规则名」粒度（或让凭据规则只认高熵字面量），而不是继续往这里加文件。
     'docs/guides/PRIVACY.md', 'src/bridge.js', 'src/dsh-client.js',
+    // ── 以下两项同理（2026-10-05 补）：它们记录本机补丁备份的**文件名**，其中的 ISO 时间戳
+    //    （例 `bridge.js.before-t19-snapshot-low-2026-10-04T13-49-20-694Z`）会被「疑似令牌/密钥
+    //    （高熵串）」规则命中。此前只写在本地 privacy-rules.json 的 allowPaths 里，所以**全新克隆**
+    //    跑 npm run privacy-scan 是红的（exit=1）—— 对一个开箱即用的仓库不可接受。
+    //    代价同上：这两份文档今后不再被逐行扫描。
+    'docs/guides/LOCAL_PATCHES.md', 'docs/guides/SHARED_MEMORY_REPLAY.md',
   ],
 };
 
