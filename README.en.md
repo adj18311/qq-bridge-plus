@@ -1,7 +1,8 @@
 # QQ ↔ DeepSeek Harness Bridge (qq-bridge)
 
 > **This project is not original work.** It is a derivative (an improved fork) of [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge). Original author: Derpyu520 — upstream repository <https://github.com/Derpyu520/qq-bridge>.
-> The architecture, the protocol adaptation and the vast majority of the code come from upstream; this repository only adds a few features and fixes. **Special thanks to the original author** — if you find this useful, please star the upstream project first.Intended solely for learning, exchange, and personal use. Any commercial use is strictly prohibited!!!
+> The architecture, the protocol adaptation and the vast majority of the code come from upstream; this repository only adds a few features and fixes. **Special thanks to the original author** — if you find this useful, please star the upstream project first.
+> Intended solely for learning, exchange, and personal use. Any commercial use is strictly prohibited!!!
 >
 > Upstream is MIT-licensed; this repository keeps the same licence and the original copyright notice (see [LICENSE](LICENSE)).
 > This repository is version `0.3.0`, based on upstream `v0.2.0-r3`.
