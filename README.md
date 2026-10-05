@@ -5,6 +5,8 @@
 > 只做交流学习和个人使用；**如需商用请注意：SnowLuma 的 EULA 明确禁止商业使用**（见 [LICENSE](LICENSE) 的「关于 SnowLuma 许可的说明」）。本仓库**代码**沿用上游 MIT 许可。
 >
 > 上游用 MIT 许可，本仓库沿用同一许可并保留原版权声明（见 [LICENSE](LICENSE)）。
+>
+> 本项目使用 [SnowLuma](https://github.com/SnowLuma/SnowLuma)（作者 SnowLumaDevs）作为 QQ 接入网关，只通过它的 OneBot v11 接口互通，**不修改、不打包、不再分发 SnowLuma 本体**；SnowLuma 的版权与许可归 SnowLumaDevs 所有。2026-10-05 已就此询问 SnowLumaDevs，回复为：这类不改动本体的互操作工具无需额外书面授权，注明使用 SnowLuma 即可（记录见 [LICENSE](LICENSE) 的「关于 SnowLuma 许可的说明」）。
 
 **English**: [README.en.md](README.en.md) | **中文**: [README.md](README.md)
 

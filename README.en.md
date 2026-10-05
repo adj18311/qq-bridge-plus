@@ -5,6 +5,8 @@
 > Intended for learning, exchange and personal use. **For commercial use, note that SnowLuma's EULA prohibits commercial use of SnowLuma in any form** (see the SnowLuma section in [LICENSE](LICENSE)); this repository's own code stays under the upstream MIT licence.
 >
 > Upstream is MIT-licensed; this repository keeps the same licence and the original copyright notice (see [LICENSE](LICENSE)).
+>
+> This project uses [SnowLuma](https://github.com/SnowLuma/SnowLuma) (by SnowLumaDevs) as its QQ gateway and interoperates only through its OneBot v11 interface. It **does not modify, bundle or redistribute** SnowLuma itself; SnowLuma's copyright and licence belong to SnowLumaDevs. On 2026-10-05 SnowLumaDevs confirmed that an interoperability tool like this one needs no further written authorization — only an attribution to SnowLuma (recorded in the SnowLuma section of [LICENSE](LICENSE)).
 > This repository is version `0.3.0`, based on upstream `v0.2.0-r3`.
 
 > Connect QQ messages to DeepSeek Harness (DSH) agents: QQ friends/groups become DSH conversations, and agent replies (including questions and tool approvals) are sent back to QQ.
