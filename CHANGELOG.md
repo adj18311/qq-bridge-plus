@@ -1,6 +1,6 @@
 # 改动记录
 
-这个仓库是 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的改进版，基线是上游 `v0.2.0-r3`。上游自己的版本历史看上游仓库的 Releases。
+**本项目不是原创**：它是 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的二次创作（改进版），**特别鸣谢原作者**。上游基线 `v0.2.0-r3`；上游自己的版本历史看上游仓库的 Releases。
 
 ## 0.3.0 — 2026-10-05
 

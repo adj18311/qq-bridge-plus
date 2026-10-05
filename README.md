@@ -1,5 +1,10 @@
 # QQ ↔ DeepSeek Harness 桥接
 
+> **本项目不是原创**，是基于 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的**二次创作**（改进版）。原作者 Derpyu520，上游仓库 <https://github.com/Derpyu520/qq-bridge>。
+> 架构、协议适配和绝大部分代码都来自上游，本仓库只做了增补与修复。**特别鸣谢原作者**；如果你觉得这个项目有用，优先去上游点个 star。
+>
+> 上游用 MIT 许可，本仓库沿用同一许可并保留原版权声明（见 [LICENSE](LICENSE)）。
+
 **English**: [README.en.md](README.en.md) | **中文**: [README.md](README.md)
 
 > 🗂️ 文档索引（全部文档一句话说明 + 是否仍然有效）见 **[docs/README.md](docs/README.md)**；仓库目录/脚本命名约定见 **[docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)**。
@@ -10,7 +15,7 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
-> **这个仓库是什么**：上游 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的改进版，基线是上游 `v0.2.0-r3`，本仓库版本号 `0.3.0`。下面那段上游版本说明（DSH 版本适配部分）同样适用。
+> **本仓库版本 `0.3.0`**，基线是上游 `v0.2.0-r3`。上游那段版本说明（DSH 版本适配部分）同样适用。
 >
 > 相对上游多出来的东西：
 >
