@@ -27,7 +27,7 @@
 | [guides/TEAM_RUN_CHECKLIST.md](guides/TEAM_RUN_CHECKLIST.md) | **团队作业 checklist**：开工前 / 进行中 / 收尾三段，每条都给可执行命令与通过标准（含冻结工作区跑审计、`file mtime` vs 进程启动时间判"是否生效"、端点 403/200 矩阵） | ✅ 2026-10-04 新增 · · 本机文档，未随发布提供（`.gitignore` 保护，含本机路径，仅本机） |
 | [guides/REVIEW_OUT_OF_TEAM_2026-10-04.md](guides/REVIEW_OUT_OF_TEAM_2026-10-04.md) | **三处团队外改动的独立评审**（启动脚本、DSH profile 配置，以及本机运行时的一处容错改动）：逐处 file:line 结论与 verdict、残余风险、未核实点、被评审文件与备份的绝对路径 + SHA256 | ✅ 2026-10-04 新增 · · 本机文档，未随发布提供（`.gitignore` 保护，含本机绝对路径，仅本机） |
 | [guides/NEXT-TASKS-ROUND2.md](guides/NEXT-TASKS-ROUND2.md) | **第 2 轮待办（含根因）**：读端点 create-on-read 会给非白名单 key 建会话、SnowLuma 跳过数不进 `failedSessions`、mark-read 容错、historySync 的 TRACE 诊断、`adminOnlyV2Paths` 注释、快照面板静态断言、N2 残余边界、守护 vs 测试桩的排障经验、守护「真控制台」路径未覆盖、**会话「忙」可无限期且唤醒被静默暂存**、控制台令牌轮换 —— 每条给现象/证据 `file:line`/为什么本轮不做/建议做法 | ✅ 2026-10-04 新增 · · 本机文档，未随发布提供（`.gitignore` 保护，含本机路径与真 QQ 号，仅本机） |
-| ——（未登记行）`guides/HANDOFF_PROMPT.md` / `guides/NEXT-TASKS.md` | 本机内部交接提示与**第 1 轮**任务表（入口文档，不对外） | ⚠️ **不在公开仓库里**（`.gitignore` 保护，仅本机；因此不在上表单独登记，避免索引指向未提交的文件） |
+| ——（未登记行）`guides/HANDOFF_PROMPT.md` / `guides/NEXT-TASKS.md` | 本机内部交接提示与**第 1 轮**任务表（入口文档，不对外） | · 本机文档，未随发布提供（`.gitignore` 保护，仅本机；因此不在上表单独登记，避免索引指向未提交的文件） |
 
 ## design/ —— 设计与规划（读设计意图用）
 
