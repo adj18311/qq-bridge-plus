@@ -23,10 +23,10 @@
 | [guides/LOCAL_PATCHES.md](guides/LOCAL_PATCHES.md) | **本地改动清单与重打方式**：跨会话共享记忆、记忆每日快照+回滚、activeHours 主动机会时间窗、restart.bat stdin 修复、DSH profile 的 yun-xi-gpt retryPolicy —— 升级桥接包/重装插件后照着重打 | ✅ 2026-10-04 新增 |
 | [guides/SHARED_MEMORY_REPLAY.md](guides/SHARED_MEMORY_REPLAY.md) | **可重放记录**：7 处核心改动的「唯一锚点 + 改动前/后」、备份文件名、升级后重打步骤；锚点表由 `npm run test:shared-memory` 逐条机器核对 | ✅ 2026-10-04 新增 |
 | [guides/SHARED_MEMORY_PATCH.md](guides/SHARED_MEMORY_PATCH.md) | **跨会话共享记忆（本地补丁）**：补丁点清单（7 处核心 + 依赖的 memory-update / memory-query / 续期循环）、写入口径、共享域配置、升级脆弱性与回归检查点、`npm run test:shared-memory` 怎么跑 | ✅ 2026-10-04 新增 |
-| [guides/UPGRADE-RETRO-2026-10-04.md](guides/UPGRADE-RETRO-2026-10-04.md) | **2026-10-04 这一轮的复盘**：9 条缺陷（现象/根因/修复/证据 file:line，含守护自杀离线 20 分钟、快照兜底名、端点 fail-open、日志文案、印象 uid 开关、脏会话、控制台面板、改名 uid 行为断言、`start.bat` 5s 分支缺兜底）+ 三条实测事实（并发假红、N2 残余边界、面板懒加载/预览局限）+ 8 条作业纪律改进 + 下一轮候选 | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机路径与真 QQ 号，仅本机） |
-| [guides/TEAM_RUN_CHECKLIST.md](guides/TEAM_RUN_CHECKLIST.md) | **团队作业 checklist**：开工前 / 进行中 / 收尾三段，每条都给可执行命令与通过标准（含冻结工作区跑审计、`file mtime` vs 进程启动时间判"是否生效"、端点 403/200 矩阵） | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机路径，仅本机） |
-| [guides/REVIEW_OUT_OF_TEAM_2026-10-04.md](guides/REVIEW_OUT_OF_TEAM_2026-10-04.md) | **三处团队外改动的独立评审**（启动脚本、DSH profile 配置，以及本机运行时的一处容错改动）：逐处 file:line 结论与 verdict、残余风险、未核实点、被评审文件与备份的绝对路径 + SHA256 | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机绝对路径，仅本机） |
-| [guides/NEXT-TASKS-ROUND2.md](guides/NEXT-TASKS-ROUND2.md) | **第 2 轮待办（含根因）**：读端点 create-on-read 会给非白名单 key 建会话、SnowLuma 跳过数不进 `failedSessions`、mark-read 容错、historySync 的 TRACE 诊断、`adminOnlyV2Paths` 注释、快照面板静态断言、N2 残余边界、守护 vs 测试桩的排障经验、守护「真控制台」路径未覆盖、**会话「忙」可无限期且唤醒被静默暂存**、控制台令牌轮换 —— 每条给现象/证据 `file:line`/为什么本轮不做/建议做法 | ✅ 2026-10-04 新增 · ⚠️ **本文件不在公开仓库里**（`.gitignore` 保护，含本机路径与真 QQ 号，仅本机） |
+| [guides/UPGRADE-RETRO-2026-10-04.md](guides/UPGRADE-RETRO-2026-10-04.md) | **2026-10-04 这一轮的复盘**：9 条缺陷（现象/根因/修复/证据 file:line，含守护自杀离线 20 分钟、快照兜底名、端点 fail-open、日志文案、印象 uid 开关、脏会话、控制台面板、改名 uid 行为断言、`start.bat` 5s 分支缺兜底）+ 三条实测事实（并发假红、N2 残余边界、面板懒加载/预览局限）+ 8 条作业纪律改进 + 下一轮候选 | ✅ 2026-10-04 新增 · · 本机文档，未随发布提供（`.gitignore` 保护，含本机路径与真 QQ 号，仅本机） |
+| [guides/TEAM_RUN_CHECKLIST.md](guides/TEAM_RUN_CHECKLIST.md) | **团队作业 checklist**：开工前 / 进行中 / 收尾三段，每条都给可执行命令与通过标准（含冻结工作区跑审计、`file mtime` vs 进程启动时间判"是否生效"、端点 403/200 矩阵） | ✅ 2026-10-04 新增 · · 本机文档，未随发布提供（`.gitignore` 保护，含本机路径，仅本机） |
+| [guides/REVIEW_OUT_OF_TEAM_2026-10-04.md](guides/REVIEW_OUT_OF_TEAM_2026-10-04.md) | **三处团队外改动的独立评审**（启动脚本、DSH profile 配置，以及本机运行时的一处容错改动）：逐处 file:line 结论与 verdict、残余风险、未核实点、被评审文件与备份的绝对路径 + SHA256 | ✅ 2026-10-04 新增 · · 本机文档，未随发布提供（`.gitignore` 保护，含本机绝对路径，仅本机） |
+| [guides/NEXT-TASKS-ROUND2.md](guides/NEXT-TASKS-ROUND2.md) | **第 2 轮待办（含根因）**：读端点 create-on-read 会给非白名单 key 建会话、SnowLuma 跳过数不进 `failedSessions`、mark-read 容错、historySync 的 TRACE 诊断、`adminOnlyV2Paths` 注释、快照面板静态断言、N2 残余边界、守护 vs 测试桩的排障经验、守护「真控制台」路径未覆盖、**会话「忙」可无限期且唤醒被静默暂存**、控制台令牌轮换 —— 每条给现象/证据 `file:line`/为什么本轮不做/建议做法 | ✅ 2026-10-04 新增 · · 本机文档，未随发布提供（`.gitignore` 保护，含本机路径与真 QQ 号，仅本机） |
 | ——（未登记行）`guides/HANDOFF_PROMPT.md` / `guides/NEXT-TASKS.md` | 本机内部交接提示与**第 1 轮**任务表（入口文档，不对外） | ⚠️ **不在公开仓库里**（`.gitignore` 保护，仅本机；因此不在上表单独登记，避免索引指向未提交的文件） |
 
 ## design/ —— 设计与规划（读设计意图用）
@@ -52,7 +52,7 @@
 | 文档 | 一句话说明 | 状态 |
 | --- | --- | --- |
 | [guides/DSH_020_ADAPTATION.md](guides/DSH_020_ADAPTATION.md) | **DSH 0.2.0 适配改动记录**（v0.1.7 → v0.2.0）：逐条列出为适配 0.2.0-rc.2 做的改动（现象/为什么必须改/证据/怎么验证），并单独列出「复核后判定兼容、因此没改」的部分与「同批但不属于适配」的改动 | ✅ **最新**；升级 DSH 前先读 §10 的操作清单。放在 `guides/` 是因为 `audits/`、`design/`、`legacy/`、`research/` 都在 `.gitignore` 里（见该文件第 52–64 行），放进那几处的文档**不会进公开仓库** |
-| [audits/AUDIT_FIXES_2026-09-20.md](audits/AUDIT_FIXES_2026-09-20.md) | **那一轮（第二轮）三路并行审计与修复记录**：桥接内核 / 控制台与打包 / 文档基线；逐条列出已修、已确认无问题、列为规划 | ✅（取代下面那份的结论；`CODE_AUDIT` 中当时未修完的项已在此结清）⚠️ **本文件不在公开仓库里**（`docs/audits/` 被 `.gitignore` 排除），只在本地可见 |
+| [audits/AUDIT_FIXES_2026-09-20.md](audits/AUDIT_FIXES_2026-09-20.md) | **那一轮（第二轮）三路并行审计与修复记录**：桥接内核 / 控制台与打包 / 文档基线；逐条列出已修、已确认无问题、列为规划 | ✅（取代下面那份的结论；`CODE_AUDIT` 中当时未修完的项已在此结清）· 本机文档，未随发布提供（`docs/audits/` 被 `.gitignore` 排除），只在本地可见 |
 | [audits/CODE_AUDIT_2026-09-20.md](audits/CODE_AUDIT_2026-09-20.md) | 同日较早的代码体检（P0/P1/P2/P3 清单与实现细节、指标统计：monolith 度量、重复代码盘点） | ⚠️ **多数已修**：修复状态以 AUDIT_FIXES 为准；本文的实现细节与度量仍有参考价值（2026-09-20 补登进索引） · 本机文档，未随发布提供 |
 | [audits/AUDIT_REPORT_2026-09-20.md](audits/AUDIT_REPORT_2026-09-20.md) | 全项目体检：四条独立审计线（状态机与重连、安全边界、健壮性与资源、配置/脚本/文档一致性）+ 按影响排序的修复 | ✅ 结论仍有效（取代 2026-09-18 那份） · 本机文档，未随发布提供 |
 | [audits/CONSOLE_FEATURES_REPORT.md](audits/CONSOLE_FEATURES_REPORT.md) | 控制台功能增强：人格管理、两层提示词（仿真层/人格层）、DSH 思考强度 | ✅ · 本机文档，未随发布提供 |
