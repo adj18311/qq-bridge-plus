@@ -338,40 +338,53 @@ npm run self-test
 
 ```
 qq-bridge/
-  config.example.json   # 配置模板（脱敏占位符；真实 config.json 不入库）
-  README.md / README.en.md / RULES.md   # 根目录只留这三个文档，其余全在 docs/
+  README.md / README.en.md      # 中文 / 英文说明（开头写明本仓库是上游改进版）
+  CHANGELOG.md                  # 相对上游 v0.2.0-r3 的改动清单
+  RULES.md                      # QQ 会话的权限边界与安全承诺
+  LICENSE                       # MIT（沿用上游许可，保留原版权声明）
+  config.example.json           # 配置模板（脱敏占位符，可直接复制成 config.json）
+  package.json / package-lock.json
+  start.bat / restart.bat       # 守护启动 / 重启脚本（Windows）
+  src/                          # 桥接本体，24 个文件。主要几个：
+    bridge.js                   #   主程序：QQ ⇄ DSH 全部流程、社交状态机、看门狗
+    dsh-client.js               #   DSH API 客户端（Cookie 鉴权 / 斜杠 RPC / remote.mux 事件流）
+    snowluma-conn.js            #   SnowLuma OneBot v11 WebSocket 连接
+    mcp-snowluma-safe.js        #   MCP：QQ 动作安全子集（发送强制白名单）
+    mcp-host-server.js          #   MCP：只读探活
+    mcp-web-search-safe.js      #   MCP：联网搜索
+    md-to-plain.js              #   Markdown → QQ 纯文本
+    role-card.js / preset-prompt.js / qq-model-view.js
+    slang-learner.js / sticker-lib.js / forward.js / v2-wait.js
+    token-ledger.js / model-prices.js
+    safe-fetch.js / sensitive.js / self-test.js / state-acl.mjs
+    core/session-router.mjs     #   会话路由（同目录带 .test.mjs）
   docs/
-    README.md           # 文档索引（每篇一句话 + 是否仍然有效）
-    FOLDER_MAP.md       # 目录结构与 scripts/ 命名约定
-    guides/             # 面向使用者/运维：PROJECT_GUIDE / DSH_SETUP / VOICE / TOKEN_USAGE_CONSOLE / CONSOLE-UI-TESTING
-    design/             # 设计与规划：GEN2_SIMULATION_PLAN / SOCIAL_MODE_PLAN / DSH_QQ_TOOLS_PLAN / 真人语感策略
-    research/           # 调研：SnowLuma功能调研 / QQ消息免打扰 / 表情包能力 / 本地模型选型
-    audits/             # 审查与优化报告（体检、控制台、token）
-    legacy/             # 历史归档（已被取代或问题已全部修复的旧报告）
-  audio/                # 语音库：把准备好的音频放这里，可作 QQ 语音发出（用法见 docs/README.md 文档索引）
-  dsh/agent-presets/    # qq-chat / qq-chat-v2 的 DSH agent preset 模板
-  plugins/qq-mode-console  # DSH 插件：注册 qq-mode 设置命名空间（仅 host 半，UI 卡片未实现）
-  src/
-    bridge.js           # 主程序
-    dsh-client.js       # Node 版 DSH API 客户端（WS 下行）
-    md-to-plain.js      # Markdown → QQ 纯文本
-    self-test.js        # DSH 侧自测
-  scripts/              # 测试/运维脚本（含 postinstall 的 patch-snowluma-sdk.mjs）
-    patch-snowluma-sdk.mjs  # 修补 SDK 的 ESM 打包 bug（postinstall 自动执行）
-  state/                # 运行时数据（不入库）
+    README.md                   # 文档索引（每篇一句话说明 + 是否仍然有效）
+    FOLDER_MAP.md               # 目录结构与本仓库的脚本命名约定
+    guides/                     # 面向使用者 / 运维，共 10 份：
+                                #   BUSY_WATCHDOG.md（卡忙自愈看门狗）
+                                #   DSH_SETUP.md / DSH_020_ADAPTATION.md
+                                #   SECURITY_BASELINE.md / PRIVACY.md
+                                #   TOKEN_USAGE_CONSOLE.md / CONSOLE-UI-TESTING.md
+                                #   LOCAL_PATCHES.md / SHARED_MEMORY_PATCH.md / SHARED_MEMORY_REPLAY.md
+  dsh/agent-presets/            # DSH agent preset 模板：qq-chat / qq-chat-v2
+  plugins/qq-agent-presets/     # 上面两个 preset 的补丁包
+  plugins/qq-mode-console/      # DSH 插件：注册 qq-mode 设置命名空间（host 半）
+  public/console.html           # 本地控制台（默认端口 3100）
+  roles/                        # 角色卡（人设）与 roles/README.md
+  scripts/                      # 测试与运维脚本 85 个；npm run test:audit 是聚合入口
+  assets/                       # 图片素材
+
+  # ── 下面这些被 .gitignore 排除，不在仓库里，是运行时 / 本机内容 ──
+  config.json                   # 你的真实配置（从 config.example.json 复制后改）
+  state/                        # 运行时数据：记忆、记忆快照、日志、控制台令牌
+  audio/                        # 语音库：放音频文件，可作 QQ 语音发出
+  SnowLuma/                     # 第三方 QQ 网关，需自行安装（见「前置条件」）
 ```
 
-> 🎤 **独立的「发语音」工具不在这里**：它是仓库上一级的 [`../voice-tool/`](../voice-tool/)（`voice-cli.mjs` /
-> `voice-gui.mjs` / `public/voice.html` / `发语音.cmd`）。图形界面双击上一级的「发语音-图形界面.cmd」。
-> 它只依赖 SnowLuma，共享内核仍由本仓库 `src/voice-core.js` / `src/snowluma-conn.js` 提供（单一实现）。
->
-> ```bash
-> cd ../voice-tool
-> node voice-cli.mjs status     # 账号/token 自动发现 + 连通性
-> node voice-cli.mjs list       # 可发的群聊/私聊 + 语音库
-> node voice-cli.mjs            # 交互菜单
-> node voice-gui.mjs            # 图形界面（本地小服务 + 浏览器 UI）
-> ```
+> 🎤 **本仓库不含独立的「发语音」工具**：它已从项目里拆出去（原本在仓库上一级的 `../voice-tool/`），
+> 只把共享内核留在仓库里 —— `src/voice-core.js` 与 `src/snowluma-conn.js`。
+> **收到**的语音仍是占位文本；**发**语音需要自己准备音频并打开 `socialV2.voice.enabled`。
 
 ## SnowLuma 版本与上游健康（「连上了但收不到消息」）
 
