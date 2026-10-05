@@ -183,7 +183,7 @@
 - 影响面：**只影响渲染层是否带 QQ 号**（唤醒提示词 / 控制台展示）；不影响 uid 主键存储、
   印象归属校验（`sharedTargetAllowedV2` 等）与快照内容。
 - 验证：`npm run test:shared-memory`（默认行为的断言在「印象渲染成「昵称（uid）」」那两条；
-  ⚠️ `false` 分支目前**没有**专门断言 —— 见 [UPGRADE-RETRO-2026-10-04.md](UPGRADE-RETRO-2026-10-04.md) §3）。
+  ⚠️ `false` 分支目前**没有**专门断言 —— 见 UPGRADE-RETRO-2026-10-04.md（本机文档，未随发布提供） §3）。
 
 ---
 
