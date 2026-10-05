@@ -21,6 +21,10 @@ const tests = [
   'test-token-usage.mjs', 'test-hardening.mjs',
   // 跨会话共享记忆补丁（抽取式断言：补丁被升级覆盖 / 标记被改名时直接 FAIL）
   'test-shared-memory.mjs',
+  // 卡忙自愈看门狗（docs/guides/NEXT-TASKS-ROUND2.md §15）：会话被判忙后长时间零 DSH 流帧时
+  //   强制释放忙标记并 re-arm 补发被静默暂存的唤醒。旧缺陷是「私聊不回复只能人工重启」
+  //   （2026-10-05 08:45→09:11 卡死 25 分钟），修复必须进聚合门禁，否则会静默回归。
+  'test-busy-watchdog.mjs',
   // 语音发送（纯函数 + 端点存在性；真发语音只在 --live 或 CLI 里做）
   'test-voice.mjs',
   // 音量：参数校验 + 真的调用 ffmpeg 调音量 + 自算 RMS 验证增益

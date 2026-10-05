@@ -2275,6 +2275,419 @@ async function main() {
   const sessionPromises = new Map(); // key -> create promise（防并发重复创建）
   const promptQueues = new Map(); // key -> { queue: [], running: false }：每个 QQ 会话串行投递 DSH prompt，保证 turn 顺序
 
+  // ── 卡忙自愈看门狗（busy watchdog）─────────────────────────────────────────
+  // 设计冻结见 docs/guides/NEXT-TASKS-ROUND2.md §15（t1）。要修的是 §10 那条缺陷：
+  // 会话被判忙（isConversationBusyV2 的四条判据）后可以**无限期**卡住，其间的唤醒全在
+  // sendWakePromptV2 / scheduleWakeV2 的忙分支被静默暂存 —— 2026-10-05 08:45:41 到
+  // 09:11:07 那次「私聊 25 分钟不回复、只能人工重启」就是这么来的。
+  //
+  // 判据（两个条件同时满足才动作，缺一不可）：
+  //   busy   = isConversationBusyV2(key, st)；
+  //   零帧   = 距最近一次 DSH 流帧（或白名单内的真实收发动作）已过去多久。
+  // 只看「持续忙」会在正常长回合上误杀；只看「零帧」会在「回合已结束、只是没人说话」时误报。
+  //
+  // 硬约束（§15.5）：
+  //   · 只清标记（①②④）+ 合并 backlog；判据 ③（promptQueues）**只读**——队列项是有人
+  //     await 的 Promise，强清等于伪造成功或把错误抛给调用方；
+  //   · 唯一投递触发是 re-arm 走 scheduleWakeV2（正常投递路径），绝不旁路直发 QQ；
+  //   · 全程 try/catch，绝不 throw / process.exit / 裸 await：把桥接弄崩远比卡一个会话严重。
+  const BUSY_WATCHDOG_DEFAULTS = Object.freeze({
+    enabled: true,
+    warnMs: 300000,          // 5 min：只记 WARN、不释放（该时间点与一次 qq_wait_for_messages 满等不可分）
+    releaseMs: 900000,       // 15 min：强制释放档（必须显著大于「两次满等 ≈ 10 分钟」的零帧）
+    hardCapMs: 1800000,      // 30 min：与既有 armPendingWakeLease 的 30 分钟租约对齐
+    checkIntervalMs: 10000,  // 10s：单一定时器扫描周期
+    rearmCooldownMs: 60000,  // 同一 key 两次 re-arm 的最小间隔
+    maxRearmPerHour: 3       // 同一 key 每小时的 re-arm 上限
+  });
+
+  /**
+   * 看门狗运行时状态。**全部不落盘**（进程内状态，重启即失效）：与「忙分支不落盘」的
+   * 现状一致，也避免污染 state/social-v2.json 的既有形状。
+   *   busySinceV2     key -> 忙状态起点（忙状态持续期间不刷新）
+   *   lastFrameAtV2   key -> 最近一次 DSH 流帧/白名单动作（本进程从未收到帧时取 startedAt）
+   *   staleBusyTurns  sessionId 墓碑：④ 被强制释放后，迟到的 turn/end 必须静默排空
+   *   rearmV2         key -> 最近一小时内的 re-arm 时间戳（防释放风暴）
+   *   busyStallsV2    key -> 强制释放次数（只读取证用）
+   */
+  const busyWatchdog = {
+    started: false,
+    timer: null,
+    startedAt: Date.now(),
+    busySinceV2: new Map(),
+    lastFrameAtV2: new Map(),
+    staleBusyTurns: new Set(),
+    rearmV2: new Map(),
+    busyStallsV2: new Map(),
+    /**
+     * key -> Set<"reason@seq">：已被看门狗 re-arm 交给正常投递路径的条目。
+     * 用途：WARN/释放时那条 (reason,seq) **仍留在 st.pendingWakeReasons 里**（t3 T4 按此断言），
+     * 于是该回合迟到的 turn/end 走 :12177 的常规补发 shift 时会把它再排一次 scheduleWakeV2 →
+     * 同一 (reason,seq) 投递两次（F1/C4）。这里登记后由 shift 处一次性消费（跳过重复补发）。
+     * 只在「真的排上了合并窗定时器」时登记：若 re-arm 因会话仍忙被再次暂存，绝不登记，
+     * 该条必须留在 backlog 里继续可投递（不丢消息）。
+     */
+    rearmedWakeV2: new Map()
+  };
+  /** backlog 条目 / 唤醒原因的唯一去重键：按 (reason,seq)，不能只按 reason。 */
+  function busyWakeIdV2(reason, seq) {
+    return `${String(reason ?? '')}@${Number(seq) || 0}`;
+  }
+
+  /** 登记「该 (reason,seq) 已由看门狗 re-arm」。 */
+  function markBusyRearmedWakeV2(key, reason, seq) {
+    const id = busyWakeIdV2(reason, seq);
+    let set = busyWatchdog.rearmedWakeV2.get(key);
+    if (!set) {
+      set = new Set();
+      busyWatchdog.rearmedWakeV2.set(key, set);
+    }
+    set.add(id);
+    // 有界：backlog 本身 ≤20 条，这里再放宽一档，防止异常路径下无限增长。
+    if (set.size > 50) {
+      const keep = [...set].slice(-50);
+      set.clear();
+      for (const entry of keep) set.add(entry);
+    }
+    return id;
+  }
+
+  /** 一次性消费：该 (reason,seq) 是否已由看门狗 re-arm（消费即清，避免影响更晚的合法补发）。 */
+  function consumeBusyRearmedWakeV2(key, reason, seq) {
+    const id = busyWakeIdV2(reason, seq);
+    const set = busyWatchdog.rearmedWakeV2.get(key);
+    if (!set || !set.has(id)) return false;
+    set.delete(id);
+    if (set.size === 0) busyWatchdog.rearmedWakeV2.delete(key);
+    return true;
+  }
+
+  /**
+   * 精确清掉一条登记（F3）：这次投递**没有真正生效**（被 DSH 拒绝 / 抛错 / paused·非 reserved2·
+   * 白名单外 被跳过）时，登记必须立刻撤销 —— 否则该会话下一次 turn/end 的 shift 会把它当成
+   * 「已由看门狗补发」跳过，于是这条 (reason,seq) 既不在 backlog 也不会再投递：
+   * 等于用「不再重试」换掉了原来的「重复投递」，同样丢消息。
+   * 严格按 (reason,seq)；seq 未知（不是看门狗 re-arm 的唤醒）时不动任何登记。
+   */
+  function clearBusyRearmedWakeV2(key, reason, seq) {
+    const n = Number(seq);
+    if (!Number.isFinite(n)) return false;
+    const id = busyWakeIdV2(reason, n);
+    const set = busyWatchdog.rearmedWakeV2.get(key);
+    if (!set || !set.has(id)) return false;
+    set.delete(id);
+    if (set.size === 0) busyWatchdog.rearmedWakeV2.delete(key);
+    return true;
+  }
+
+  /**
+   * ⚠️ 不变量（F1 → F3 → F3-b → F4 → F5 是同一条不变量的连续泄漏，这里一次讲清）：
+   *
+   *   **标记（rearmedWakeV2 的一条 (reason,seq)）的生命周期必须与「唤醒项」本身一致：**
+   *   · 项被**丢弃 / 改判 / 取消 / 未真正送达** → 标记必须结束；
+   *   · 只有当项已交给**正常投递路径**（正常送达、`queued===true`、`retried===true`）时才保留标记。
+   *
+   * 为什么：标记的唯一用途是让该会话下一次 turn/end 的 shift 跳过「同一条 (reason,seq)」，
+   * 避免重复补发（F1）。若项已经不存在（被丢弃/取消）却还把标记留着，shift 就会把**永远轮不到的那条**
+   * 当成「已补发」跳过 —— 该 (reason,seq) 既不投递也不再重排，等于静默丢一次唤醒
+   * （F3 未送达路径、F4 离线队列溢出、F5 取消待发定时器都属于这一类）。
+   */
+  /**
+   * 一条**待投唤醒项**被丢弃/改判时，结束它的标记（F4 等）。
+   * 同时吃两种条目形状：离线队列项 `{ wakeReason, wakeSeq }`、backlog 条目 `{ reason, seq }`。
+   * 无 wake 字段（普通消息）或 seq 非有限值 → 直接不动任何标记（clearBusyRearmedWakeV2 会再校验一次）。
+   */
+  function clearRearmMarkForDroppedWakeV2(key, item) {
+    if (!key || !item || typeof item !== 'object') return false;
+    const reason = item.wakeReason ?? item.reason;
+    const seq = item.wakeSeq ?? item.seq;
+    if (!reason) return false;
+    return clearBusyRearmedWakeV2(key, reason, seq);
+  }
+
+  /**
+   * F5：**取消一条待发唤醒**（`st.pendingWakeTimer`）—— 唤醒项就此不存在，
+   * 它的 (reason,seq) 标记必须同步结束（不变量：标记生命周期 ⟺ 唤醒项生命周期）。
+   * 三处取消点：`set_wake_config`（AI 自己改唤醒条件）、控制台手动唤醒端点、
+   * `qq_wait_for_messages` 入口（模型主动进入等待）。
+   * 可达性：带标记的 pendingWakeTimer 只存在于「看门狗 release 之后 batchWindowMs(≈8s) 窗口内」，
+   * 而 release 的前置条件是 ≥releaseMs（默认 15 分钟）零 DSH 帧 —— 近乎不可达；这里是**对称清理**，
+   * 不做额外状态机/锁。
+   */
+  function cancelPendingWakeTimerV2(key, st) {
+    if (!key || !st || !st.pendingWakeTimer) return false;
+    clearTimeout(st.pendingWakeTimer);
+    st.pendingWakeTimer = null;
+    if (st.pendingWakeReason) clearBusyRearmedWakeV2(key, st.pendingWakeReason, st.pendingWakeSeq);
+    return true;
+  }
+
+  /**
+   * 读取看门狗配置。cfg 是热读对象，缺省/非法值一律回落到代码内默认值
+   * （所以 config.json 不改也能生效）。禁用语义（唯一）：enabled === false 才完全不跑，
+   * **不用** releaseMs:0 当开关（0 会被解释为「用默认值」）。
+   */
+  function busyWatchdogConfig() {
+    const raw = (cfg.socialV2 && typeof cfg.socialV2.busyWatchdog === 'object' && cfg.socialV2.busyWatchdog)
+      ? cfg.socialV2.busyWatchdog : {};
+    const d = BUSY_WATCHDOG_DEFAULTS;
+    const num = (value, fallback) => {
+      if (value === null || value === undefined || value === '') return fallback;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : fallback;
+    };
+    const hardCap = num(raw.hardCapMs, d.hardCapMs);
+    const release = num(raw.releaseMs, d.releaseMs);
+    return {
+      enabled: raw.enabled !== false,
+      warnMs: Math.max(0, num(raw.warnMs, d.warnMs)),           // 0 = 不记 WARN
+      // 非法/非正数回落默认：负数若被当成极小值会让看门狗立刻释放（比不改更危险）
+      releaseMs: release > 0 ? release : d.releaseMs,
+      hardCapMs: hardCap > 0 ? hardCap : d.hardCapMs,           // 0/负数 → 回落默认（不允许「无上限」）
+      checkIntervalMs: Math.max(1000, num(raw.checkIntervalMs, d.checkIntervalMs)),
+      rearmCooldownMs: Math.max(0, num(raw.rearmCooldownMs, d.rearmCooldownMs)),
+      maxRearmPerHour: Math.max(0, num(raw.maxRearmPerHour, d.maxRearmPerHour))
+    };
+  }
+
+  /** 活动戳（主信号）：该 sessionId 所属会话收到了新的 DSH 流帧。 */
+  function noteFrameActivityV2(sessionId, at = Date.now()) {
+    if (!sessionId) return;
+    const key = reverse.get(sessionId);
+    if (!key) return;
+    busyWatchdog.lastFrameAtV2.set(key, at);
+  }
+
+  /**
+   * 活动戳（白名单动作）：唤醒投递被 DSH 接受、mark_read、set_wake_config、
+   * 真的发出 QQ 消息。这些都说明「这个会话活着」。
+   * 注意 QQ **入站**消息不算活动：08:45–09:08 的事故正是「人一直在说话、会话一直卡忙」，
+   * 把入站当活动会让看门狗在最需要它的场景里永远不动作（§15.3）。
+   */
+  function noteActionActivityV2(key, at = Date.now()) {
+    const canonical = canonicalV2Key(key);
+    if (!canonical) return;
+    if (!socialV2.conversations.has(canonical)) return;
+    busyWatchdog.lastFrameAtV2.set(canonical, at);
+  }
+
+  /** 清理运行时结构（模式切换 / 暂停 / 重置 / 事件流断开时必须调用，否则跨模式误判）。 */
+  function clearBusyWatchdogRuntimeV2() {
+    busyWatchdog.busySinceV2.clear();
+    busyWatchdog.lastFrameAtV2.clear();
+    busyWatchdog.staleBusyTurns.clear();
+    busyWatchdog.rearmV2.clear();
+    busyWatchdog.busyStallsV2.clear();
+    busyWatchdog.rearmedWakeV2.clear();
+  }
+
+  /** 派发用：进程退出前不必等待看门狗定时器（unref），这里只做一次启动去重。 */
+  function startBusyWatchdogV2() {
+    try {
+      if (busyWatchdog.timer) return;
+      const wd = busyWatchdogConfig();
+      if (!wd.enabled) return; // 禁用：不注册定时器、不产生任何日志与状态
+      busyWatchdog.timer = setInterval(() => {
+        try {
+          runBusyWatchdogScanV2();
+        } catch (error) {
+          log(`❌ [watchdog] 扫描异常: ${error?.message ?? error}`);
+        }
+      }, wd.checkIntervalMs);
+      // 与 pendingWakeTimer / sleepTimer 保持一致：别让看门狗定时器把进程钉住不退出。
+      busyWatchdog.timer.unref?.();
+      busyWatchdog.started = true;
+      log(`[watchdog] 已启动（checkIntervalMs=${wd.checkIntervalMs} warnMs=${wd.warnMs} releaseMs=${wd.releaseMs} hardCapMs=${wd.hardCapMs} enabled=${wd.enabled}）`);
+    } catch (error) {
+      log(`❌ [watchdog] 启动失败: ${error?.message ?? error}`);
+    }
+  }
+
+  /** 命中的忙判据名单（只读；判据 ③ 用 queue= 字段单独给出）。 */
+  function busyFlagsV2(key, st, sid, queueRunning, queueTail) {
+    const flags = [];
+    if (st && st.pendingWakeTimer) flags.push('pendingWakeTimer');
+    if (pendingWakeKeys.has(key)) flags.push('pendingWakeKeys');
+    if ((sid && v2TurnStartAt.has(sid)) || (sid && collectors.has(sid))) flags.push('v2TurnStartAt,collectors');
+    if (queueRunning || queueTail > 0) flags.push('promptQueues');
+    return flags.length ? flags.join(',') : 'none';
+  }
+
+  /**
+   * 合并 backlog：只重排、不投递（§15.5 第 7 步）。
+   * 来源 = 既有 st.pendingWakeReasons + 本次释放 ① 时被丢弃的 st.pendingWakeReason；
+   * 规则 = 按 wakePriorityV2 降序、(reason,seq) 去重、≤ 20 条（与 :10827 一致）。
+   */
+  function mergeBusyBacklogV2(st, key = '') {
+    const list = Array.isArray(st.pendingWakeReasons) ? st.pendingWakeReasons.slice() : [];
+    if (st.pendingWakeReason) {
+      list.push({ reason: st.pendingWakeReason, seq: st.lastUnreadSeq || 0 });
+    }
+    st.pendingWakeReason = null;
+    st.pendingWakeSeq = null;
+    const seen = new Set();
+    const merged = [];
+    for (const item of list) {
+      const reason = String(typeof item === 'string' ? item : (item?.reason ?? '')).trim();
+      if (!reason) continue;
+      const seq = Number(typeof item === 'string' ? 0 : (item?.seq ?? 0)) || 0;
+      const id = `${reason}@${seq}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      merged.push({ reason, seq });
+    }
+    // 稳定排序：同优先级保持原有先后（高优先级先补，与 turn/end 补发共用同一张表）
+    merged.sort((a, b) => wakePriorityV2(b.reason) - wakePriorityV2(a.reason));
+    if (merged.length > 20) {
+      // 有界截断 = 丢弃最低优先级的尾部条目（与 :10827 的「丢最旧」同一语义）。
+      // 被丢掉的条目永远不会再被投递 → 它们的唤醒标记必须一起结束（不变量）。
+      for (const dropped of merged.slice(20)) clearRearmMarkForDroppedWakeV2(key, dropped);
+      merged.length = 20;
+    }
+    return merged;
+  }
+
+  /** re-arm 闸门：同一 key 在 cooldown 内不得第二次 re-arm，每小时有上限（防释放风暴）。 */
+  function busyRearmAllowedV2(key, wd, at) {
+    const times = busyWatchdog.rearmV2.get(key) ?? [];
+    if (wd.rearmCooldownMs > 0 && times.length > 0 && at - times[times.length - 1] < wd.rearmCooldownMs) return false;
+    if (wd.maxRearmPerHour > 0 && times.filter((t) => at - t < 3600000).length >= wd.maxRearmPerHour) return false;
+    return true;
+  }
+
+  function busyRearmRecordV2(key, at) {
+    const times = (busyWatchdog.rearmV2.get(key) ?? []).filter((t) => at - t < 3600000);
+    times.push(at);
+    busyWatchdog.rearmV2.set(key, times);
+  }
+
+  /** 看门狗扫描：单一定时器回调；全部同步执行，Node 单线程下不会与 pumpMux 交错。 */
+  function runBusyWatchdogScanV2(at = Date.now()) {
+    const wd = busyWatchdogConfig();
+    if (!wd.enabled) return;                        // 禁用：连 WARN 都不记
+    if (cfg.socialV2?.enabled === false) return;    // 二代整体关闭
+    if (currentMode !== 'reserved2') return;        // 非 reserved2 绝不投递（反例 C2）
+    if (socialV2.paused) return;                    // 暂停：完全静默（反例 C2）
+    for (const key of [...socialV2.conversations.keys()]) {
+      try {
+        scanBusyWatchdogKeyV2(key, wd, at);
+      } catch (error) {
+        // 单个会话的异常绝不能带走进程：看门狗本身是兜底机制
+        log(`❌ [watchdog] 释放异常 key=${key}: ${error?.message ?? error}`);
+      }
+    }
+  }
+
+  function scanBusyWatchdogKeyV2(key, wd, at) {
+    const st = socialV2.conversations.get(key);
+    if (!st) return;
+    if (!isSessionAllowedInCurrentMode(key)) return; // 不在白名单：静默（反例 C2）
+    if (!isConversationBusyV2(key, st)) {
+      busyWatchdog.busySinceV2.delete(key);          // 忙→闲边沿：结束本轮计时
+      return;
+    }
+    if (!busyWatchdog.busySinceV2.has(key)) busyWatchdog.busySinceV2.set(key, at);
+    const busyMs = Math.max(0, at - (busyWatchdog.busySinceV2.get(key) ?? at));
+    const lastFrameAt = busyWatchdog.lastFrameAtV2.get(key) ?? busyWatchdog.startedAt;
+    const idleMs = Math.max(0, at - lastFrameAt);
+    const sid = state.sessions[key];
+    const q = promptQueues.get(key);
+    const queueRunning = q?.running === true;
+    const queueTail = q ? q.queue.length : 0;
+    const backlogBefore = Array.isArray(st.pendingWakeReasons) ? st.pendingWakeReasons.length : 0;
+
+    // WARN 档：只记录不释放。5 分钟零帧与一次合法的 qq_wait_for_messages(timeoutMs=300000)
+    // 在时间上不可分，从这里就动手＝拿「误杀正常回合」换「早 10 分钟自愈」。
+    const warnTier = wd.warnMs > 0 && busyMs >= wd.warnMs && idleMs >= wd.warnMs;
+    // 释放档：双条件（持续忙 + 零帧）。min(releaseMs, hardCapMs) 的实际下界由下面两者共同给出。
+    const releaseByBudget = busyMs >= wd.releaseMs && idleMs >= wd.releaseMs;
+    // 硬上限档：与 30 分钟租约对齐。t1 §15.4 写「不看 idleMs」，但同节验收 A4 要求
+    // 「持续有帧（每 ≤60s 一帧）的忙会话即使忙满 hardCapMs 也不得被释放」——两者冲突时
+    // 以 A4 为准（有帧＝没卡死），所以硬上限只是把零帧门槛从 releaseMs 降到 warnMs。
+    const hardCapSilenceMs = wd.warnMs > 0 ? Math.min(wd.warnMs, wd.releaseMs) : wd.releaseMs;
+    const releaseByHardCap = busyMs >= wd.hardCapMs && idleMs >= hardCapSilenceMs;
+    if (!releaseByBudget && !releaseByHardCap && !warnTier) return;
+
+    // 档位只有一个结论：不够释放就只记录（WARN 档绝不能掉进下面的释放路径）。
+    const tier = releaseByBudget ? 'release' : (releaseByHardCap ? 'hardcap' : 'warn');
+    const flags = busyFlagsV2(key, st, sid, queueRunning, queueTail);
+    const staleTurn = !!(sid && busyWatchdog.staleBusyTurns.has(sid));
+    const secs = (ms) => Math.round(ms / 1000);
+    if (tier === 'warn') {
+      log(`⚠️ [watchdog] warn key=${key} busy=${secs(busyMs)}s idle=${secs(idleMs)}s flags=${flags} queue=running:${queueRunning ? 1 : 0},tail:${queueTail} backlog=${backlogBefore} staleTurn=${staleTurn ? 'true' : 'false'}`);
+      return;
+    }
+
+    // ── 触发动作（§15.5，顺序固定）──────────────────────────────────────────
+    // ① st.pendingWakeTimer：纯进程内定时器型卡死，clearTimeout + 置 null。
+    const released = [];
+    if (st.pendingWakeTimer) {
+      clearTimeout(st.pendingWakeTimer);
+      st.pendingWakeTimer = null;
+      released.push('pendingWakeTimer');
+    }
+    // ② pendingWakeKeys（§10 主嫌：DSH 接受了 prompt 但永远没有 turn/end）。
+    //    必须与 30 分钟租约成对 disarm，否则两者互相覆盖（§15.8）。
+    if (pendingWakeKeys.has(key)) {
+      pendingWakeKeys.delete(key);
+      released.push('pendingWakeKeys');
+    }
+    if (pendingWakeLeaseTimers.has(key)) disarmPendingWakeLease(key);
+    // ④ v2TurnStartAt / collectors（含重连时 rebuildInFlightCollector 恢复的残留回合）
+    //    → 删除两处 + 墓碑；其后的 turn/end 走静默排空（pumpMux 里判定 staleBusyTurns）。
+    if (sid) {
+      if (v2TurnStartAt.has(sid)) { v2TurnStartAt.delete(sid); released.push('v2TurnStartAt'); }
+      if (collectors.has(sid)) { collectors.delete(sid); released.push('collectors'); }
+      if (released.includes('v2TurnStartAt') || released.includes('collectors')) {
+        busyWatchdog.staleBusyTurns.add(sid);
+      }
+    }
+    // ③ promptQueues：**不做任何事**。队列项是有人 await 的 Promise，强清等于伪造成功；
+    //    且 ③ 为真的根因必然是队列头那次 deliverPromptNow 没回来，清掉 ②④ 后它自然消散。
+
+    // 只有 ③ 卡住时没有任何可释放的标记：此时按 WARN 语义记录（不做无意义的重排/补发）。
+    if (released.length === 0) {
+      log(`⚠️ [watchdog] warn key=${key} busy=${secs(busyMs)}s idle=${secs(idleMs)}s flags=${flags} queue=running:${queueRunning ? 1 : 0},tail:${queueTail} backlog=${backlogBefore} staleTurn=${staleTurn ? 'true' : 'false'}`);
+      return;
+    }
+
+    // 积压合并：只重排、不投递。
+    // 被丢弃的 ①（pendingWakeTimer）已经不会再投递：它的防重复登记一并撤掉
+    //（不变量：标记存在 ⟺ 有一条已排程/在途的投递；被取消的投递不能留着标记，
+    //  否则该条会被下一次 turn/end 的 shift 当成「已补发」跳过 —— F3 同族路径）。
+    if (st.pendingWakeReason) clearBusyRearmedWakeV2(key, st.pendingWakeReason, st.pendingWakeSeq);
+    const merged = mergeBusyBacklogV2(st, key);
+    let rearm = 'none';
+    // 相关性检查（与 :11833 同一判据）：触发它的消息已被当前回合处理（unread 里已无 >= seq 的项）
+    // → 丢弃，不补发；剩下的第一条作为唯一一次 re-arm 的原因。
+    const relevant = merged.filter((item) => Array.isArray(st.unread) && st.unread.some((m) => m && Number(m.seq) >= Number(item.seq)));
+    st.pendingWakeReasons = relevant;
+    if (relevant.length > 0 && busyRearmAllowedV2(key, wd, at)) {
+      const top = relevant[0];
+      // 唯一允许的投递触发：走正常投递路径（batchWindowMs 后 sendWakePromptV2 → [reserved2] 唤醒 …）
+      // 带上 (top.reason, top.seq)：这次投递若被拒/抛错/跳过，失败分支才会知道该撤哪条防重复登记（F3）
+      scheduleWakeV2(key, top.reason, { seq: top.seq });
+      // 只有真的排上了定时器才算 re-arm：万一 ③ 仍卡着，scheduleWakeV2 会把原因重新暂存回去
+      // （那条路径不投递、也不该吃掉 cooldown/小时额度）。
+      if (st.pendingWakeTimer) {
+        busyRearmRecordV2(key, at);
+        // F1：这一条已交给正常投递路径。登记 (reason,seq)，让该回合迟到的 turn/end 在
+        // :12177 的常规补发里跳过它（否则同一 (reason,seq) 会被投递两次）。
+        markBusyRearmedWakeV2(key, top.reason, top.seq);
+        rearm = `${top.reason}@seq${top.seq}`;
+      }
+    }
+    // 释放即视为一次活动：重置计时，避免同一个卡死状态被每个扫描周期反复释放/反复补发。
+    busyWatchdog.busySinceV2.set(key, at);
+    busyWatchdog.lastFrameAtV2.set(key, at);
+    busyWatchdog.busyStallsV2.set(key, (busyWatchdog.busyStallsV2.get(key) ?? 0) + 1);
+    // 与 :4583（markRead）同款：让 ④ 的 actionTaken 判定与看门狗视角一致。
+    st.lastActionAt = at;
+    saveSocialV2State();
+    const icon = tier === 'hardcap' ? '❗' : '⚠️';
+    log(`${icon} [watchdog] release key=${key} busy=${secs(busyMs)}s idle=${secs(idleMs)}s tier=${tier} released=${released.length ? released.join(',') : 'none'} staleTurn=${(!sid || !busyWatchdog.staleBusyTurns.has(sid)) ? 'false' : 'true'} backlog=${relevant.length} rearm=${rearm}`);
+  }
+
   // ── Token 用量账本（控制台「令牌与花费」） ───────────────────────────────
   // 权威总量取 DSH 的 tokenUsage 投影（整条会话日志累计，含桥接启动前的历史），
   // 逐轮明细由 assistant/message 的 usage 折叠而来；花费在读取时按价目表折算。
@@ -2430,10 +2843,11 @@ async function main() {
     const items = queued.get(key) ?? [];
     if (!items.some((it) => it.promptText === promptText)) {
       if (items.length >= QUEUE_MAX) {
-        items.shift();
+        // F4 同族点：溢出丢最旧。若被丢的是待投唤醒项，它的标记必须一起结束（见不变量注释）
+        clearRearmMarkForDroppedWakeV2(key, items.shift());
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
-      items.push({ promptText, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason });
+      items.push({ promptText, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason, wakeSeq: opts.wakeSeq });
       queued.set(key, items);
     }
     queueRetries.delete(key); // 新消息入队视为新的机会，重置退避计数
@@ -2453,6 +2867,8 @@ async function main() {
       // 规范化后再比较：`simulation` 也走这里（见 MODE_INPUT_ALIASES）。
       const fromDsh = ns?.value ? normalizeModeInput(ns.value.mode) : null;
       if (fromDsh) {
+        // 模式真的变了才清（DSH 轮询会反复读回同一个值）：切换后看门狗计时必须重新开始
+        if (fromDsh !== currentMode) clearBusyWatchdogRuntimeV2();
         currentMode = fromDsh;
         // DSH 设置页也可配置管理员 QQ；未设置该字段时不覆盖 config.json。
         if (ns.value.ownerQQ !== undefined) {
@@ -2474,7 +2890,10 @@ async function main() {
     } catch {}
     const local = readJsonSafe(path.join(STATE_DIR, 'mode.json'), null);
     const fromLocal = local ? normalizeModeInput(local.mode) : null;
-    if (fromLocal) currentMode = fromLocal;
+    if (fromLocal) {
+      if (fromLocal !== currentMode) clearBusyWatchdogRuntimeV2();
+      currentMode = fromLocal;
+    }
     if (typeof local?.closedAgentPreset === 'string' && local.closedAgentPreset) {
       closedAgentPreset = local.closedAgentPreset;
     }
@@ -2620,6 +3039,13 @@ async function main() {
     cancelSocialTimers(key);
     disarmPendingWakeLease(key);
     pendingWakeKeys.delete(key);
+    // 会话退役：清掉看门狗的运行时记账与墓碑，避免跨会话/跨进程残留（反例 C3）
+    busyWatchdog.busySinceV2.delete(key);
+    busyWatchdog.lastFrameAtV2.delete(key);
+    busyWatchdog.rearmV2.delete(key);
+    busyWatchdog.busyStallsV2.delete(key);
+    busyWatchdog.rearmedWakeV2.delete(key);
+    if (sessionId) busyWatchdog.staleBusyTurns.delete(sessionId);
     const st = socialV2.conversations.get(key);
     if (st) {
       // 保留旧 token 在脱敏集合中，但撤销它的调用权限。
@@ -2670,10 +3096,12 @@ async function main() {
             const [kind, idStr] = key.split(':');
             const id = Number(idStr);
             if (!modeAllowed(key, kind, id, cfg, currentMode)) {
+              // 改判点：这一项被永久丢弃（不再投、也不会放回队列）→ 它的唤醒标记必须一起结束
+              clearRearmMarkForDroppedWakeV2(key, item);
               log(`补投跳过未授权会话 ${key}（当前模式 ${currentMode}）`);
               continue;
             }
-            const result = await deliverPrompt(key, item.promptText, { farewell: item.farewell, silent: item.silent, media: item.media ?? [], wakeReason: item.wakeReason });
+            const result = await deliverPrompt(key, item.promptText, { farewell: item.farewell, silent: item.silent, media: item.media ?? [], wakeReason: item.wakeReason, wakeSeq: item.wakeSeq });
             if (!result.ok) {
               log(`补投失败 ${key}: ${result.error || '未知错误'}`);
               failed += 1;
@@ -3292,6 +3720,8 @@ async function main() {
           }
           currentMode = requestedMode;
           lastMode = requestedMode;
+          // 模式切换后看门狗的计时必须重新开始，否则切回 reserved2 会立刻释放一次（反例 C2/C3）
+          clearBusyWatchdogRuntimeV2();
           reconcileSessionPolicies();
           if (requestedMode === 'reserved2') {
             for (const key of socialV2.conversations.keys()) {
@@ -4581,6 +5011,7 @@ async function main() {
           }
           const markedCount = acknowledgeMessagesV2(st, throughSeq);
           st.lastActionAt = Date.now();
+          noteActionActivityV2(key); // 模型侧收尾动作走 HTTP→MCP，不一定立刻有新帧（§15.3）
           st.wakeConfig.noActionCount = 0;
           // 防止“有限潜水被 timeout 唤醒后 sleepUntil 被清空、又 mark_read 收尾”导致无定时器无触发条件的静默态。
           if (!st.wakeConfig.infinite && !st.wakeConfig.sleepUntil) {
@@ -4723,6 +5154,7 @@ async function main() {
           st.wakeConfig.confirmedAt = Date.now();
           st.wakeConfig.confirmedBy = 'set_wake_config';
           st.lastActionAt = Date.now();
+          noteActionActivityV2(key); // 与 mark_read 同理：这是模型主动收尾，算一次活动
           // 已成功设置下一次唤醒：本轮沉睡前观察标记作废，下次想再睡需重新走 5 分钟观察。
           st.preSleepWaitSatisfiedAt = 0;
           st.preSleepWaitObservedAt = 0;
@@ -4730,10 +5162,8 @@ async function main() {
           saveSocialV2State();
           wakeConfigUpdatedKeys.add(key);
           wakeConfigMissCount.delete(key);
-          if (st.pendingWakeTimer) {
-            clearTimeout(st.pendingWakeTimer);
-            st.pendingWakeTimer = null;
-          }
+          // F5-1：AI 自己改了唤醒条件 → 取消旧的待发唤醒（该唤醒项不存在了，标记必须一起结束）
+          cancelPendingWakeTimerV2(key, st);
           cancelReplyCheckV2(key); // AI 已主动设置新的唤醒配置，取消回复检查
           setupSleepTimerV2(key);
           log(`[reserved2] 更新唤醒配置 ${key}: mode=${next.mode} infinite=${next.infinite} sleepUntil=${next.sleepUntil ?? 'null'}`);
@@ -4771,10 +5201,8 @@ async function main() {
             return;
           }
           const st = getSocialV2State(key);
-          if (st.pendingWakeTimer) {
-            clearTimeout(st.pendingWakeTimer);
-            st.pendingWakeTimer = null;
-          }
+          // F5-2：控制台手动唤醒取代旧的待发唤醒 → 标记必须一起结束（随后另投的那条由 sendWakePromptV2 单独负责）
+          cancelPendingWakeTimerV2(key, st);
           if (!st.bootstrapSent) st.bootstrapSent = true;
           saveSocialV2State();
           // 和其它唤醒入口保持一致：sendWakePromptV2 是异步的，这里不 await（不能让 HTTP 回复
@@ -5762,10 +6190,8 @@ async function main() {
           // 同时给 quietMs 加上限，避免被模型/群友诱导导致 HTTP handler 长时间挂起。
           const maxQuietMs = Math.max(minQuietAfterNewMs, Math.min(120000, Number(waitCfg.maxMs) || 600000));
           const quietMs = Math.min(maxQuietMs, Math.max(minQuietAfterNewMs, Math.round(rawQuietMs) || 0));
-          if (st.pendingWakeTimer) {
-            clearTimeout(st.pendingWakeTimer);
-            st.pendingWakeTimer = null;
-          }
+          // F5-3：模型主动进入 qq_wait_for_messages → 取消待发唤醒（该唤醒项不存在了，标记必须一起结束）
+          cancelPendingWakeTimerV2(key, st);
           cancelReplyCheckV2(key); // AI 正在主动等待，取消回复检查定时器避免重复唤醒
           // A reply wait must also include messages received while the model
           // was reading/thinking after its snapshot, before this HTTP request.
@@ -6898,6 +7324,13 @@ async function main() {
           slangSubmitTimes.delete(key);
           cancelSocialTimers(key);
           clearSocialV2Timers(key);
+          // 会话上下文被清掉：看门狗的计时/墓碑一并作废，避免旧 sid 的墓碑跨会话残留（反例 C3）
+          busyWatchdog.busySinceV2.delete(key);
+          busyWatchdog.lastFrameAtV2.delete(key);
+          busyWatchdog.rearmV2.delete(key);
+          busyWatchdog.busyStallsV2.delete(key);
+          busyWatchdog.rearmedWakeV2.delete(key);
+          if (oldSessionId) busyWatchdog.staleBusyTurns.delete(oldSessionId);
           pendingWakeKeys.delete(key);
           wakeConfigUpdatedKeys.delete(key);
           markReadCalledKeys.delete(key);
@@ -8120,6 +8553,7 @@ async function main() {
         sendTimes: [],
         stickerCollectTimes: [],
         pendingWakeTimer: null,
+        pendingWakeSeq: null,   // 与 pendingWakeReason 成对：看门狗 re-arm 带下来的 (reason,seq)，用于失败时精确清标记（F3）
         sleepTimer: null,
         replyCheckTimer: null,
         proactiveTimer: null,
@@ -8208,6 +8642,7 @@ async function main() {
             sendTimes: Array.isArray(val.sendTimes) ? val.sendTimes : [],
             stickerCollectTimes: Array.isArray(val.stickerCollectTimes) ? val.stickerCollectTimes : [],
             pendingWakeTimer: null,
+            pendingWakeSeq: null,   // 运行时字段，不落盘（与 pendingWakeReason 成对）
             sleepTimer: null,
             replyCheckTimer: null,
             proactiveTimer: null,
@@ -9459,6 +9894,8 @@ async function main() {
   }
 
   loadSocialV2State();
+  // 卡忙自愈看门狗（§15）：状态加载完就起单例定时器；enabled:false 时不注册、不记日志。
+  startBusyWatchdogV2();
 
   function isSocialEnabled() {
     return currentMode === 'reserved' && cfg.social?.enabled !== false;
@@ -9672,17 +10109,24 @@ async function main() {
     const skipWake = () => {
       pendingWakeKeys.delete(key);
       disarmPendingWakeLease(key);
+      // 跳过 = 这次唤醒没有送出去（paused / 非 reserved2 / 二代已关闭）：
+      // 撤掉防重复登记，让它留在 backlog 里，恢复后仍能被 shift 补发（F3）
+      if (opts.wakeReason) clearBusyRearmedWakeV2(key, opts.wakeReason, opts.wakeSeq);
       return { ok: true, skipped: true };
     };
     if (wakeBlocked()) return skipWake();
     if (!dshReady) {
       const items = queued.get(key) ?? [];
       if (items.length >= QUEUE_MAX) {
-        items.shift();
+        // F4 本体：离线队列（QUEUE_MAX=50）溢出丢最旧。被丢项若带 wakeReason/wakeSeq
+        //（= 看门狗 re-arm 的待投唤醒），必须结束它的标记，否则后续 turn/end 的 shift 会把它
+        // 当成「已由看门狗补发」跳过 → 该 (reason,seq) 永久丢失。
+        clearRearmMarkForDroppedWakeV2(key, items.shift());
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
-      items.push({ promptText, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason });
+      items.push({ promptText, farewell: !!opts.farewell, silent: !!opts.silent, media: opts.media ?? [], wakeReason: opts.wakeReason, wakeSeq: opts.wakeSeq });
       queued.set(key, items);
+      noteActionActivityV2(key); // 唤醒投递已被接受（离线入队）：算一次活动（§15.3）
       return { ok: true, queued: true };
     }
     let sessionId;
@@ -9745,6 +10189,7 @@ async function main() {
     } else if (accepted.result.value.command?.text && opts.silent && opts.farewell) {
       social.exitingSessions.delete(sessionId);
     }
+    noteActionActivityV2(key); // DSH 已接受这次 prompt：算一次活动，避免「刚投完还没等到 turn/start 就被判死」
     return { ok: true };
   }
 
@@ -10495,6 +10940,7 @@ async function main() {
     st.preSleepWaitSatisfiedAt = 0;
     st.preSleepWaitObservedAt = 0;
     st.preSleepWaitAccumMs = 0;
+    noteActionActivityV2(key); // 真的发出了 QQ 消息：有输出＝活着（§15.3）
     saveSocialV2State();
   }
 
@@ -10808,10 +11254,15 @@ async function main() {
     return `${roleLine}${tokenLine}【提醒】你还没有完成回合收尾。请调用 qq_set_wake_config 设置下一次唤醒条件（例如继续潜水多久、@/名字/关键词/提问/概率/指定成员等），或者调用 qq_mark_read 表示你看过且决定不接。这是为了防止你忘记收尾后进入“永眠”。注意：设置潜水前先用 qq_wait_for_messages(timeoutMs=${preSleepMs}) 完成沉睡前观察；等待期间有人说话时查看 newMessages，判断不需要你参与即可收尾。`;
   }
 
-  async function sendWakePromptV2(key, reason) {
-    if (cfg.socialV2?.enabled === false) return;
-    if (currentMode !== 'reserved2' || socialV2.paused) return;
+  async function sendWakePromptV2(key, reason, opts = {}) {
+    // 看门狗 re-arm 会把被补发的那条 (reason,seq) 一起带下来：这次投递但凡「没有真正生效」，
+    // 都要按 (reason,seq) 撤掉防重复登记，否则该条会被下一次 turn/end 的 shift 静默吞掉（F3）。
+    const wakeSeq = Number.isFinite(Number(opts?.seq)) ? Number(opts.seq) : null;
+    const clearRearmMark = () => { if (wakeSeq !== null) clearBusyRearmedWakeV2(key, reason, wakeSeq); };
+    if (cfg.socialV2?.enabled === false) { clearRearmMark(); return; }
+    if (currentMode !== 'reserved2' || socialV2.paused) { clearRearmMark(); return; }
     if (!isSessionAllowedInCurrentMode(key)) {
+      clearRearmMark();
       log(`[reserved2] 跳过唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
     }
@@ -10823,9 +11274,17 @@ async function main() {
       const seq = st.lastUnreadSeq || 0;
       if (!st.pendingWakeReasons.some((r) => r && r.reason === reason && r.seq === seq)) {
         st.pendingWakeReasons.push({ reason, seq });
-        // 有界队列：最多保留 20 条，防止消息洪峰下无限增长。
-        if (st.pendingWakeReasons.length > 20) st.pendingWakeReasons.splice(0, st.pendingWakeReasons.length - 20);
+        // 有界队列：最多保留 20 条，防止消息洪峰下无限增长。被丢掉的条目永远不会再被投递
+        // → 它的唤醒标记必须一起结束（不变量：标记生命周期 ⟺ 唤醒项生命周期）
+        if (st.pendingWakeReasons.length > 20) {
+          for (const dropped of st.pendingWakeReasons.splice(0, st.pendingWakeReasons.length - 20)) {
+            clearRearmMarkForDroppedWakeV2(key, dropped);
+          }
+        }
       }
+      // 定时器已排上、但派发时又发现「会话仍忙」→ 这次唤醒同样没有送出去，只是被再次暂存。
+      // 必须撤掉防重复登记，否则该条会被下一次 turn/end 的 shift 跳过（F3 的第 4 条路径）。
+      clearRearmMark();
       log(`[reserved2] 会话繁忙，暂存唤醒原因 ${key}（${reason}@seq${seq}）`);
       return;
     }
@@ -10836,6 +11295,8 @@ async function main() {
     const recentMinute = (st.wakeTimes || []).filter((t) => now - t < 60000).length;
     const recentHour = (st.wakeTimes || []).filter((t) => now - t < 3600000).length;
     if ((maxPerMinute > 0 && recentMinute >= maxPerMinute) || (maxPerHour > 0 && recentHour >= maxPerHour)) {
+      // 被额度跳过 = 这次唤醒没送出去：撤掉防重复登记，让该条留在 backlog 里等下一次机会（F3）
+      clearRearmMark();
       log(`[reserved2] 唤醒频率超限，跳过 ${key}（${reason}）`);
       return;
     }
@@ -10870,7 +11331,7 @@ async function main() {
     try {
       pendingWakeKeys.add(key);
       armPendingWakeLease(key);
-      const result = await deliverPrompt(key, promptText, { wakeReason: reason });
+      const result = await deliverPrompt(key, promptText, { wakeReason: reason, wakeSeq });
       const restoreFiniteSleep = () => {
         if (hadFiniteSleep) {
           st.wakeConfig.sleepUntil = prevSleepUntil;
@@ -10884,6 +11345,9 @@ async function main() {
         disarmPendingWakeLease(key);
         rollbackWakeTime();
         restoreFiniteSleep();
+        // 投递被 DSH 拒绝 = 从未送达：必须撤掉防重复登记，否则这条 (reason,seq)
+        // 会被下一次 turn/end 的 shift 跳过 → 既不再投递也不再重排（F3）
+        clearRearmMark();
         log(`[reserved2] 唤醒投递被拒 ${key}: ${result.error || '未知错误'}`);
       } else if (result && result.queued === true) {
         // 入队而非真正在途：保留 pendingWakeKeys，等 DSH 恢复后真正投递的 turn/end 再触发收尾保护；
@@ -10894,6 +11358,8 @@ async function main() {
       pendingWakeKeys.delete(key);
       disarmPendingWakeLease(key);
       rollbackWakeTime();
+      // 投递抛错 = 从未送达：同样撤掉防重复登记（F3）
+      clearRearmMark();
       if (hadFiniteSleep) {
         st.wakeConfig.sleepUntil = prevSleepUntil;
         st.wakeConfig.infinite = false;
@@ -10960,7 +11426,7 @@ async function main() {
     return WAKE_PRIORITY[base] ?? 0;
   }
 
-  function scheduleWakeV2(key, reason) {
+  function scheduleWakeV2(key, reason, opts = {}) {
     if (cfg.socialV2?.enabled === false) return;
     if (socialV2.paused) return;
     if (!isSessionAllowedInCurrentMode(key)) {
@@ -10968,11 +11434,17 @@ async function main() {
       return;
     }
     const st = getSocialV2State(key);
+    // 看门狗 re-arm 会把被补发的那条 (reason,seq) 一起带下来：投递没真正生效时要用它精确清标记（F3）。
+    const wakeSeq = Number.isFinite(Number(opts?.seq)) ? Number(opts.seq) : null;
     if (st.pendingWakeTimer) {
       // 合并窗口内已有待发送唤醒：按优先级升级最终原因，避免先概率后 @ 却仍按概率唤醒。
       const cur = st.pendingWakeReason || reason;
       if (wakePriorityV2(reason) > wakePriorityV2(cur)) {
+        // 旧原因不会再被投递：它那条 (reason,seq) 的防重复登记必须一起撤掉，
+        // 否则那次投递失败时收尾分支按新原因找不到它 → 残留标记吞掉这条唤醒（F3 的合并窗变体）。
+        clearBusyRearmedWakeV2(key, cur, st.pendingWakeSeq);
         st.pendingWakeReason = reason;
+        st.pendingWakeSeq = wakeSeq;
         log(`[reserved2] 合并窗口内升级唤醒原因 ${key}: ${cur} -> ${reason}`);
       }
       return;
@@ -10982,8 +11454,13 @@ async function main() {
       const seq = st.lastUnreadSeq || 0;
       if (!st.pendingWakeReasons.some((r) => r && r.reason === reason && r.seq === seq)) {
         st.pendingWakeReasons.push({ reason, seq });
-        // 有界队列：最多保留 20 条，防止消息洪峰下无限增长。
-        if (st.pendingWakeReasons.length > 20) st.pendingWakeReasons.splice(0, st.pendingWakeReasons.length - 20);
+        // 有界队列：最多保留 20 条，防止消息洪峰下无限增长。被丢掉的条目永远不会再被投递
+        // → 它的唤醒标记必须一起结束（不变量：标记生命周期 ⟺ 唤醒项生命周期）
+        if (st.pendingWakeReasons.length > 20) {
+          for (const dropped of st.pendingWakeReasons.splice(0, st.pendingWakeReasons.length - 20)) {
+            clearRearmMarkForDroppedWakeV2(key, dropped);
+          }
+        }
       }
       log(`[reserved2] 会话繁忙，暂存唤醒原因 ${key}（${reason}@seq${seq}）`);
       return;
@@ -10994,12 +11471,15 @@ async function main() {
       st.sleepTimer = null;
     }
     st.pendingWakeReason = reason;
+    st.pendingWakeSeq = wakeSeq;
     const batchMs = Math.max(1000, Number(st.wakeConfig?.batchWindowMs) || 8000);
     st.pendingWakeTimer = setTimeout(() => {
       st.pendingWakeTimer = null;
       const finalReason = st.pendingWakeReason || reason;
+      const finalSeq = st.pendingWakeSeq;
       st.pendingWakeReason = null;
-      void sendWakePromptV2(key, finalReason).catch((error) => log(`[reserved2] 计划唤醒异常 ${key}:`, error?.message ?? error));
+      st.pendingWakeSeq = null;
+      void sendWakePromptV2(key, finalReason, { seq: finalSeq }).catch((error) => log(`[reserved2] 计划唤醒异常 ${key}:`, error?.message ?? error));
     }, batchMs);
     // 与其它 per-conversation 定时器保持一致：别让一个待唤醒定时器把进程钉住不退出。
     st.pendingWakeTimer.unref?.();
@@ -11104,8 +11584,13 @@ async function main() {
     if (st.pendingWakeTimer) {
       clearTimeout(st.pendingWakeTimer);
       st.pendingWakeTimer = null;
+      // F5-4（同族）：这里把所有 per-key 定时器/待发唤醒整体取消 → 待发唤醒项不存在了，
+      // 它的标记必须一起结束（调用方 retire/会话重置/clearAllSocialV2Timers 也会整体清，
+      // 这里让「取消待发唤醒」这个动作本身保持自洽，避免未来新增调用点时漏清）。
+      if (st.pendingWakeReason) clearBusyRearmedWakeV2(key, st.pendingWakeReason, st.pendingWakeSeq);
     }
     st.pendingWakeReason = null;
+    st.pendingWakeSeq = null;
     if (st.sleepTimer) {
       clearTimeout(st.sleepTimer);
       st.sleepTimer = null;
@@ -11128,6 +11613,8 @@ async function main() {
     markReadCalledKeys.clear();
     wakeConfigMissCount.clear();
     messageMediaStore.clear();
+    // 看门狗运行时状态：暂停/重置/清空工作区/离开 reserved2 时必须一并清（反例 C2/C3）
+    clearBusyWatchdogRuntimeV2();
   }
 
   function drainPromptQueue(key, errorMsg) {
@@ -11250,6 +11737,12 @@ async function main() {
           slangSubmitTimes.delete(key);
           cancelSocialTimers(key);
           clearSocialV2Timers(key);
+          busyWatchdog.busySinceV2.delete(key);
+          busyWatchdog.lastFrameAtV2.delete(key);
+          busyWatchdog.rearmV2.delete(key);
+          busyWatchdog.busyStallsV2.delete(key);
+          busyWatchdog.rearmedWakeV2.delete(key);
+          if (oldSessionId) busyWatchdog.staleBusyTurns.delete(oldSessionId);
           pendingWakeKeys.delete(key);
           wakeConfigUpdatedKeys.delete(key);
           markReadCalledKeys.delete(key);
@@ -11427,7 +11920,9 @@ async function main() {
     if (!dshReady) {
       const items = queued.get(key) ?? [];
       if (items.length >= QUEUE_MAX) {
-        items.shift();
+        // F4 同族点：QQ 入站离线入队溢出丢最旧（这里 push 的项不带 wake 字段，
+        // 统一调用只是防御：无 wake 字段时函数内部直接返回，不动任何标记）
+        clearRearmMarkForDroppedWakeV2(key, items.shift());
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
       items.push({ promptText, media: mediaList });
@@ -11681,6 +12176,9 @@ async function main() {
               }
               continue;
             }
+            // 看门狗活动戳（主信号）：该会话收到了新的 DSH 流帧（assistant/message 增量、
+            // tool/call、tool/result、turn/start、turn/end…）。「零帧」才是卡死的强信号。
+            noteFrameActivityV2(frame.sessionId);
             // 追踪当前 turn 是否成功调用过 MCP 发送类工具：
             if (!isCurrentSession(key, frame.sessionId)) continue;
             // 只有“发送成功”才跳过自动转发；如果工具调用失败，仍允许 AI 的文本正常发出。
@@ -11688,6 +12186,8 @@ async function main() {
               sendToolSucceededSessions.delete(frame.sessionId);
               pendingSendToolCalls.delete(frame.sessionId);
               v2TurnStartAt.set(frame.sessionId, Date.now());
+              // 新的 live turn/start 接管该会话：旧墓碑作废（否则这个真回合的 turn/end 会被静默排空）
+              busyWatchdog.staleBusyTurns.delete(frame.sessionId);
             }
             if (frame.event.type === 'tool/call') {
               const toolName = String(frame.event.data?.name ?? '');
@@ -11742,6 +12242,20 @@ async function main() {
             collectors.set(frame.sessionId, collector);
             const ended = collector.push(frame.event);
             if (ended) {
+              // 看门狗墓碑（§15.2 ④）：④ 已被强制释放，说明这个回合被判定为卡死并丢弃。
+              // 迟到的 turn/end 必须**静默排空**——不发 QQ、不记 noActionCount、不做 backlog 补发，
+              // 否则等于「看门狗放掉卡死标记后又把那轮回答补发了一遍」（A3/C4）。
+              if (busyWatchdog.staleBusyTurns.delete(frame.sessionId)) {
+                v2TurnStartAt.delete(frame.sessionId);
+                collectors.delete(frame.sessionId);
+                sendToolSucceededSessions.delete(frame.sessionId);
+                pendingSendToolCalls.delete(frame.sessionId);
+                toolCallNames.delete(frame.sessionId);
+                social.silentTurns.delete(frame.sessionId);
+                social.exitingSessions.delete(frame.sessionId);
+                log(`[watchdog] 静默排空被释放回合的 turn/end key=${key} session=${frame.sessionId}`);
+                continue;
+              }
               // reserved2 无行动兜底：普通唤醒回合若既没发消息、也没 mark_read / set_wake_config，
               // 则累计 noActionCount；达到阈值后自动重置 WakeConfig，避免 AI 卡死。
               const silentQueueNow = social.silentTurns.get(frame.sessionId) ?? [];
@@ -11831,11 +12345,17 @@ async function main() {
                     // 兼容旧字符串残留
                   } else {
                     const stillRelevant = Array.isArray(stEnd.unread) && stEnd.unread.some((m) => m && Number(m.seq) >= Number(item.seq));
-                    if (stillRelevant) {
+                    // 已由卡忙看门狗在强制释放时 re-arm 过（已交给正常投递路径，或正在合并窗里
+                    // 等待投递）：再排一次就是「同一 (reason,seq) 投递两次」（验收 5 / 反例 C4，F1）。
+                    // 一次性消费；不同的 (reason,seq) 不受影响，仍按原逻辑补发。
+                    const rearmedByWatchdog = consumeBusyRearmedWakeV2(key, item.reason, item.seq);
+                    if (!stillRelevant) {
+                      log(`[reserved2] ${key} 繁忙期间唤醒 ${item.reason}@seq${item.seq} 已被当前回合处理，跳过补发`);
+                    } else if (rearmedByWatchdog) {
+                      log(`[reserved2] ${key} 繁忙期间唤醒 ${item.reason}@seq${item.seq} 已由看门狗重新武装补发，跳过重复补发`);
+                    } else {
                       log(`[reserved2] ${key} 补发繁忙期间积压的唤醒：${item.reason}@seq${item.seq}`);
                       scheduleWakeV2(key, item.reason);
-                    } else {
-                      log(`[reserved2] ${key} 繁忙期间唤醒 ${item.reason}@seq${item.seq} 已被当前回合处理，跳过补发`);
                     }
                   }
                 }
@@ -12084,6 +12604,9 @@ async function main() {
         // 长轮询（qq_wait_for_messages）的租约也要清：它的 req.on('close') 在事件流
         // 断开时不一定触发，残留租约会用 429 卡住该会话最长 15 分钟的等待工具。
         activeWaits.clear();
+        // 看门狗的运行时状态同样清：断线期间没有任何帧，「残留 busySince」会在重连后
+        // 立刻触发一次误释放（反例 C3）。
+        clearBusyWatchdogRuntimeV2();
       }
       await sleep(3000);
     }
