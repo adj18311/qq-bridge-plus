@@ -1,7 +1,7 @@
 # QQ ↔ DeepSeek Harness 桥接
 
 > **本项目不是原创**，是基于 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的**二次创作**（改进版）。原作者 Derpyu520，上游仓库 <https://github.com/Derpyu520/qq-bridge>。
-> 架构、协议适配和绝大部分代码都来自上游，本仓库只做了增补与修复。**特别鸣谢原作者**；如果你觉得这个项目有用，优先去上游点个 star。
+> 架构、协议适配和绝大部分代码都来自上游，本仓库只做了增补与修复。**特别鸣谢原作者**；如果你觉得这个项目有用，优先去上游点个 star。只做交流学习和个人使用，严禁商用！！！
 >
 > 上游用 MIT 许可，本仓库沿用同一许可并保留原版权声明（见 [LICENSE](LICENSE)）。
 
