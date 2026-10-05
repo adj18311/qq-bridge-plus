@@ -23,7 +23,7 @@
 
 The documentation index (one line per doc, with "still current?" notes) is **[docs/README.md](docs/README.md)**;
 the repository/folder and script-naming conventions are in **[docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)**.
-This release ships only the documents tracked in git; the documentation index marks the rows that are local-only (for example the full Chinese project guide, whose local copy no longer exists).
+This release ships only the documents tracked in git, and the documentation index marks the few rows that are local-only. The Chinese project guide is included as a public condensed edition in [docs/guides/PROJECT_GUIDE.md](docs/guides/PROJECT_GUIDE.md); it predates the 2026-10 additions, which are covered in [CHANGELOG.md](CHANGELOG.md).
 
 ## What this fork adds over upstream
 
@@ -228,9 +228,9 @@ qq-bridge/
   docs/
     README.md                   # documentation index (one line per doc + "still current?" notes)
     FOLDER_MAP.md               # folder layout and script-naming conventions
-    guides/                     # user/operator facing, 10 files:
+    guides/                     # user/operator facing, 11 files:
                                 #   BUSY_WATCHDOG.md (the watchdog explained)
-                                #   DSH_SETUP.md / DSH_020_ADAPTATION.md
+                                #   PROJECT_GUIDE.md (public condensed edition) / DSH_SETUP.md / DSH_020_ADAPTATION.md
                                 #   SECURITY_BASELINE.md / PRIVACY.md
                                 #   TOKEN_USAGE_CONSOLE.md / CONSOLE-UI-TESTING.md
                                 #   LOCAL_PATCHES.md / SHARED_MEMORY_PATCH.md / SHARED_MEMORY_REPLAY.md

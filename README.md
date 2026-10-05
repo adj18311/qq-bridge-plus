@@ -362,9 +362,9 @@ qq-bridge/
   docs/
     README.md                   # 文档索引（每篇一句话说明 + 是否仍然有效）
     FOLDER_MAP.md               # 目录结构与本仓库的脚本命名约定
-    guides/                     # 面向使用者 / 运维，共 10 份：
+    guides/                     # 面向使用者 / 运维，共 11 份：
                                 #   BUSY_WATCHDOG.md（卡忙自愈看门狗）
-                                #   DSH_SETUP.md / DSH_020_ADAPTATION.md
+                                #   PROJECT_GUIDE.md（公开精简版）/ DSH_SETUP.md / DSH_020_ADAPTATION.md
                                 #   SECURITY_BASELINE.md / PRIVACY.md
                                 #   TOKEN_USAGE_CONSOLE.md / CONSOLE-UI-TESTING.md
                                 #   LOCAL_PATCHES.md / SHARED_MEMORY_PATCH.md / SHARED_MEMORY_REPLAY.md

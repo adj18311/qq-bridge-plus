@@ -83,7 +83,7 @@ docs/
 
 > ⚠️ **哪些文档真的会进公开仓库**：`.gitignore` 第 52–64 行把
 > `docs/audits/`、`docs/design/`、`docs/legacy/`、`docs/research/` 以及
-> `docs/guides/PROJECT_GUIDE.md`、`docs/guides/VOICE.md` **整体排除**了
+> `docs/guides/VOICE.md` **整体排除**了（`docs/guides/PROJECT_GUIDE.md` 原先也在排除之列，2026-10-05 已恢复一份**脱敏的公开精简版**并随发布提供）
 > （原因写在那里：这批文档里扫出过多份含本机真实路径的内容）。
 > 也就是说：**只有 `docs/README.md`、`docs/FOLDER_MAP.md` 与 `docs/guides/` 下的其余几篇会出现在 GitHub 上**，
 > 上面那份索引里指向 `audits/` `design/` `legacy/` `research/` 的链接**对公开读者是死链**，只在本机有效。
