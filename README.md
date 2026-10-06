@@ -4,7 +4,7 @@
 > 架构、协议适配和绝大部分代码都来自上游，本仓库只做了增补与修复。**特别鸣谢原作者**；如果你觉得这个项目有用，优先去上游点个 star。
 > 只做交流学习和个人使用；**如需商用请注意：SnowLuma 的 EULA 明确禁止商业使用**（见 [LICENSE](LICENSE) 的「关于 SnowLuma 许可的说明」）。本仓库**代码**沿用上游 MIT 许可。
 > 
->bilibili视频教程（来源于上游仓库）https://www.bilibili.com/video/BV1ss8R6zERG/?share_source=copy_web&vd_source=4632df5565c0d3c0efd72d975c8fa825
+>bilibili视频教程（来源于上游仓库）https://www.bilibili.com/video/BV1ss8R6zERG/
 > 
 > 上游用 MIT 许可，本仓库沿用同一许可并保留原版权声明（见 [LICENSE](LICENSE)）。
 >
