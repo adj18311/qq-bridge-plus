@@ -3,7 +3,7 @@
 > **本项目不是原创**，是基于 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的**二次创作**（改进版）。原作者 Derpyu520，上游仓库 <https://github.com/Derpyu520/qq-bridge>。
 > 架构、协议适配和绝大部分代码都来自上游，本仓库只做了增补与修复。**特别鸣谢原作者**；如果你觉得这个项目有用，优先去上游点个 star。
 > 只做交流学习和个人使用；**如需商用请注意：SnowLuma 的 EULA 明确禁止商业使用**（见 [LICENSE](LICENSE) 的「关于 SnowLuma 许可的说明」）。本仓库**代码**沿用上游 MIT 许可。
->
+>bilibili视频教程（来源于上游仓库）https://www.bilibili.com/video/BV1ss8R6zERG/?share_source=copy_web&vd_source=4632df5565c0d3c0efd72d975c8fa825
 > 上游用 MIT 许可，本仓库沿用同一许可并保留原版权声明（见 [LICENSE](LICENSE)）。
 >
 > 本项目使用 [SnowLuma](https://github.com/SnowLuma/SnowLuma)（作者 SnowLumaDevs）作为 QQ 接入网关，只通过它的 OneBot v11 接口互通，**不修改、不打包、不再分发 SnowLuma 本体**；SnowLuma 的版权与许可归 SnowLumaDevs 所有。2026-10-05 已就此询问 SnowLumaDevs，回复为：这类不改动本体的互操作工具无需额外书面授权，注明使用 SnowLuma 即可（记录见 [LICENSE](LICENSE) 的「关于 SnowLuma 许可的说明」）。
