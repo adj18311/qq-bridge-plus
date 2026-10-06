@@ -4,6 +4,8 @@
 > The architecture, the protocol adaptation and the vast majority of the code come from upstream; this repository only adds a few features and fixes. **Special thanks to the original author** — if you find this useful, please star the upstream project first.
 > Intended for learning, exchange and personal use. **For commercial use, note that SnowLuma's EULA prohibits commercial use of SnowLuma in any form** (see the SnowLuma section in [LICENSE](LICENSE)); this repository's own code stays under the upstream MIT licence.
 >
+> bilibili video tutorial (from the upstream repository) https://www.bilibili.com/video/BV1ss8R6zERG/?share_source=copy_web&vd_source=4632df5565c0d3c0efd72d975c8fa825
+>
 > Upstream is MIT-licensed; this repository keeps the same licence and the original copyright notice (see [LICENSE](LICENSE)).
 >
 > This project uses [SnowLuma](https://github.com/SnowLuma/SnowLuma) (by SnowLumaDevs) as its QQ gateway and interoperates only through its OneBot v11 interface. It **does not modify, bundle or redistribute** SnowLuma itself; SnowLuma's copyright and licence belong to SnowLumaDevs. On 2026-10-05 SnowLumaDevs confirmed that an interoperability tool like this one needs no further written authorization — only an attribution to SnowLuma (recorded in the SnowLuma section of [LICENSE](LICENSE)).
