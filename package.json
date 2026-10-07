@@ -1,6 +1,6 @@
 {
   "name": "qq-bridge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "license": "MIT",
   "description": "Derivative work (not original) based on Derpyu520/qq-bridge (MIT): bridge between SnowLuma (OneBot v11 / QQ) and DeepSeek Harness Web API: QQ messages become DSH agent prompts, agent replies go back to QQ. Targets the DSH Cookie-auth / slash-RPC / remote.mux protocol generation, so it deliberately names no DSH version here.",
@@ -64,5 +64,19 @@
     "@snowluma/sdk": "^1.14.20",
     "js-yaml": "^4.3.2",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cosmokit": "1.8.5",
+    "@deepseek-ai/dsh-brand": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-persona": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-timeout": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-crypto": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.2.0-rc.2"
   }
 }

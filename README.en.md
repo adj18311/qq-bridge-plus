@@ -9,11 +9,12 @@
 > Upstream is MIT-licensed; this repository keeps the same licence and the original copyright notice (see [LICENSE](LICENSE)).
 >
 > This project uses [SnowLuma](https://github.com/SnowLuma/SnowLuma) (by SnowLumaDevs) as its QQ gateway and interoperates only through its OneBot v11 interface. It **does not modify, bundle or redistribute** SnowLuma itself; SnowLuma's copyright and licence belong to SnowLumaDevs. On 2026-10-05 SnowLumaDevs confirmed that an interoperability tool like this one needs no further written authorization — only an attribution to SnowLuma (recorded in the SnowLuma section of [LICENSE](LICENSE)).
-> This repository is version `0.3.0`, based on upstream `v0.2.0-r3`.
+> This repository is version `0.3.1`, based on upstream `v0.2.0-r3`.
 
 > Connect QQ messages to DeepSeek Harness (DSH) agents: QQ friends/groups become DSH conversations, and agent replies (including questions and tool approvals) are sent back to QQ.
 
-> **This repository is version `0.3.0`, targeting DSH `0.2.0-rc.2`** (verified item by item on that version: `npm run verify:adaptation`). What differs from upstream `v0.2.0-r3` is in the next section and in [CHANGELOG.md](CHANGELOG.md).
+> **This repository is version `0.3.1`, targeting DSH `0.2.0-rc.2`** (verified item by item on that version: `npm run verify:adaptation`). What differs from upstream `v0.2.0-r3` is in the next section and in [CHANGELOG.md](CHANGELOG.md).
+> What each release changed and fixed, and whether you need to do anything, is in [UPDATE_LOG.md](UPDATE_LOG.md) (written in Chinese; the itemised technical record is in [CHANGELOG.md](CHANGELOG.md)).
 >
 > Three mechanisms tied to the DSH version that still hold:
 >
@@ -259,6 +260,8 @@ The standalone **voice sender tool** is no longer part of this repository (it us
 ## Testing
 
 `npm run test:audit` runs isolated regression tests without production credentials, DSH, or QQ messages. The repository's own audit reports and investigation notes are local-only documents (the documentation index marks them), so they are not shipped here.
+
+> `npm run verify:adaptation` (the full DSH adaptation check) needs a running DSH, defaults to `http://127.0.0.1:3080`, and takes `DSH_BASE_URL` to point at another address. Validating the presets' persona config needs the `@deepseek-ai/dsh-persona` schema: it prefers the copy inside your DSH install and falls back to the version pinned in this repository's devDependencies, so use `npm ci` rather than `--omit=dev`. If your DSH bundles its packages inside `app.asar` (common in newer builds), the "guard list vs DSH tool names" reconciliation is reported as skipped; that is expected, not a failure.
 
 After upgrading, legacy QQ session mappings without permission metadata are recreated once. Mode or preset changes also retire the old mapping and recreate the session on the next message; DSH history is retained.
 

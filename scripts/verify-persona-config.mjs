@@ -1,14 +1,39 @@
-// 用 DSH 自身的 dsh-persona 配置 schema 校验修复后的 preset persona 配置。
-// 说明：直接加载 DSH 安装目录里的模块做 schema 校验，不依赖 YAML 解析器版本，
-// 也不需要 DSH 进程在跑。DSH 安装位置可用 DSH_INSTALL_MODULES 覆盖，未设置时自动探测。
+// 用 dsh-persona 自己的配置 schema 校验修复后的 preset persona 配置。
+// 说明：schema 优先取自 DSH 安装目录里那份（真正会加载我们 preset 的就是它），解析不到时
+// 退回仓库自带的 devDependency —— 新版 DSH 把这类内部包收进了 app.asar，磁盘上没有可
+// import 的路径（详见 CHANGELOG 与 README 的自测一节）。不依赖 YAML 解析器版本，
+// 也不需要 DSH 进程在跑。
 import path from 'node:path';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { dshModulesDir } from './dsh-modules.mjs';
 
-const DSH_MODULES = dshModulesDir();
+const require_ = createRequire(import.meta.url);
 
-const persona = await import(pathToFileURL(path.join(DSH_MODULES, '@deepseek-ai/dsh-persona/lib/index.js')).href);
+async function loadPersona() {
+  try {
+    const dshModules = dshModulesDir();
+    const mod = await import(pathToFileURL(path.join(dshModules, '@deepseek-ai/dsh-persona/lib/index.js')).href);
+    return { mod, from: `DSH 安装处（${dshModules}）` };
+  } catch (dshError) {
+    try {
+      const mod = await import(pathToFileURL(require_.resolve('@deepseek-ai/dsh-persona')).href);
+      return { mod, from: '仓库依赖 @deepseek-ai/dsh-persona（devDependency，与目标 DSH 版本对齐）' };
+    } catch (repoError) {
+      return { mod: null, why: `DSH 安装处：${dshError?.message ?? dshError}；仓库依赖：${repoError?.message ?? repoError}` };
+    }
+  }
+}
+
+const { mod: persona, from, why } = await loadPersona();
+if (!persona) {
+  console.error('❌ 加载不到 @deepseek-ai/dsh-persona，没法校验 persona schema。');
+  console.error(`   原因：${why}`);
+  console.error('   它现在是本仓库的 devDependency：先跑 `npm ci`（不要加 --omit=dev）再试。');
+  process.exit(2);
+}
+console.log(`persona Config schema 校验（schema 来源：${from}）：\n`);
 
 let failed = 0;
 function check(label, fn) {
@@ -16,7 +41,7 @@ function check(label, fn) {
   catch (e) { console.log(`  ❌ ${label}: ${e?.message ?? e}`); failed += 1; }
 }
 
-console.log('persona Config schema 校验：\n');
+// （schema 来源已在上面打印）
 
 // 旧写法（DSH 0.1.2 时代的 text 字段）—— 期望被拒绝
 check('旧配置 {text} 被拒绝（复现原故障）', () => {
@@ -42,7 +67,7 @@ check('新配置 {prefix, suffix} 通过（含 {{cwd}} 模板）', () => {
 });
 
 // 校验仓库里两个 preset 的 persona 配置块
-const YAML = await import(pathToFileURL(path.join(DSH_MODULES, 'js-yaml/index.js')).href);
+const YAML = await import(pathToFileURL(require_.resolve('js-yaml')).href);
 const yaml = YAML.default ?? YAML;
 
 for (const preset of ['qq-chat', 'qq-chat-v2']) {

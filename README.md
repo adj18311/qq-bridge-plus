@@ -20,8 +20,9 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
-> **本仓库版本 `0.3.0`**，基线是上游 `v0.2.0-r3`，适配 DSH `0.2.0-rc.2`（`npm run verify:adaptation`）。
+> **本仓库版本 `0.3.1`**，基线是上游 `v0.2.0-r3`，适配 DSH `0.2.0-rc.2`（`npm run verify:adaptation`）。
 > 首次使用看下面两节：[安装与配置](#安装与配置)、[完整启动流程](#完整启动流程从零开始)。
+> 每次更新改了什么、修了什么、要不要你动手，见 [UPDATE_LOG.md](UPDATE_LOG.md)；逐条的技术记录在 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 相对上游改了什么
 
@@ -115,7 +116,7 @@
 
 相对上游的完整清单在 [CHANGELOG.md](CHANGELOG.md)；"跟着上游升级后怎么把这些补丁重打回去"在 [docs/guides/LOCAL_PATCHES.md](docs/guides/LOCAL_PATCHES.md)。
 
-> **本仓库版本 `0.3.0`，适配 DSH `0.2.0-rc.2`**（在该版本上逐项实测：`npm run verify:adaptation`）。相对上游 `v0.2.0-r3` 的差异见上一节与 [CHANGELOG.md](CHANGELOG.md)。
+> **本仓库版本 `0.3.1`，适配 DSH `0.2.0-rc.2`**（在该版本上逐项实测：`npm run verify:adaptation`）。相对上游 `v0.2.0-r3` 的差异见上一节与 [CHANGELOG.md](CHANGELOG.md)。
 >
 > 和 DSH 版本强相关、现在仍然成立的三件事：
 >
@@ -314,6 +315,8 @@ npm run test:audit
 ```
 
 reserved2 的 token 开销优化、消息水位协议、升级及回退，专项离线回归可运行 `npm run test:token`（已包含在上面的完整回归里）。
+
+> `npm run verify:adaptation`（DSH 适配总验证）需要一个正在运行的 DSH，默认连 `http://127.0.0.1:3080`，可以用环境变量 `DSH_BASE_URL` 指向别的地址。它校验 preset 的 persona 配置时需要 `@deepseek-ai/dsh-persona` 的 schema：优先用 DSH 安装处那份，取不到时用仓库固定版本的 devDependency，所以请跑 `npm ci`（不要加 `--omit=dev`）。如果 DSH 把自己的包装在 `app.asar` 里（新版常见），「守卫名单与 DSH 真实工具名对账」会记为跳过，那是预期行为、不是失败。
 
 控制台「令牌与花费」看板的账本与价目表回归（峰谷分时、幂等折叠、基线合并、压缩与容错）：
 

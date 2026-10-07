@@ -28,13 +28,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { dshModulesDir } from './dsh-modules.mjs';
 import { discoverDshSessionCookie, NodeApiClient, unwrap } from '../src/dsh-client.js';
 
 const ROOT = process.cwd();
-const DSH_MODULES = dshModulesDir();
+const require_ = createRequire(import.meta.url);
 const DSH_HOME = path.join(os.homedir(), '.dsh');
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
 
@@ -52,20 +53,41 @@ function skip(label, why) {
 }
 
 // ── 1. 仓库侧：preset persona schema ────────────────────────────────────────
-const persona = await import(pathToFileURL(path.join(DSH_MODULES, '@deepseek-ai/dsh-persona/lib/index.js')).href);
-const YAML = await import(pathToFileURL(path.join(DSH_MODULES, 'js-yaml/index.js')).href);
+// schema 优先取 DSH 安装处那份（真正会加载我们 preset 的就是它），解析不到时退回仓库自带的
+// devDependency —— 新版 DSH 把这类内部包收进了 app.asar，磁盘上给不出可 import 的路径。
+let persona = null;
+let personaFrom = '';
+try {
+  const dshModules = dshModulesDir();
+  persona = await import(pathToFileURL(path.join(dshModules, '@deepseek-ai/dsh-persona/lib/index.js')).href);
+  personaFrom = `DSH 安装处（${dshModules}）`;
+} catch (dshError) {
+  try {
+    persona = await import(pathToFileURL(require_.resolve('@deepseek-ai/dsh-persona')).href);
+    personaFrom = '仓库依赖 @deepseek-ai/dsh-persona（devDependency，与目标 DSH 版本对齐）';
+  } catch (repoError) {
+    skip('preset persona schema 校验（旧字段被拒 + 两个 preset 过 schema）',
+      `加载不到 @deepseek-ai/dsh-persona — DSH 安装处：${dshError?.message ?? dshError}；仓库依赖：${repoError?.message ?? repoError}（请 npm ci，别加 --omit=dev）`);
+  }
+}
+const YAML = await import(pathToFileURL(require_.resolve('js-yaml')).href);
 const yaml = YAML.default ?? YAML;
+if (persona) console.log(`  （persona schema 来源：${personaFrom}）`);
 
-let oldRejected = false;
-try { persona.Config({ text: 'x' }); } catch { oldRejected = true; }
-check('dsh-persona 仍拒绝旧字段 text（故障前提成立）', oldRejected);
+if (persona) {
+  let oldRejected = false;
+  try { persona.Config({ text: 'x' }); } catch { oldRejected = true; }
+  check('dsh-persona 仍拒绝旧字段 text（故障前提成立）', oldRejected);
+}
 
 for (const p of ['qq-chat', 'qq-chat-v2']) {
   const f = path.join(ROOT, 'dsh/agent-presets', p, 'agent.cordis.yml');
   const row = yaml.load(fs.readFileSync(f, 'utf8')).find((r) => r.id === 'persona');
-  let schemaOk = false;
-  try { persona.Config(row.config); schemaOk = true; } catch {}
-  check(`preset ${p}: persona.config 通过 DSH schema`, schemaOk);
+  if (persona) {
+    let schemaOk = false;
+    try { persona.Config(row.config); schemaOk = true; } catch {}
+    check(`preset ${p}: persona.config 通过 DSH schema`, schemaOk);
+  }
   check(`preset ${p}: 保留 {{model}} / {{cwd}} 变量`, /\{\{model\}\}/.test(row.config.prefix) && /\{\{cwd\}\}/.test(row.config.suffix ?? ''));
 }
 
@@ -146,10 +168,14 @@ const mcpIds = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert.map((x)
 check('profile patch 含 3 个 MCP 且无重复', mcpIds.length === 3 && new Set(mcpIds).size === 3, mcpIds.join(', '));
 const snowlumaEntry = patchDoc.filter((e) => e?.insert).flatMap((e) => e.insert).find((x) => x.id === 'mcp-snowluma');
 check('mcp-snowluma 带 toolCallTimeoutMs=725000', snowlumaEntry?.config?.toolCallTimeoutMs === 725000);
+// 断言「MCP 的脚本路径指向本仓库」。不能只认 `qq-bridge` 这个目录名（那是上游的名字），
+// 否则仓库目录名不是 `qq-bridge` 时就会假红 —— 改成与当前仓库根比较。
 check('mcp 路径指向本仓库', mcpIds.every((id) => {
   const e = patchDoc.filter((x) => x?.insert).flatMap((x) => x.insert).find((y) => y.id === id);
-  return String(e.config.args[0]).includes('qq-bridge');
-}));
+  const target = path.resolve(String(e.config.args[0])).toLowerCase();
+  const root = path.resolve(ROOT).toLowerCase();
+  return target === root || target.startsWith(root + path.sep);
+}), mcpIds.map((id) => String(patchDoc.filter((x) => x?.insert).flatMap((x) => x.insert).find((y) => y.id === id)?.config?.args?.[0] ?? '')).join(' | '));
 
 const pkg = JSON.parse(fs.readFileSync(path.join(DSH_HOME, 'profiles/web/package.json'), 'utf8'));
 check('profile bundles 含 qq-mode-console', pkg.dsh.profile.bundles.includes('qq-mode-console'));
@@ -157,8 +183,15 @@ check('qq-mode-console link 依赖已注册', String(pkg.dependencies['qq-mode-c
 check('qq-mode-console 已 link 进 node_modules', fs.existsSync(path.join(DSH_HOME, 'profiles/web/node_modules/qq-mode-console')));
 
 // ── 3. 仓库配置：模型 ───────────────────────────────────────────────────────
-const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
-check('config.json dsh.model = deepseek-flash', cfg.dsh?.model === 'deepseek-flash', `当前 ${cfg.dsh?.model}`);
+// config.json 是用户本地文件（仓库只带 config.example.json）：干净克隆里没有它，
+// 这时把这条模型检查记为跳过，而不是让整个验证崩掉。
+let cfg = null;
+try {
+  cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+} catch {
+  skip('config.json dsh.model = deepseek-flash', '仓库里没有 config.json（只带 config.example.json），这是用户本地文件；缺它不影响其它检查');
+}
+if (cfg) check('config.json dsh.model = deepseek-flash', cfg.dsh?.model === 'deepseek-flash', `当前 ${cfg.dsh?.model}`);
 const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src/bridge.js'), 'utf8');
 // 只看可执行代码，忽略注释（注释里会提到旧名做历史说明）。
 // 注意必须按 /\r?\n/ 切行：JS 的 `.` 不匹配 \r，CRLF 文件直接 split('\n') 会让行尾留 \r，

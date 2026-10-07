@@ -2,6 +2,18 @@
 
 **本项目不是原创**：它是 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 的二次创作（改进版），**特别鸣谢原作者**。上游基线 `v0.2.0-r3`；上游自己的版本历史看上游仓库的 Releases。
 
+## 0.3.1 — 2026-10-07
+
+### 修复
+
+- **`npm run verify:adaptation` / `npm run verify:persona` 不再要求 DSH 安装目录里能解析到 `@deepseek-ai/dsh-persona`**。新版 DSH 把这几个内部包收进了 `app.asar`，磁盘上给不出可 import 的路径，这两个脚本以前会直接以 module-not-found 崩掉。现在 schema 优先取 DSH 安装处那份（真正会加载我们 preset 的就是它），取不到就退回仓库固定版本的 devDependency（`@deepseek-ai/dsh-persona@0.2.0-rc.2` 及其 peer 依赖）；两边都取不到时，`verify:adaptation` 把这几项记为跳过，而不是崩掉。
+- **`mcp 路径指向本仓库` 这条断言不再写死目录名**。它原本硬编码检查路径里是否含 `qq-bridge`（上游的名字），仓库放在别的目录（例如目录名不是 `qq-bridge`）就会假红；现在与当前仓库根比较。
+- **`verify:adaptation` 缺 `config.json` 时不再崩溃**。`config.json` 是用户本地文件（仓库只带 `config.example.json`），干净克隆里没有它；现在跳过那条模型检查并写明原因。
+
+### 测试
+
+- 新增 12 个 devDependency：`@deepseek-ai/dsh-persona` 与它的 peer / 运行闭包，版本固定为 `0.2.0-rc.2`（本仓库适配的那版 DSH）。这样上面两项校验在任何克隆里都能复现，而它们是开发期才装的（`npm ci --omit=dev` 不会装，那种情况下脚本会明确跳过并提示）。运行时依赖不受影响：顶层 `@deepseek-ai/schemastery` 仍是 3.18.1，persona 用嵌套的 3.18.4。
+
 ## 0.3.0 — 2026-10-05
 
 ### 新增
