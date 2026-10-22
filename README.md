@@ -141,7 +141,7 @@ QQ Bridge Plus 把一台真实登录的 QQ 账号接到 DeepSeek Harness（下�
     npm run test:quick
     ```
 
-    这只是离线回归，代替不了真实收发。正式发布前跑的是 `npm run test:audit`（78 项）和 `npm run test:quick`（35 项），都在实机上过过。
+    这只是离线回归，代替不了真实收发。正式发布前跑的是 `npm run test:audit`（90 项）和 `npm run test:quick`（47 项），都在实机上过过。
 
 ## 视频教程
 
