@@ -76,6 +76,10 @@ export function normalizeSlangEntry(raw) {
     lastInferenceCount: Math.max(0, Number(entry.lastInferenceCount) || 0),
     createdAt: String(entry.createdAt || nowIso()),
     updatedAt: String(entry.updatedAt || nowIso()),
+    // t40/F1：「人工确认/编辑」的时刻（保底名额的排序键）。**只在人工动作里写**（控制台新建/确认/
+    // 编辑/批量确认/批量拒绝），自动抽取/再见到一次不会碰它。老条目没有这个字段 ⇒ 空串 ⇒
+    // 排序时回退 updatedAt（保持 t35/t36 的既有语义与既有验证脚本兼容）。
+    lastReviewedAt: String(entry.lastReviewedAt || ''),
   };
 }
 
@@ -133,7 +137,16 @@ export function loadSlang(file, { onCorrupt } = {}) {
     onCorrupt?.(message);
     throw new Error(message);
   }
-  return parsed.map(normalizeSlangEntry).filter((e) => e.content);
+  return parsed.map((raw) => {
+    const entry = normalizeSlangEntry(raw);
+    // t40/F1 一次性迁移：老库没有 `lastReviewedAt` ⇒ 用**加载这一刻**的 updatedAt 兜一次。
+    // 为什么必须在加载期做、而不是在选择器里「永远回退 updatedAt」：回退会让自动抽取（count+1 顺带
+    // 刷新 updatedAt）继续影响保底排序 —— 群聊里有人再说一次老词就能把它顶进保底区，把管理员刚确认的
+    // 新词（count=0）挤出去（t37 实测 F1）。迁移后该字段就与自动抽取解耦了；迁移本身是**保序**的
+    // （迁移瞬间的顺序与迁移前完全一致），所以既有库/既有验证脚本的行为不变。
+    if (entry.status === SLANG_STATUS.CONFIRMED && !entry.lastReviewedAt) entry.lastReviewedAt = entry.updatedAt;
+    return entry;
+  }).filter((e) => e.content);
 }
 
 export function saveSlang(file, entries, { max = SLANG_MAX_ENTRIES } = {}) {
@@ -209,11 +222,111 @@ export function mergeEvidence(current, incoming) {
   return merged.slice(-20);
 }
 
-export function buildSlangContext(entries, max = 8) {
-  const confirmed = (entries || [])
-    .filter((e) => e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning)
-    .sort((a, b) => (b.count || 0) - (a.count || 0))
-    .slice(0, Math.max(1, Math.min(30, Number(max) || 8)));
+/** 模型可见黑话清单的硬上限（t35：注入条数不得超过它，配置写再大也只 clamp 到这里）。 */
+export const SLANG_INJECT_MAX = 30;
+/** 「最近确认/编辑」保底名额的默认值（配置键 `slang.recentReserve`）。 */
+export const SLANG_RECENT_RESERVE_DEFAULT = 5;
+
+/**
+ * 「人工确认/编辑」时刻（毫秒）—— **保底名额的排序键**（t40/F1）：
+ *   ① 优先 `lastReviewedAt`：只在人工动作里写入（控制台新建 / 确认 / 编辑 / 批量确认 / 批量拒绝）；
+ *   ② 老条目没有它 ⇒ 回退 `updatedAt`（保持既有语义、既有验证脚本与旧库的可复现性）；
+ *   ③ 两者都缺失/非法 ⇒ 负无穷（＝最旧，永远抢不到保底名额）。
+ *
+ * 为什么不能直接用 `updatedAt`：自动抽取/「再见到一次」也会刷新它（`upsertSlangEntry` 里 count+1
+ * 顺带 `updatedAt=now`）。那样普通群聊流量就会把 reserve 个保底名额占满，用户刚确认的新词（count=0）
+ * 又被挤出去 —— 这正是 t37 评审实测复现的 F1。
+ */
+function slangReviewedAtMs(entry) {
+  const reviewed = Date.parse(String(entry?.lastReviewedAt ?? ''));
+  if (Number.isFinite(reviewed)) return reviewed;
+  const updated = Date.parse(String(entry?.updatedAt ?? ''));
+  return Number.isFinite(updated) ? updated : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * 确定性二级键（t40/F4）：`content` 码元字典序 → `id` 码元字典序。
+ * 用码元比较（`<`）而不是 `localeCompare`：后者依赖 locale/ICU 版本，跨机器可能给出不同顺序。
+ * 有了它，`reserve>0` 档的选择结果不依赖库内数组顺序（同一毫秒并列时也确定）。
+ */
+function slangTieBreak(a, b) {
+  const ac = String(a?.content ?? '');
+  const bc = String(b?.content ?? '');
+  if (ac !== bc) return ac < bc ? -1 : 1;
+  const ai = String(a?.id ?? '');
+  const bi = String(b?.id ?? '');
+  if (ai !== bi) return ai < bi ? -1 : 1;
+  return 0;
+}
+
+/**
+ * 选出要注入模型的 confirmed 词条 —— **唯一**选择器。
+ *
+ * 为什么必须有保底名额（t35，用户实测 2026-10-06）：旧规则是「confirmed → 按 count 降序 → 取前
+ * injectMax 条」，而 count 只是「这个词在群里被见到过几次」。管理员刚在控制台**确认**的新词 count=0，
+ * 库里 40 条老词 count 全 ≥1 ⇒ 新词固定排在第 41 位 ⇒ **永远进不了那 30 条**（用户实测「还是那八个」）。
+ * 于是给「最近确认/编辑」的条目留 reserve 个保底名额：新词必进清单。
+ *
+ * 规则（全部可复现、无随机）：
+ *   ① `max` clamp 到 1..`SLANG_INJECT_MAX`(30)——上限不变；
+ *   ② `reserve` clamp 到 0..`max`；**`reserve=0` 完全等价于旧行为**（只按 count 降序取前 max 条，
+ *      并列保持输入顺序），所以这个开关可以随时关掉做回归（兼容档，独立验证脚本按 git HEAD 的
+ *      oracle 逐条比对这个档位）；
+ *   ③ 保底 = confirmed 里**「人工确认/编辑」时刻**（`lastReviewedAt`，老条目回退 `updatedAt`）
+ *      最新的 `reserve` 条 —— 「新确认」与「刚编辑」都靠它，**自动抽取/再见到一次不算**（t40/F1）；
+ *      缺/非法时间戳视为最旧；
+ *   ④ 其余名额按 `count` 降序补齐；
+ *   ⑤ confirmed 总数 ≤ `max` 时**全给**（不截断），顺序仍按 ③④；
+ *   ⑥ 输出顺序 = 保底在前（人工时刻降序）→ 补齐在后（count 降序）；按 id/对象引用去重，总数 ≤ max。
+ *   `reserve>0` 档里两个排序都带确定性二级键（`content` → `id` 码元字典序，见 `slangTieBreak`），
+ *   所以结果不依赖库内数组顺序、同一毫秒并列也确定（t40/F4）。
+ *
+ * 调用方：`buildSlangContext()`（文本块）、桥接的 `confirmedSlangListV2()`（对象列表，qq_get_prompt /
+ * qq_slang_query 共用）——**两条路径必须走同一个选择器**，否则会出现「块里有、query 里没有」。
+ *
+ * @param {object[]} entries 黑话库全量条目
+ * @param {{max?:number, reserve?:number}} [options]
+ * @returns {object[]} 选中的条目（原对象引用，不改写）
+ */
+export function selectSlangForPrompt(entries, { max = 8, reserve = 0 } = {}) {
+  const limit = Math.max(1, Math.min(SLANG_INJECT_MAX, Math.round(Number(max) || 8)));
+  const reserveN = Math.max(0, Math.min(limit, Math.round(Number(reserve) || 0)));
+  const confirmed = (Array.isArray(entries) ? entries : [])
+    .filter((e) => e && e.status === SLANG_STATUS.CONFIRMED && e.content && e.meaning);
+  if (!confirmed.length) return [];
+  if (reserveN === 0) {
+    // 兼容档（reserve=0）：与 pre-t35 的旧实现**逐条等价** —— 同一个比较器（count 降序；并列靠
+    // Array#sort 的稳定性保持输入顺序）+ 同一个 slice。独立验证脚本用 git HEAD 的 oracle 逐条比对
+    // 这个档位，这里不许动。
+    return confirmed.sort((a, b) => (Number(b?.count) || 0) - (Number(a?.count) || 0)).slice(0, limit);
+  }
+  // 新档（reserve>0）：两个排序都带确定性二级键 ⇒ 同一份库不依赖数组顺序（t40/F4）。
+  const byCount = [...confirmed].sort((a, b) => (Number(b?.count) || 0) - (Number(a?.count) || 0) || slangTieBreak(a, b));
+  const byRecent = [...confirmed].sort((a, b) => (slangReviewedAtMs(b) - slangReviewedAtMs(a)) || slangTieBreak(a, b));
+  const picked = [];
+  const seenIds = new Set();
+  const seenRefs = new Set();
+  const take = (entry) => {
+    const id = String(entry?.id ?? '');
+    if (id && seenIds.has(id)) return;
+    if (seenRefs.has(entry)) return;
+    if (id) seenIds.add(id);
+    seenRefs.add(entry);
+    picked.push(entry);
+  };
+  for (const entry of byRecent) {
+    if (picked.length >= reserveN) break;
+    take(entry);
+  }
+  for (const entry of byCount) {
+    if (picked.length >= limit) break;
+    take(entry);
+  }
+  return picked.slice(0, limit);
+}
+
+export function buildSlangContext(entries, max = 8, { reserve = 0 } = {}) {
+  const confirmed = selectSlangForPrompt(entries, { max, reserve });
   if (!confirmed.length) return '';
   const lines = confirmed.map((e) => {
     const clean = (s) => escapeLearnerText(String(s ?? '').replace(/\[CQ:/gi, '[CQ：'));
@@ -222,7 +335,7 @@ export function buildSlangContext(entries, max = 8) {
     if (e.example) line += `（例：${clean(e.example)}）`;
     return line;
   });
-  return `【群聊黑话表】群里已确认/常用的网络用语和梗（按出现次数排序，知道即可，不要刻意堆砌）：\n${lines.join('\n')}`;
+  return `【群聊黑话表】群里已确认/常用的网络用语和梗（最近确认的排在前，其余按出现次数；知道即可，不要刻意堆砌）：\n${lines.join('\n')}`;
 }
 
 export function buildExtractionPrompt(messages) {

@@ -8,18 +8,24 @@
 //   2. 在 DSH profile 的 cordis.patch.yml 中挂载三个 MCP server：
 //      mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe
 //   3. 在 profile package.json 中注册两个 bundle：qq-mode-console、qq-agent-presets
+//   4. DSH 0.2.1+：按 ASAR 读到的版本部署 Team 适配片段（幂等、带时间戳备份；
+//      老版本或读不到版本时跳过，绝不猜）
 //
 // 用法：
 //   node scripts/setup-dsh.mjs [profile]
 //
 // 默认 profile 为 web；可用环境变量 DSH_HOME 指定 DSH 根目录。
+// QQ_SKIP_021_TEAM_PATCH=1 可显式跳过 Team 片段；QQ_FORCE_021_TEAM_PATCH=1 可
+// 跳过版本门控强制部署（仅用于明确知道目标版本的场景）。
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { BUNDLE_DIR, PRESETS, buildPatches, patchFileFor } from './build-agent-preset-patches.mjs';
+import { TEAM_FRAGMENT_PATH, prepareTeamPatchDeployment, repairBareRootArray } from './dsh-021-team-patch.mjs';
+import { backupBeforeOverwrite, writeFileAtomic } from './file-io.mjs';
+import { defaultDshCliDeps, formatDshPluginInstallReport, resolveDshCli, runDshPluginInstall } from './dsh-cli.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -43,35 +49,6 @@ function fatal(msg) {
 
 function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
-}
-
-/**
- * 备份一个即将被覆盖的文件。
- *
- * 为什么不用 `flag: 'wx'`（写一次就永不更新）：那样第一次安装会留下一个备份，
- * 之后每次 setup 都静默跳过 —— 用户后来手工改过的内容再被覆盖时，桌上那份备份
- * 早已过期，等于「有备份但救不回来」。改为每次覆盖前打时间戳快照，只保留最近 N 份。
- */
-function backupBeforeOverwrite(file, keep = 5) {
-  if (!fs.existsSync(file)) return null;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const dest = `${file}.bak-${stamp}`;
-  try {
-    fs.copyFileSync(file, dest);
-  } catch (error) {
-    log(`⚠️ 备份失败（${file}）：${error?.message ?? error}；继续但请自行确认原内容`);
-    return null;
-  }
-  try {
-    const dir = path.dirname(file);
-    const prefix = `${path.basename(file)}.bak-`;
-    const snaps = fs.readdirSync(dir).filter((f) => f.startsWith(prefix)).sort();
-    // 时间戳升序 ⇒ 前面的是最旧的，只保留最后 keep 份
-    for (const f of snaps.slice(0, Math.max(0, snaps.length - keep))) {
-      fs.rmSync(path.join(dir, f), { force: true });
-    }
-  } catch {}
-  return dest;
 }
 
 // ── agent preset：DSH 0.1.7 机制 ─────────────────────────────────────────────
@@ -151,20 +128,24 @@ function mcpEntries() {
   return out;
 }
 
-function prepareCordisPatch() {
+/**
+ * Build the final profile patch text.
+ *
+ * `sourceText` is what gets parsed (possibly already containing the merged 0.2.1
+ * Team fragment); `originalText` is the exact file content used for the
+ * unchanged-check and for the backup. Splitting them lets setup combine the Team
+ * merge and the MCP sync into a single atomic write.
+ */
+function prepareCordisPatch(sourceText, originalText) {
   const profileDir = path.join(DSH_HOME, 'profiles', PROFILE);
   const patchFile = path.join(profileDir, 'cordis.patch.yml');
-  const original = fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8') : '';
-  const lines = original.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const original = originalText ?? (fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8') : '');
+  const source = sourceText ?? original;
   // Repair only the historical invalid *root* [] followed by block operations.
   // A nested [] or a line inside a literal scalar is user data and must survive.
-  const first = lines.findIndex((line) => line.trim() && !line.trimStart().startsWith('#'));
-  if (first >= 0 && lines[first].trim() === '[]'
-      && lines.slice(first + 1).some((line) => /^-\s/.test(line))) {
-    lines.splice(first, 1);
-  }
+  const repaired = repairBareRootArray(source);
   let doc;
-  try { doc = yaml.load(lines.join('\n')) ?? []; }
+  try { doc = yaml.load(repaired) ?? []; }
   catch (error) { fatal(`failed to parse ${patchFile}; file unchanged: ${error.message}`); }
   if (!Array.isArray(doc)) fatal(`${patchFile} must contain a YAML array; file unchanged`);
   let removed = 0;
@@ -189,18 +170,17 @@ function prepareCordisPatch() {
 
 function patchCordis({ patchFile, original, text, removed }) {
   ensureDir(path.dirname(patchFile));
-  // Parsing/serialization normalizes formatting; keep the original text (including comments).
-  if (original && original !== text) {
-    backupBeforeOverwrite(patchFile);
+  // Nothing to do when the file already holds the exact target text (second setup run).
+  if (original === text) {
+    log(`cordis.patch.yml: 已是目标内容（清理旧条目 ${removed} 条），未改写`);
+    return { written: false, backupFile: null };
   }
-  const temporary = `${patchFile}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(temporary, text, 'utf8');
-    fs.renameSync(temporary, patchFile);
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
+  const backupFile = backupBeforeOverwrite(patchFile, { log });
+  if (backupFile) log(`备份：${backupFile}`);
+  else log('备份：无（原文件不存在，无需备份）');
+  writeFileAtomic(patchFile, text);
   log(`cordis.patch.yml: MCP 条目已同步（清理旧条目 ${removed} 条，写入 ${MANAGED_MCP_IDS.length} 条）`);
+  return { written: true, backupFile };
 }
 
 /**
@@ -318,43 +298,53 @@ function ensureLocalModeFile() {
 
 // qq-mode-console / qq-agent-presets 以 link: 依赖注册进 profile package.json 后，DSH 首次启动
 // 需要先安装一次才能解析这些 bundle（否则 cold start 报 "cannot resolve profile bundle"）。
-// dsh CLI 可用时自动执行。
+// CLI 按「DSH_CLI → DSH 安装目录 → PATH」定位（见 scripts/dsh-cli.mjs），并用绝对路径执行，
+// 不要求 dsh.cmd 进 PATH。找不到时只打 info 级提示：两级链接兜底始终有效，无需用户操作。
 function autoInstallProfileBundles() {
   if (process.env.QQ_BRIDGE_SKIP_DSH_INSTALL === '1') {
     log('auto-install skipped: QQ_BRIDGE_SKIP_DSH_INSTALL=1');
     return;
   }
-  const windows = process.platform === 'win32';
-  // Node cannot spawn npm's .cmd shim directly. Keep the shell command constant;
-  // the validated (no quotes/control chars) profile travels through one quoted
-  // environment expansion, with delayed expansion disabled to preserve '!'.
-  const cmd = windows ? (process.env.ComSpec || 'cmd.exe') : 'dsh';
-  const args = windows
-    ? ['/d', '/v:off', '/s', '/c', 'dsh.cmd plugin --profile "%QQ_BRIDGE_SETUP_PROFILE%" install']
-    : ['plugin', '--profile', PROFILE, 'install'];
-  const r = spawnSync(cmd, args, {
-    encoding: 'utf8',
-    timeout: 120000,
-    windowsHide: true,
-    windowsVerbatimArguments: windows,
-    ...(windows ? { env: { ...process.env, QQ_BRIDGE_SETUP_PROFILE: PROFILE } } : {}),
-  });
-  if (r.error) {
-    log(`auto-install failed to start/complete（${r.error.code || r.error.message}）。`);
-    log(`若 DSH 启动报“cannot resolve profile bundle”，请手动执行：dsh plugin --profile ${PROFILE} install`);
+  const resolution = resolveDshCli(defaultDshCliDeps());
+  if (resolution.kind === 'none') {
+    log(`未找到 dsh CLI（${resolution.reason}）；已用两级链接兜底（插件目录 + profile node_modules），无需操作。`);
     return;
   }
-  if (r.status === 0) {
-    log(`dsh plugin --profile ${PROFILE} install: OK`);
-  } else {
-    log(`dsh plugin --profile ${PROFILE} install 返回退出码 ${r.status}（若 DSH 启动报 bundle 解析失败，请手动重跑该命令）`);
-  }
+  log(`DSH CLI 来源=${resolution.kind}（${resolution.path}）`);
+  const outcome = runDshPluginInstall({ cliPath: resolution.path, profile: PROFILE });
+  for (const line of formatDshPluginInstallReport(outcome, { kind: resolution.kind, profile: PROFILE })) log(line);
 }
 
 // Validate the existing YAML before changing any presets or configuration.
-const cordisPatch = prepareCordisPatch();
+const profileDir = path.join(DSH_HOME, 'profiles', PROFILE);
+const profilePatchFile = path.join(profileDir, 'cordis.patch.yml');
+const rawProfilePatch = fs.existsSync(profilePatchFile) ? fs.readFileSync(profilePatchFile, 'utf8') : '';
+
+// F.2：0.2.1+ Team 片段。这里只做版本门控和内存合并；写入与 MCP 同步合并成一次
+// 原子替换，避免一次 setup 写两次 profile、产生两份冗余备份。
+let teamPatch;
+try {
+  teamPatch = prepareTeamPatchDeployment({
+    patchFile: profilePatchFile,
+    fragmentFile: path.join(REPO_ROOT, TEAM_FRAGMENT_PATH),
+    text: rawProfilePatch,
+    log,
+  });
+} catch (error) {
+  fatal(`DSH 0.2.1 Team 片段部署失败，profile 未改动：${error.message}`);
+}
+
+const cordisPatch = prepareCordisPatch(teamPatch.text, rawProfilePatch);
 regeneratePresetPatches();
-patchCordis(cordisPatch);
+const cordisWrite = patchCordis(cordisPatch);
+if (teamPatch.deployed) {
+  if (teamPatch.changed) {
+    const backup = cordisWrite.backupFile ? `；备份 ${cordisWrite.backupFile}` : '；原文件不存在，无需备份';
+    log(`DSH 0.2.1 Team 片段：已随本次 profile 写入部署${backup}`);
+  } else {
+    log('DSH 0.2.1 Team 片段：已存在（未改动，未产生备份）');
+  }
+}
 const links = {};
 for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
 patchProfilePackage(links);

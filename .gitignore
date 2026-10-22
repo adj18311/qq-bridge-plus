@@ -19,6 +19,7 @@ config.json
 SnowLuma/
 
 # Local development / planning / research docs (not part of public project)
+/PROJECT_GUIDE.md
 /ARCH_REVIEW.md
 /DSH_QQ_TOOLS_PLAN.md
 /GEN2_SIMULATION_PLAN.md
@@ -68,6 +69,7 @@ docs/legacy/
 docs/research/
 docs/qq-bridge-PUBLISH_PLAN.md
 docs/qq-bridge-SECURITY_AUDIT.md
+docs/guides/PROJECT_GUIDE.md
 docs/guides/VOICE.md
 
 # ── 本轮（2026-10-04 t19）新增的内部过程文档：含本机绝对路径 / 真 QQ 号 / 个人配置 ──
@@ -75,7 +77,7 @@ docs/guides/VOICE.md
 # 「疑似令牌/密钥（高熵串）」（后者其实是备份文件名里的 ISO 时间戳，见 scripts/privacy-rules.json），
 # 或含真白名单 QQ 号。它们是**本机过程记录**（交接提示 / 任务表 / 复盘 / 团队 checklist / 评审记录），
 # 不是承重文档 —— 承重的三份仍入库：LOCAL_PATCHES.md / SHARED_MEMORY_REPLAY.md / SHARED_MEMORY_PATCH.md。
-# 注意：docs/README.md 里对这些条目的登记必须写明「本机文档，未随发布提供」（照 docs/audits/* 的先例），
+# 注意：docs/README.md 里对这些条目的登记必须写明「本文件不在公开仓库里」（照 docs/audits/* 的先例），
 # 否则索引会指向没有被提交的文件。
 docs/guides/HANDOFF_PROMPT.md
 docs/guides/NEXT-TASKS.md
@@ -90,7 +92,7 @@ docs/guides/REVIEW_OUT_OF_TEAM_2026-10-04.md
 audio/
 
 # ── 备份包 / 压缩包不进仓库（2026-10-05 加固）────────────────────────────────
-# 本机全量备份包含 config.json、state/console-token、
+# 本机全量备份包（如 D:\BigFish Clone.zip）含 config.json、state/console-token、
 # state/social-v2.json、SnowLuma 数据等敏感内容，绝不能进仓库、更不能随发布外流。
 # 现状：仓库内没有任何被跟踪的压缩包（git ls-files 实测 0 个），故直接拒绝新增；
 # 将来若确需入库某个压缩包，用 git add -f 显式破例。
@@ -99,3 +101,6 @@ audio/
 *.rar
 *.tar.gz
 *.tgz
+
+# 生成的交付物（由 state/techdoc/build-docx.py 产出，不入版本）
+/QQ bridge.docx

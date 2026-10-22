@@ -125,6 +125,17 @@ const LOCAL_EXECUTION_TOOLS = [
   'plugin_manager',
   //   ④ 无人值守的自我调度
   'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  // DSH 0.2.1: persistent terminals, workspace/worktree access and session history.
+  'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
+  'working_directory', 'create_worktree', 'wait_agent', 'plugin_market',
+  'session_search', 'session_event_search', 'session_trace', 'session_event_trace', 'session_event_read',
+  // Installed Agent Teams plugin registers these globally, outside the QQ preset.
+  'agent_teams_create', 'agent_teams_edit_plan', 'agent_teams_approve',
+  'agent_teams_add_member', 'agent_teams_remove_member', 'agent_teams_resume',
+  'agent_teams_send_message', 'agent_teams_status', 'agent_teams_update_task',
+  'agent_teams_create_task', 'agent_teams_amend_task', 'agent_teams_reassign_task',
+  'agent_teams_claim_task', 'agent_teams_delete',
+  'ssh_exec', 'ssh_download', 'ssh_upload', 'ssh_tunnel', 'ssh_cluster', 'ssh_list',
   // 已装但当前未进 bundles 的插件（一旦加回就是新口子）
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
 ]
@@ -158,6 +169,12 @@ const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
 // 供 test-preset-local-tools.mjs 导入并与 DSH 真实工具名对账，避免两份名单漂移。
 export const RESTRICTED_TOOL_NAMES = Object.freeze([...KNOWN_DANGEROUS_GLOBAL_TOOLS])
 
+// Older/optional bundles are not shipped in every desktop build. Keep their
+// restrictions for existing installs, but don't label absence as a spelling error.
+export const OPTIONAL_RESTRICTED_TOOL_NAMES = Object.freeze([
+  'dsh_snapshot', 'dsh_rollback', 'incident_resolved', 'subagent_codex', 'subagent_claude_code',
+])
+
 // 执行期白名单：不在这些范围内的工具一律拒绝。
 // 前缀覆盖 DSH MCP client 暴露的命名空间工具。
 const SAFE_PREFIXES = [
@@ -168,9 +185,27 @@ const SAFE_PREFIXES = [
 
 // 无害模型侧工具：ask_user_question 用于把问题转给管理员/用户，
 // todo_write 仅维护任务列表。若后续 preset 不再挂载这些工具，保留无害。
+//
+// 2026-10-08 追加贴吧只读工具（桥接侧 /api/socialV2/tieba/bar 与 /api/socialV2/tieba/thread，
+// MCP 注册在 snowluma-safe）：它们在模型 schema 里的实际名字是
+// `mcp__snowluma__qq_tieba_list` / `mcp__snowluma__qq_tieba_read`，
+// **本来就被上面 SAFE_PREFIXES 的 'mcp__snowluma__' 覆盖**；这里再按逻辑名显式列一份，
+// 一是让"放行了哪些 QQ 工具"在守卫里能一眼看全（不必靠前缀反推），
+// 二是万一它们哪天改由 preset 自己注册成 scoped 工具（裸名，如 todo_write），
+// 也不会被这条 fail-closed 白名单误拒。两个名字都是只读查询，无需额外收紧。
+//
+// 2026-10-08 再追加发图片工具 `qq_send_image`（桥接侧 /api/socialV2/send-image，MCP 注册在
+// snowluma-safe，schema 名 `mcp__snowluma__qq_send_image`，同样已被前缀覆盖）。
+// 为什么是**执行期放行名单（SAFE_EXACT）**而不是 restrict/隐藏名单：它是一个正常的 QQ 动作，
+// 仿真会话本来就该能用；真正的边界在另一端——图床白名单（只允许贴吧图床）、单张 ≤4MiB、
+// 目标会话白名单与发送频率上限，全部由桥接在执行时把关。把它加进 restrict 名单会让
+// 「模型会发图」这件事的守卫与实现自相矛盾（同 ask_user_question / todo_write 的口径）。
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
+  'qq_tieba_list',
+  'qq_tieba_read',
+  'qq_send_image',
 ])
 
 export function apply(ctx) {
@@ -184,12 +219,35 @@ export function apply(ctx) {
   // 是**各 preset 行自己注册的 scoped 工具**，在 QQ preset 里根本没挂载，
   // 因此本名单主要防的是"别的 composition 把它们注册进全局层"这种回归，
   // 以及 MCP 之外的宿主工具（plugin-guard / cordis 检查工具等）。
-  for (const name of KNOWN_DANGEROUS_GLOBAL_TOOLS) {
-    try {
-      ctx.tools.restrict({ deny: [name] })
-    } catch (error) {
-      // 名字不存在时跳过；执行期白名单仍然兜底。
-      console.error(`[qq-tool-restrict] skip restrict ${name}: ${error?.message ?? error}`)
+  const allowed = (name) => SAFE_EXACT.has(name) || SAFE_PREFIXES.some((prefix) => name.startsWith(prefix));
+  if (typeof ctx.tools.view === 'function' && typeof ctx.on === 'function') {
+    // 0.2.1 loads some global tools after the shared preset tree starts. A
+    // failed "unknown name" restriction does not cover a later registration.
+    const restricted = new Set();
+    let refreshing = false;
+    let pending = false;
+    const refresh = () => {
+      if (refreshing) { pending = true; return; }
+      do {
+        pending = false;
+        refreshing = true;
+        try {
+          for (const name of ctx.tools.view().restrictableNames) {
+            if (allowed(name) || restricted.has(name)) continue;
+            // restrict() itself emits tools/change; record before calling it.
+            restricted.add(name);
+            ctx.tools.restrict({ deny: [name] });
+          }
+        } finally { refreshing = false; }
+      } while (pending);
+    };
+    ctx.on('tools/change', refresh, { global: true });
+    refresh();
+  } else {
+    // Earlier hosts without the registry view keep the established deny list.
+    for (const name of KNOWN_DANGEROUS_GLOBAL_TOOLS) {
+      try { ctx.tools.restrict({ deny: [name] }) }
+      catch (error) { console.error(`[qq-tool-restrict] skip restrict ${name}: ${error?.message ?? error}`) }
     }
   }
 
@@ -197,8 +255,7 @@ export function apply(ctx) {
   ctx.tools.guard((exec) => {
     const name = exec?.name
     if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
-    if (SAFE_EXACT.has(name)) return
-    if (SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) return
+    if (allowed(name)) return
     return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`
   })
 }

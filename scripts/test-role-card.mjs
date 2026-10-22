@@ -1,7 +1,9 @@
 // 人格卡按仿真模式取用（src/role-card.js）的离线单测。
-// 保证：模式标记能被正确识别与剥离、未标记的老卡片行为不变、真实人格卡可用。
+// 保证：模式标记能被正确识别与剥离、未标记的老卡片行为不变、人格卡 fixture 可用（发布包不复制用户私人卡）。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { parseRoleSections, roleCharStats, roleSectionReport, selectRoleText } from '../src/role-card.js';
 
@@ -92,17 +94,40 @@ test('统计与小节报告可用于控制台预览', () => {
   assert.equal(common.injected, true);
 });
 
-test('真实人格卡可用，且筛选不丢公共内容', () => {
-  const file = new URL('../roles/小鲸鱼.md', import.meta.url);
-  const raw = fs.readFileSync(file, 'utf8');
-  const v2 = selectRoleText(raw, 'v2');
-  const v1 = selectRoleText(raw, 'v1');
-  assert.ok(v2.length > 0 && v1.length > 0);
-  // 人设部分两种模式都必须保留
-  for (const text of [v1, v2]) {
-    assert.match(text, /小鲸鱼/);
-    assert.match(text, /AI 味|去 AI 味/);
+test('人格卡 fixture 可用，且筛选不丢公共内容（发布包不复制用户私人人格卡）', () => {
+  // 发布包只带代码：roles/小鲸鱼.md 属于使用者私人数据，不随包复制。
+  // 本用例在系统临时目录里自己造一张同结构人格卡 fixture，保持原来的实质覆盖：
+  // 人设公共段两种模式都保留、二代注入里不残留一代的分条机制。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'role-card-fixture-'));
+  try {
+    const file = path.join(dir, '小鲸鱼.md');
+    fs.writeFileSync(file, [
+      '# 角色卡：小鲸鱼',
+      '',
+      '## 一、你是谁',
+      '- 你是群里的 DeepSeek 小鲸鱼，说话简短、口语化、去 AI 味。',
+      '',
+      '## 二、分条方式 〔一代〕',
+      '- 想分条就用空格分隔（例如「在 忙 什么」）；想沉默就输出 [SILENT]。',
+      '',
+      '## 三、发言方式 〔二代〕',
+      '- 用 qq_send_message 的数组分条，潜水走 qq_mark_read。',
+      '',
+      '## 四、说话风格',
+      '- 别端着，别复述用户的话。',
+    ].join('\n'), 'utf8');
+    const raw = fs.readFileSync(file, 'utf8');
+    const v2 = selectRoleText(raw, 'v2');
+    const v1 = selectRoleText(raw, 'v1');
+    assert.ok(v2.length > 0 && v1.length > 0);
+    // 人设部分两种模式都必须保留
+    for (const text of [v1, v2]) {
+      assert.match(text, /小鲸鱼/);
+      assert.match(text, /AI 味|去 AI 味/);
+    }
+    // 二代注入的文本里不应再出现一代的分条机制
+    assert.doesNotMatch(v2, /空格分隔（例如|\[SILENT\]/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
-  // 二代注入的文本里不应再出现一代的分条机制
-  assert.doesNotMatch(v2, /空格分隔（例如|\[SILENT\]/);
 });

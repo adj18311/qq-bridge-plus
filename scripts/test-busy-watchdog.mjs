@@ -11,260 +11,19 @@
 //   · 持续有帧的长回合不被误杀（A4/C1）、paused/非 reserved2 完全静默（C2）
 //   · 墓碑 + 迟到的 turn/end 静默排空（A3）、backlog 去重与 re-arm 走正常投递路径（A6/C4）
 //   · 禁用语义（A5）、定时器 unref（A6）、释放路径异常不带走进程（A6）
+//   · C-stall（§20，t44/t51）与根因修复（§21，t56，含载荷性反证）
 // 不读线上 config.json、不写真实 state/、不连 QQ/DSH、不启动第二个守护进程。
+//
+// ⚠️ t59 拆分：**C-reconnect 家族（C-reconnect-1..5）已搬到 `scripts/test-c-reconnect.mjs`**
+//    （实测 19.6s、占本文件 39%；搬完后本文件从 52.0s 降到 ~30s，两个脚本各自远离 60s 上限）。
+//    harness 与全部夹具共用 `scripts/busy-watchdog-harness.mjs`；搬移**只改位置**，
+//    断言语义与文字一条未动，C-reconnect 的原始意图注释随用例一起搬走。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import http from 'node:http';
-import crypto from 'node:crypto';
-import vm from 'node:vm';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import * as markdown from '../src/md-to-plain.js';
-import * as sensitive from '../src/sensitive.js';
-import * as wait from '../src/v2-wait.js';
-import * as safeFetch from '../src/safe-fetch.js';
-import * as forward from '../src/forward.js';
-import * as slang from '../src/slang-learner.js';
-import * as sticker from '../src/sticker-lib.js';
-import * as modelPrices from '../src/model-prices.js';
-import * as tokenLedger from '../src/token-ledger.js';
-import * as voiceLib from '../src/send-voice-lib.js';
-import * as stateAcl from '../src/state-acl.mjs';
-import { unwrap, createTurnCollector } from '../src/dsh-client.js';
-
-const root = fileURLToPath(new URL('..', import.meta.url));
-const CONSOLE_TOKEN = 'fixture-console-token';
-
-/** 在临时目录里跑真实桥接（假 api / 假 bot），并暴露看门狗内部结构供断言。 */
-async function busyHarness({ config = {} } = {}) {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-busy-watchdog-'));
-  fs.mkdirSync(path.join(temp, 'src'));
-  fs.mkdirSync(path.join(temp, 'state'));
-  fs.writeFileSync(path.join(temp, 'config.json'), JSON.stringify({
-    dsh: { authToken: 'fixture-only' }, ownerQQ: 123,
-    allow: { private: ['123'], groups: ['456'] }, consolePort: 0,
-    consoleToken: CONSOLE_TOKEN, slang: { enabled: false }, ...config,
-  }));
-  const calls = { created: [], prompts: [], sent: [], follows: [], http: [] };
-  const success = (value) => ({ result: { ok: true, value } });
-  const api = {
-    events: { follow: (id) => calls.follows.push(id) },
-    workspace: {
-      create: async () => success({ created: false, workspace: { workspaceId: 'fixture-workspace' } }),
-      archiveSession: async () => success({}),
-    },
-    sessions: {
-      create: async (params) => { calls.created.push(params); return success({ sessionId: `fixture-${calls.created.length}` }); },
-      selectModel: async () => success({ selected: { provider: 'fixture', model: 'fixture' } }),
-      prompt: async (params) => { calls.prompts.push(params); return success({}); },
-    },
-    respond: async () => success({}),
-    stopSessionWork: async () => ({ removed: 0 }),
-    callUnary: async () => success({ accepted: true }),
-    settings: { describe: async () => { throw new Error('fixture: settings 不可用'); } },
-    agentPresets: { list: async () => success({ presets: [{ id: 'standard', isDefault: true }, { id: 'qq-chat' }, { id: 'qq-chat-v2' }] }) },
-  };
-  class FakeBot {
-    async sendPrivateMessage(id, text) { calls.sent.push({ kind: 'private', id, text }); }
-    async sendGroupMessage(id, text) { calls.sent.push({ kind: 'group', id, text }); }
-    async request() { return { status: 'ok', retcode: 0, data: [] }; }
-  }
-  const intervals = [];   // 捕获 setInterval 注册（看门狗定时器）
-  const timeouts = new Set();
-  let source = fs.readFileSync(path.join(root, 'src/bridge.js'), 'utf8');
-  // 去掉顶层 import（VM 里靠 context 注入提供这些绑定）。必须按行处理：这些 import
-  // 有多行写法，单行正则会在第一个分号处停下并吞掉紧随其后的正常代码。
-  source = source.split(/\r?\n/).reduce((acc, line) => {
-    if (acc.droppingImport) {
-      if (/;\s*$/.test(line)) acc.droppingImport = false;
-      return acc;
-    }
-    if (/^import[\s{*]/.test(line) || /^import\s+['"]/.test(line)) {
-      if (!/;\s*$/.test(line)) acc.droppingImport = true;
-      return acc;
-    }
-    acc.out.push(line);
-    return acc;
-  }, { out: [], droppingImport: false }).out.join('\n');
-  source = source.replaceAll('import.meta.url', JSON.stringify(pathToFileURL(path.join(temp, 'src/bridge.js')).href));
-  source = source.slice(0, source.indexOf("process.on('SIGINT'"));
-  // 在 main() 里提前返回：把看门狗内部结构暴露给断言（不改变 bridge.js 自身）。
-  source = source.replace('  bot.onPrivateMessage(async (event) => {', `
-  return {
-    cfg, state, api, socialV2, getSocialV2State, ensureSession, sendToQQ,
-    startConsoleServer, retireSession, drainPromptQueue,
-    sendWakePromptV2, scheduleWakeV2, deliverPrompt, isConversationBusyV2, wakePriorityV2,
-    promptQueues, pendingWakeKeys, pendingWakeLeaseTimers, collectors, v2TurnStartAt,
-    wakeConfigUpdatedKeys, markReadCalledKeys,
-    busyWatchdog, busyWatchdogConfig, runBusyWatchdogScanV2, startBusyWatchdogV2,
-    markBusyRearmedWakeV2, clearBusyRearmedWakeV2,
-    queued, enqueueForRetry, flushQueue,
-    noteFrameActivityV2, noteActionActivityV2, clearBusyWatchdogRuntimeV2,
-    createTurnCollector, pumpMux,
-    setMode(value) { currentMode = value; },
-    setReady(value) { dshReady = value; },
-    setPresets(value) { dshPresetIds = value; dshDefaultPreset = 'standard'; },
-    resetEpoch() { sessionEpoch++; },
-  };
-  bot.onPrivateMessage(async (event) => {`);
-  const context = vm.createContext({
-    fs, path, http, crypto, fileURLToPath, URL, Buffer, AbortSignal,
-    console: { log() {}, error() {} },
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok', retcode: 0, data: { message_id: 1 } }) }),
-    execFileSync: () => '',
-    process: { pid: process.pid, platform: process.platform, kill: process.kill, env: {}, exit: (code) => { throw new Error(`unexpected exit ${code}`); } },
-    setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); timeouts.add(t); return t; },
-    clearTimeout: (t) => { timeouts.delete(t); clearTimeout(t); },
-    // 看门狗定时器**不真的跑**：记下注册参数，测试按需手动触发，保证断言确定。
-    setInterval: (fn, ms) => { const handle = { fn, ms, unrefCalled: false, unref() { this.unrefCalled = true; } }; intervals.push(handle); return handle; },
-    clearInterval: () => {},
-    NodeApiClient: class { constructor() { return api; } },
-    SnowLumaWebSocketClient: FakeBot, text: (s) => s,
-    discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
-    ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl,
-    hardenDir: () => ({ ok: true, detail: 'stub' }),
-    processAudioVolume: async (file) => ({ path: String(file), converted: false, applied: false, mode: 'original', volume: 1, loudness: null }),
-    cleanupTemp: () => {},
-  });
-  const modelViewSource = fs.readFileSync(path.join(root, 'src/qq-model-view.js'), 'utf8').replace(/^export /gm, '');
-  vm.runInContext(`Object.assign(globalThis, (() => { ${modelViewSource}\nreturn { compactModelMessage, compactModelData, serializeModelData }; })());`, context);
-  vm.runInContext(source + '\nglobalThis.busyHarnessReady = main();', context);
-  const bridge = await context.busyHarnessReady;
-  bridge.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
-  bridge.setReady(true);
-  const logFile = path.join(temp, 'state', 'bridge.log');
-  return {
-    ...bridge,
-    calls,
-    intervals,
-    temp,
-    readLog: () => { try { return fs.readFileSync(logFile, 'utf8'); } catch { return ''; } },
-    async close() {
-      for (const t of timeouts) clearTimeout(t);
-      fs.rmSync(temp, { recursive: true, force: true });
-    },
-  };
-}
-
-// 缩放的默认配置（**100 倍缩放**：warnMs 3000ms ↔ 300000ms）：让 5min/15min/30min 三档在
-// 秒级跑完，且日志里的 `busy=Ns/idle=Ns` 仍是整数秒。绝不能靠真等 15 分钟，也不把默认值写进代码。
-const SCALED = { warnMs: 3000, releaseMs: 9000, hardCapMs: 18000, checkIntervalMs: 1000, rearmCooldownMs: 60000, maxRearmPerHour: 3 };
-const withWatchdog = (wd) => ({ socialV2: { enabled: true, busyWatchdog: { ...wd } } });
-
-/** 造一个「② pendingWakeKeys 卡住」的会话（DSH 接受过 prompt，但永远没有 turn/end）。 */
-function stuckByPendingWake(h, key = 'private:123') {
-  h.setMode('reserved2');
-  const st = h.getSocialV2State(key);
-  h.pendingWakeKeys.add(key);
-  return { key, st };
-}
-
-/** 造一个「④ 陈旧 collector（重连重建的在途回合）」的会话。 */
-function seedStaleCollector(h, sid, turn = 10, text = '卡死前的回复') {
-  const collector = h.createTurnCollector();
-  collector.push({ type: 'turn/start', data: { turn } });
-  collector.push({ type: 'assistant/message', data: { turn, message: { content: [{ type: 'text', text }] } } });
-  h.collectors.set(sid, collector);
-  h.v2TurnStartAt.set(sid, Date.now());
-}
-
-/**
- * 让 pumpMux 消费一批帧。首次调用时装一条**持久**的假事件流：pumpMux 的 `for await` 一旦
- * 建立就不会重建，所以多次 feedFrames 必须喂同一条流（否则第二批帧会被静默丢弃）。
- */
-function ensureFrameFeed(h) {
-  if (!h.__frameQueue) {
-    h.__frameQueue = [];
-    h.__frameWaiters = [];
-    h.api.events.mux = async function* () {
-      for (;;) {
-        while (h.__frameQueue.length === 0) {
-          await new Promise((resolve) => h.__frameWaiters.push(resolve));
-        }
-        yield { payload: h.__frameQueue.shift() };
-        await new Promise((r) => setTimeout(r, 5));
-      }
-    };
-    void h.pumpMux();
-  }
-  return h.__frameQueue;
-}
-
-async function feedFrames(h, frames, waitMs = 120) {
-  const queue = ensureFrameFeed(h);
-  for (const frame of frames) queue.push(frame);
-  for (const wake of h.__frameWaiters.splice(0)) wake();
-  await new Promise((r) => setTimeout(r, waitMs));
-}
-
-function postJson(server, pathname, body) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body ?? {});
-    const request = http.request({
-      host: '127.0.0.1', port: server.address().port, path: `${pathname}?token=${CONSOLE_TOKEN}`, method: 'POST',
-      // agent:false + Connection: close：不要留下 keep-alive 空闲 socket。否则测试跑完后
-      // Node 的全局 agent 会抱着它的 socket 直到超时，进程迟迟不退出（实测会把 29s 的用例
-      // 拖成 88s 的墙钟时间，撞上 test-audit 的每脚本超时）。
-      agent: false,
-      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload), connection: 'close' },
-    }, (response) => {
-      let data = '';
-      response.on('data', (c) => { data += c; });
-      response.on('end', () => resolve({ status: response.statusCode, body: data }));
-    });
-    request.on('error', reject);
-    request.setTimeout(4000, () => request.destroy(new Error('request hung')));
-    request.end(payload);
-  });
-}
-
-const count = (text, re) => (String(text).match(re) ?? []).length;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/** 轮询等待某个条件成立（日志行 / 投递计数），比死等固定时长稳。 */
-const waitFor = async (fn, timeoutMs = 5000, stepMs = 50) => {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    let value;
-    try { value = fn(); } catch { value = null; }
-    if (value) return value;
-    if (Date.now() > deadline) return null;
-    await sleep(stepMs);
-  }
-};
-/** DSH 帧构造器（与 createTurnCollector 认的形状一致）。 */
-const frameOf = (sid, event) => ({ type: 'session/event', sessionId: sid, event });
-/** 一个正常收尾的回合：turn/start → assistant/message → turn/end。 */
-const completedTurn = (sid, turn, text) => [
-  frameOf(sid, { type: 'turn/start', data: { turn } }),
-  frameOf(sid, { type: 'assistant/message', data: { turn, message: { content: [{ type: 'text', text }] } } }),
-  frameOf(sid, { type: 'turn/end', data: { turn, reason: { kind: 'completed' } } }),
-];
-
-let failures = 0;
-let caseMsTotal = 0;
-let closeMsTotal = 0;
-async function test(name, config, run) {
-  let h;
-  const t0 = Date.now();
-  try {
-    h = await busyHarness({ config });
-    await run(h);
-    caseMsTotal += Date.now() - t0;
-    console.log(`✅ ${name}（${Date.now() - t0}ms）`);
-  } catch (error) {
-    failures += 1;
-    caseMsTotal += Date.now() - t0;
-    console.error(`❌ ${name}（${Date.now() - t0}ms）\n   ${error?.stack ?? error?.message ?? error}`);
-  } finally {
-    if (h) {
-      const tc = Date.now();
-      await h.close();
-      closeMsTotal += Date.now() - tc;
-    }
-  }
-}
+import {
+  busyHarness, test, SCALED, withWatchdog, root, stuckByPendingWake, seedStaleCollector, feedFrames, postJson, count, sleep, waitFor, frameOf, completedTurn, finish,
+} from './busy-watchdog-harness.mjs';
 
 // ── §15.6 配置键/默认值/禁用语义 ─────────────────────────────────────────────
 await test('默认阈值严格等于 t1 冻结值；未配置 config.json 也生效；非法值回落默认', {}, async (h) => {
@@ -433,14 +192,25 @@ await test('C1：300s/600s 零帧只 WARN（合法长等），900s 才释放', w
   h.runBusyWatchdogScanV2(t0 + 3000);
   h.runBusyWatchdogScanV2(t0 + 6000);   // 两次满等 ≈ 10 分钟零帧
   let log = h.readLog();
-  assert.equal(count(log, /\[watchdog\] warn/g), 2, `两次满等各记一条 WARN；log=\n${log}`);
+  // t69-A1：同一忙-episode、同一 warn 档 ⇒ **只写 1 行**（旧代码这里断言 2；实测 10:36:43–10:43:23 刷了 42 行）。
+  assert.equal(count(log, /\[watchdog\] warn/g), 1, `同一 episode 的 warn 档只允许 1 行；log=\n${log}`);
+  assert.equal(h.busyWatchdog.warnedTiersV2.get(key), 'warn', '去重表必须记下已写过的档位');
   assert.match(log, /idle=3s/);
-  assert.match(log, /idle=6s/);
+  assert.doesNotMatch(log, /idle=6s/, '第二次扫描（idle=6s）不得再写 WARN 行');
   assert.doesNotMatch(log, /\[watchdog\] release/, '900s 之前绝不释放');
   assert.equal(h.pendingWakeKeys.has(key), true);
   h.runBusyWatchdogScanV2(t0 + 9000);
   log = h.readLog();
   assert.match(log, /\[watchdog\] release key=private:123 busy=9s idle=9s tier=release/);
+  // t69-A3：忙→闲边沿必须清去重 ⇒ 第二次卡忙（新 episode）重新写 1 行 WARN（证明不是「一辈子一次」）
+  h.runBusyWatchdogScanV2(t0 + 10000);          // 释放时 ② 已清 ⇒ 这一轮是忙→闲边沿
+  assert.equal(h.busyWatchdog.warnedTiersV2.has(key), false, '忙→闲边沿必须清去重状态');
+  const warnBefore = count(h.readLog(), /\[watchdog\] warn/g);
+  h.pendingWakeKeys.add(key);                   // 第二次卡忙（新 episode）
+  h.busyWatchdog.lastFrameAtV2.set(key, t0 + 10000);
+  h.busyWatchdog.busySinceV2.set(key, t0 + 10000);
+  h.runBusyWatchdogScanV2(t0 + 13000);          // busy=3s idle=3s ⇒ warn 档
+  assert.equal(count(h.readLog(), /\[watchdog\] warn/g), warnBefore + 1, '新 episode 必须重新写 1 行 WARN');
   // 反证：把 releaseMs 配成 300s = 5 分钟就会误杀一次合法长等 —— 所以默认必须是 15 分钟
   h.pendingWakeKeys.add(key);
   h.cfg.socialV2.busyWatchdog.releaseMs = 3000;
@@ -1113,7 +883,6 @@ await test('F5-3 qq_wait_for_messages 入口取消待发唤醒（:6194）→ 标
     await pending;
   }
 });
-
 // ── A6：释放路径异常被捕获，不带走进程 ─────────────────────────────────────
 await test('A6：释放路径内部异常只记一行 ❌ [watchdog]，其它会话照常释放、进程存活', withWatchdog(SCALED), async (h) => {
   h.setMode('reserved2');
@@ -1164,13 +933,471 @@ await test('C5：30 分钟租约语义未被改动，释放后租约计时器为
   assert.equal(h.v2TurnStartAt.size, 0);
 });
 
-if (failures) {
-  console.error(`\n❌ 卡忙看门狗测试失败 ${failures} 项`);
-  process.exit(1);
+// ── C-stall（t44）：静默时探测 DSH 会话状态，确凿否证就立即释放（不等 15 分钟预算） ─────────
+// 事故形状：④ 在途回合 + 事件流零帧（既没断连、也没到 releaseMs）。这里放的是**目标档**：
+// 只有 DSH 侧确凿否证（会话已消失 / running=false）才提前释放；证据不足或探测失败一律不动。
+const STALL_WD = { warnMs: 300000, releaseMs: 900000, hardCapMs: 1800000, checkIntervalMs: 1000, rearmCooldownMs: 0, maxRearmPerHour: 10, silenceProbeMs: 5000, stallProbeTimeoutMs: 200 };
+const stallWatchdog = (wd = {}) => ({ socialV2: { enabled: true, busyWatchdog: { ...STALL_WD, ...wd } } });
+/** 一次「在途回合」卡住的会话（C-stall 的目标形状：只有 ④）。 */
+async function stuckByTurn(h, key = 'private:123') {
+  h.setMode('reserved2');
+  const sid = await h.ensureSession(key);
+  // 必须显式取一次会话态：`socialV2.conversations` 是看门狗扫描的**唯一**入口，
+  // 没登记进去 ⇒ runBusyWatchdogScanV2 根本不会扫到这个 key（与 stuckByPendingWake 同款）。
+  const st = h.getSocialV2State(key);
+  assert.equal(h.socialV2.conversations.has(key), true, '（夹具）会话必须已登记进 socialV2.conversations');
+  seedStaleCollector(h, sid);
+  // ensureSession 的异步尾巴（投递记账等白名单动作）会刷新活动戳：先让它跑完，
+  // 否则测试设的 t0 会被顶掉，静默窗口就永远从「刚刚」起算（D 系列全部用例都靠这个前提）。
+  await settleProbe(50);
+  return { key, sid, st };
 }
-console.log(`\n🎉 卡忙自愈看门狗聚焦测试通过（用例 ${(caseMsTotal / 1000).toFixed(1)}s + close ${(closeMsTotal / 1000).toFixed(1)}s，`
-  + `进程 uptime ${process.uptime().toFixed(1)}s）`);
-// 显式退出（与 scripts/test-agent-preset-patches.mjs 同风格）：本文件会起若干临时 HTTP 服务，
-// 测试侧偶发残留一个空闲 socket 句柄会把事件循环多吊住 ~60s（实测 29s → 88s），
-// 撞上 test-audit 的每脚本超时。断言已全部跑完，这里直接给出退出码。
-process.exit(failures === 0 ? 0 : 1);
+/** 探测是异步的（假 list 立刻 resolve）：扫描后等一拍，让判定落地。 */
+const settleProbe = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms));
+/** DSH 的 session.list 应答外壳（与 src/bridge.js 的 unwrap(...) 形状一致）。 */
+const listReply = (items) => ({ result: { ok: true, value: { items } } });
+
+await test('C-stall D1：DSH 已不再持有该会话（连续两次探测）→ 立即释放 ④ + 墓碑 + 只重排一次', stallWatchdog(), async (h) => {
+  const { key, sid } = await stuckByTurn(h);
+  const st = h.getSocialV2State(key);
+  st.pendingWakeReasons = [{ reason: 'private', seq: 197 }];
+  st.pendingWakeReason = 'private';
+  st.pendingWakeSeq = 197;
+  st.unread = [{ seq: 197, text: '在吗' }];
+  st.wakeConfig.batchWindowMs = 1000;
+  h.setSessionsList(async () => listReply([{ sessionId: 'someone-else', cwd: 'C:/x' }]));   // 列表里没有我们的 sid
+  const t0 = Date.now();
+  h.busyWatchdog.lastFrameAtV2.set(key, t0);
+  h.runBusyWatchdogScanV2(t0);                     // 建立 busySince（idle=0）
+  assert.equal(h.sessionsListCalls(), 0, '静默窗口未到 ⇒ 一次探测都不许发生（绝不因「静默」本身提前释放）');
+  assert.equal(h.v2TurnStartAt.has(sid), true);
+  h.runBusyWatchdogScanV2(t0 + 5000);              // idle=5s=窗口 ⇒ 第 1 枪
+  await settleProbe();
+  assert.equal(h.sessionsListCalls(), 1, '窗口到点必须探测一次');
+  assert.equal(h.v2TurnStartAt.has(sid), true, '只有一次「会话不存在」的证据 ⇒ 绝不放行');
+  h.runBusyWatchdogScanV2(t0 + 6000);              // 第 2 枪 ⇒ 连续两次确认
+  await settleProbe();
+  assert.equal(h.sessionsListCalls(), 2);
+  assert.equal(h.v2TurnStartAt.has(sid), false, '连续两次都显示不存在 ⇒ 必须释放 ④');
+  assert.equal(h.collectors.has(sid), false, 'collectors 必须一起清（④ 是两处）');
+  assert.equal(h.busyWatchdog.staleBusyTurns.has(sid), true, '必须留墓碑：迟到的 turn/end 静默排空');
+  const log = h.readLog();
+  assert.match(log, /♻️ \[stall\] DSH 会话已不存在：立即释放 private:123（静默=6s tier=stall released=v2TurnStartAt,collectors /,
+    '释放日志必须写明依据与清了哪些标记');
+  assert.equal(count(log, /\[stall\] DSH 会话已不存在：立即释放/g), 1, '一次静默只允许释放一次');
+  assert.equal(h.busyWatchdog.busyStallsV2.get(key), 1, '释放计数恰好 1');
+  assert.equal(count(log, /\[reserved2\] 计划唤醒 private:123（private）/g), 1, '被暂存唤醒只重排一次（走正常投递路径）');
+  assert.ok(h.busyWatchdog.rearmedWakeV2.get(key)?.has('private@197'), 'F1 去重标记必须登记（防同一 (reason,seq) 投递两次）');
+  // 后续扫描：不得重复释放、不得重复重排
+  h.runBusyWatchdogScanV2(t0 + 7000);
+  await settleProbe();
+  h.runBusyWatchdogScanV2(t0 + 8000);
+  await settleProbe();
+  assert.equal(count(h.readLog(), /\[stall\] DSH 会话已不存在：立即释放/g), 1, '后续扫描不得重复释放');
+  assert.equal(count(h.readLog(), /\[reserved2\] 计划唤醒 private:123（private）/g), 1, '也不得重复重排');
+  assert.equal(h.busyWatchdog.busyStallsV2.get(key), 1);
+});
+
+await test('C-stall D2：DSH 说回合仍在跑（running=true）⇒ 绝不提前释放，仍按 15 分钟预算节流', stallWatchdog({ warnMs: 60000, releaseMs: 120000 }), async (h) => {
+  const { key, sid } = await stuckByTurn(h);
+  h.setSessionsList(async () => listReply([{ sessionId: sid, running: true, agentAvailable: true, cwd: 'C:/x' }]));
+  const t0 = Date.now();
+  h.busyWatchdog.lastFrameAtV2.set(key, t0);
+  h.runBusyWatchdogScanV2(t0);
+  for (const dt of [5000, 10000, 20000, 30000, 40000, 50000, 60000]) { h.runBusyWatchdogScanV2(t0 + dt); await settleProbe(); }
+  assert.ok(h.sessionsListCalls() >= 5, `静默期间应持续探测，实测 ${h.sessionsListCalls()}`);
+  assert.equal(h.v2TurnStartAt.has(sid), true, 'running=true 是「不许动手」的最强证据 ⇒ 一个字节都不许动');
+  assert.equal(h.collectors.has(sid), true);
+  assert.equal(count(h.readLog(), /\[stall\][^\n]*：立即释放/g), 0, '不得有任何 stall 释放');
+  assert.match(h.readLog(), /🔎 \[stall\] 探测：DSH 说该会话的回合仍在跑（不释放）key=private:123/, '要留下「为何不动手」的观测行');
+  // 预算档完好：忙满 releaseMs + 零帧 ⇒ 仍由 [watchdog] release 释放（C-stall 没有改掉原节流）
+  h.runBusyWatchdogScanV2(t0 + 130000);
+  await settleProbe();
+  assert.equal(h.v2TurnStartAt.has(sid), false, '超过 releaseMs 必须仍由看门狗预算档释放');
+  assert.match(h.readLog(), /\[watchdog\] release key=private:123 busy=130s idle=130s tier=release released=v2TurnStartAt,collectors/);
+  assert.equal(count(h.readLog(), /\[stall\][^\n]*：立即释放/g), 0, '这一次释放必须来自预算档，不是 stall 档');
+});
+
+await test('C-stall D3：探测抛错/超时/返回异常/空列表 ⇒ 一律不释放 + 一条 WARN（不崩）', stallWatchdog(), async (h) => {
+  const { key, sid } = await stuckByTurn(h);
+  const t0 = Date.now();
+  h.busyWatchdog.lastFrameAtV2.set(key, t0);
+  h.runBusyWatchdogScanV2(t0);
+  const variants = [
+    ['抛错', async () => { throw new Error('fixture: DSH 探测炸了'); }, 30],
+    ['超时', () => new Promise(() => {}), 400],                     // 永不 resolve ⇒ 必须被 stallProbeTimeoutMs=200 打断
+    ['返回结构异常', async () => ({ result: { ok: true, value: { items: 'not-an-array' } } }), 30],
+    ['空列表', async () => listReply([]), 30],                       // DSH 重启/刚起步：绝不能当成「会话已消失」
+  ];
+  let base = t0;
+  for (const [label, impl, wait] of variants) {
+    h.setSessionsList(impl);
+    // 每一档都是**新的静默周期**：先来一次活动打破上一轮（episode 复位、WARN 节流清零），
+    // 否则「每个静默周期最多一条 WARN」的节流会让后面几档没有 WARN 可查。
+    h.noteActionActivityV2(key, base);
+    h.runBusyWatchdogScanV2(base);                 // idle=0：只做 episode 复位
+    h.runBusyWatchdogScanV2(base + 5000);          // 第 1 枪
+    await settleProbe(wait);
+    h.runBusyWatchdogScanV2(base + 10000);         // 第 2 枪（若被误判成「不存在」就会在这里释放）
+    await settleProbe(wait);
+    assert.equal(h.v2TurnStartAt.has(sid), true, `${label}：绝不能释放 ④`);
+    assert.equal(h.collectors.has(sid), true, `${label}：不得清 collectors`);
+    assert.equal(h.busyWatchdog.staleBusyTurns.size, 0, `${label}：不得留墓碑`);
+    base += 20000;
+  }
+  const log = h.readLog();
+  assert.ok(count(log, /⚠️ \[stall\] 探测失败（不释放）/g) >= 3, `四种失败都要留 WARN，实测 ${count(log, /⚠️ \[stall\] 探测失败（不释放）/g)}`);
+  assert.ok(/原因=[^\n]*DSH 探测炸了/.test(log), 'WARN 必须带上失败原因（抛错）');
+  assert.ok(/原因=[^\n]*探测超时/.test(log), 'WARN 必须带上失败原因（超时）');
+  assert.ok(/原因=[^\n]*返回结构无法识别/.test(log), 'WARN 必须带上失败原因（结构异常）');
+  assert.ok(/原因=[^\n]*空列表/.test(log), 'WARN 必须带上失败原因（空列表）');
+  assert.equal(count(log, /\[stall\][^\n]*：立即释放/g), 0, '探测失败期间不得有任何释放');
+});
+
+await test('C-stall D4：busyWatchdog.enabled=false ⇒ 本机制完全 no-op（不探测、不释放、不打日志）', stallWatchdog({ enabled: false }), async (h) => {
+  const { key, sid } = await stuckByTurn(h);
+  h.setSessionsList(async () => listReply([{ sessionId: 'someone-else' }]));   // 就算给「缺会话」也不该被调用
+  const t0 = Date.now();
+  h.busyWatchdog.lastFrameAtV2.set(key, t0);
+  for (const dt of [0, 5000, 10000, 30000, 60000]) { h.runBusyWatchdogScanV2(t0 + dt); await settleProbe(); }
+  assert.equal(h.sessionsListCalls(), 0, 'enabled=false ⇒ 一次探测都不许发生（与 F-R1 门控一致）');
+  assert.equal(h.v2TurnStartAt.has(sid), true, 'enabled=false ⇒ 不得释放任何标记');
+  assert.equal(count(h.readLog(), /\[stall\]/g), 0, 'enabled=false ⇒ 不得有任何 [stall] 日志');
+  assert.equal(count(h.readLog(), /\[watchdog\]/g), 0, '也不得有 [watchdog] 日志（既有语义：连 WARN 都不记）');
+});
+
+await test('C-stall D5（探测二）：DSH 明确说该会话没有在跑的回合（running=false）⇒ 连续两次后立即释放', stallWatchdog(), async (h) => {
+  const { key, sid } = await stuckByTurn(h);
+  h.setSessionsList(async () => listReply([{ sessionId: sid, running: false, agentAvailable: false, blank: false, updatedAt: 1, cwd: 'C:/x' }]));
+  const t0 = Date.now();
+  h.busyWatchdog.lastFrameAtV2.set(key, t0);
+  h.runBusyWatchdogScanV2(t0);
+  h.runBusyWatchdogScanV2(t0 + 5000);
+  await settleProbe();
+  assert.equal(h.v2TurnStartAt.has(sid), true, '一次 running=false 还不够（必须连续两次）');
+  h.runBusyWatchdogScanV2(t0 + 6000);
+  await settleProbe();
+  assert.equal(h.v2TurnStartAt.has(sid), false, 'running=false 连续两次 ⇒ 立即释放（这就是今天这类挂法的正解）');
+  assert.equal(h.collectors.has(sid), false);
+  assert.equal(h.busyWatchdog.staleBusyTurns.has(sid), true);
+  assert.match(h.readLog(), /♻️ \[stall\] DSH 说会话没有在跑的回合：立即释放 private:123（静默=6s tier=stall released=v2TurnStartAt,collectors 依据=DSH 明确表示没有在跑的回合（running=false 连续 2 次）/);
+});
+
+await test('C-stall D6：只清 ④（②/③ 原样）+ 复核活动戳与会话身份（证据被打破绝不放行）', stallWatchdog(), async (h) => {
+  // ① ② 与 ④ 同时卡着：stall 释放只允许清 ④，② 与 ③ 必须原样（比预算档更窄的口径）
+  const key = 'private:123';
+  h.setMode('reserved2');
+  const sid = await h.ensureSession(key);
+  const st = h.getSocialV2State(key);
+  seedStaleCollector(h, sid);
+  h.pendingWakeKeys.add(key);                       // ②
+  h.promptQueues.set(key, { running: true, queue: [{ text: 'x' }] });   // ③（只读，绝不能被本机制动）
+  h.setSessionsList(async () => listReply([{ sessionId: 'someone-else' }]));
+  const t0 = Date.now();
+  h.busyWatchdog.lastFrameAtV2.set(key, t0);
+  h.runBusyWatchdogScanV2(t0);
+  h.runBusyWatchdogScanV2(t0 + 5000);
+  await settleProbe();
+  h.runBusyWatchdogScanV2(t0 + 6000);
+  await settleProbe();
+  assert.equal(h.v2TurnStartAt.has(sid), false, '④ 必须被释放');
+  assert.equal(h.pendingWakeKeys.has(key), true, '② 一行都不许碰（那是 15 分钟预算那条路径的活）');
+  assert.equal(h.promptQueues.get(key)?.running, true, '③ 只读：队列必须原样');
+  assert.equal(h.promptQueues.get(key)?.queue.length, 1, '③ 队列条目不得被丢');
+  // ② 拆掉，换成「探测期间来了活动」：活动戳一变，这条静默证据就作废 ⇒ 不放行
+  h.pendingWakeKeys.delete(key);
+  h.promptQueues.delete(key);
+  h.busyWatchdog.staleBusyTurns.clear();
+  seedStaleCollector(h, sid);                       // 重新卡上 ④（上一段已被释放）
+  h.busyWatchdog.lastFrameAtV2.set(key, t0 + 7000);
+  h.runBusyWatchdogScanV2(t0 + 7000);               // 新一轮静默从这里起算
+  const frameAt = h.busyWatchdog.lastFrameAtV2.get(key);
+  h.setSessionsList(async () => { h.noteActionActivityV2(key); return listReply([{ sessionId: 'someone-else' }]); });
+  h.runBusyWatchdogScanV2(t0 + 12000);              // 窗口到点 + 探测（探测顺带刷新活动戳）
+  await settleProbe();
+  assert.notEqual(h.busyWatchdog.lastFrameAtV2.get(key), frameAt, '（前置）探测期间确实来过帧');
+  assert.equal(h.v2TurnStartAt.has(sid), true, '探测期间来过帧 ⇒ 它活着，绝不能释放');
+  assert.equal(h.collectors.has(sid), true);
+  assert.equal(h.v2TurnStartAt.has(sid), true, '会话身份/活动戳复核不通过时一律不放行');
+});
+
+await test('C-stall E1（真值表·t51 fail-open 加固）：running 缺省/字符串/null ⇒ 不投票不释放；false ⇒ 释放；true ⇒ 不释放', stallWatchdog(), async (h) => {
+  const { key, sid } = await stuckByTurn(h);
+  const base = { sessionId: sid, updatedAt: 1, agentAvailable: true, cwd: 'C:/x' };
+  // [标签, 条目, 是否应当释放]
+  const rows = [
+    ['缺省（条目在场但没有 running 字段）', { ...base }, false],
+    ["字符串 'false'", { ...base, running: 'false' }, false],
+    ['null', { ...base, running: null }, false],
+    ['false（对照：必须释放，证明没把功能改死）', { ...base, running: false }, true],
+    ['true（回归：最强的不许动手证据）', { ...base, running: true }, false],
+  ];
+  let t0 = Date.now();
+  for (const [label, item, shouldRelease] of rows) {
+    if (!h.v2TurnStartAt.has(sid)) seedStaleCollector(h, sid);   // 上一行（false）释放后重新卡上 ④
+    h.busyWatchdog.staleBusyTurns.clear();
+    h.setSessionsList(async () => listReply([item]));
+    // 新静默周期：先来一次活动（episode 复位 + WARN 节流清零），再连探两枪
+    h.noteActionActivityV2(key, t0);
+    h.runBusyWatchdogScanV2(t0);
+    h.runBusyWatchdogScanV2(t0 + 5000);
+    await settleProbe();
+    h.runBusyWatchdogScanV2(t0 + 6000);
+    await settleProbe();
+    const stillBusy = h.v2TurnStartAt.has(sid);
+    assert.equal(stillBusy, !shouldRelease,
+      `${label}：${shouldRelease ? '必须释放' : '不得释放'} ④（实测 ${stillBusy ? '仍在（未释放）' : '已被清'})`);
+    if (shouldRelease) {
+      assert.equal(h.collectors.has(sid), false, `${label}：释放时 collectors 必须一起清`);
+      assert.equal(h.busyWatchdog.staleBusyTurns.has(sid), true, `${label}：释放必须留墓碑`);
+      assert.match(h.readLog(), /♻️ \[stall\] DSH 说会话没有在跑的回合：立即释放 private:123/);
+    }
+    t0 += 30000;
+  }
+  const log = h.readLog();
+  assert.ok(count(log, /⚠️ \[stall\] 探测失败（不释放）[^\n]*running 字段非布尔（缺省）/g) >= 1, 'running 缺省必须留下 WARN');
+  assert.ok(count(log, /⚠️ \[stall\] 探测失败（不释放）[^\n]*running 字段非布尔（string:"false"）/g) >= 1, "running='false'（字符串）必须留下 WARN");
+  assert.ok(count(log, /⚠️ \[stall\] 探测失败（不释放）[^\n]*running 字段非布尔（object:null）/g) >= 1, 'running=null 必须留下 WARN');
+  assert.equal(count(log, /♻️ \[stall\] DSH 说会话没有在跑的回合：立即释放/g), 1, '真值表里只允许 running:false 那一行释放');
+  assert.match(log, /🔎 \[stall\] 探测：DSH 说该会话的回合仍在跑（不释放）/, 'running:true 必须留下「为何不动手」的观测行');
+  console.log(`   [证据] 真值表：${rows.map(([l, , r]) => `${l}⇒${r ? '释放' : '不释放'}`).join('；')}`);
+});
+
+// ── F. 根因（上游 issue #23 / #11）：回合外帧不得建 collector；漏掉 turn/start 的 turn/end 仍要收尾 ──
+const ROOT_FIX_WD = stallWatchdog({ silenceProbeMs: 0 });   // 关掉 C-stall 探测：只测帧处理本身
+/**
+ * 载荷性反证夹具：把 issue #23 的修复块**在内存副本里**换回旧写法
+ * （无条件 `?? createTurnCollector()` + 没有 #11 的「合成收尾」）。仓库文件一个字节都不动。
+ */
+function revertIssue23CollectorFix(source) {
+  const start = source.indexOf('            let collector = collectors.get(frame.sessionId) ?? null;');
+  const end = source.indexOf('            if (ended) {', start);
+  assert.ok(start > 0 && end > start, '（反证夹具）必须能在源码里定位 issue #23 的修复块');
+  return source.slice(0, start)
+    + '            const collector = collectors.get(frame.sessionId) ?? createTurnCollector();\n'
+    + '            collectors.set(frame.sessionId, collector);\n'
+    + '            const ended = collector.push(frame.event);\n'
+    + source.slice(end);
+}
+/** 场景①：无 collector 时喂四种「回合外」帧 ⇒ 不建 collector、不忙、唤醒能正常投递。 */
+async function rootScenarioOffTurn(h) {
+  h.setMode('reserved2');
+  const key = 'private:123';
+  const sid = await h.ensureSession(key);
+  const st = h.getSocialV2State(key);
+  const offTurn = [
+    { type: 'user/message', data: { turn: 1, message: { content: [{ type: 'text', text: 'compact-checkpoint' }] } } },
+    { type: 'compaction/start', data: { turn: 1 } },
+    { type: 'session/end-seed', data: { turn: 1 } },
+    { type: 'step/start', data: { turn: 1 } },
+  ];
+  await feedFrames(h, offTurn.map((e) => frameOf(sid, e)), 150);
+  assert.equal(h.collectors.has(sid), false, '① 回合外帧绝不能建出 collector（issue #23 的根因）');
+  assert.equal(h.v2TurnStartAt.has(sid), false, '① 回合外帧不得点亮 ④');
+  assert.equal(h.isConversationBusyV2(key, st), false, '① 会话必须仍是不忙（否则唤醒只会被暂存）');
+  st.unread = [{ seq: 197, text: '在吗' }];
+  st.lastUnreadSeq = 197;
+  st.wakeConfig.batchWindowMs = 1000;                       // 桥接把合并窗下限钳在 1000ms
+  h.scheduleWakeV2(key, 'private', { seq: 197 });
+  const log = h.readLog();
+  assert.doesNotMatch(log, /会话繁忙，暂存唤醒原因/, '① 不得走「会话繁忙⇒暂存」那条路');
+  assert.match(log, /\[reserved2\] 计划唤醒 private:123（private）/, '① 唤醒必须排上正常投递路径');
+  assert.ok(st.pendingWakeTimer, '① 唤醒必须真的排上合并窗定时器（可投递；投递机制本身由既有 T3 覆盖）');
+  clearTimeout(st.pendingWakeTimer);                        // 收起这次健康投递，保持后续断言干净
+  st.pendingWakeTimer = null;
+  return { frames: offTurn.length, hasCollector: h.collectors.has(sid), busy: h.isConversationBusyV2(key, st) };
+}
+/** 场景②：无 collector 时收到 `turn/end` ⇒ 不留任何残留。 */
+async function rootScenarioBareTurnEnd(h) {
+  h.setMode('reserved2');
+  const key = 'private:123';
+  const sid = await h.ensureSession(key);
+  await feedFrames(h, [frameOf(sid, { type: 'turn/end', data: { turn: 99, reason: { kind: 'completed' } } })], 150);
+  assert.equal(h.collectors.has(sid), false, '② 没有 collector 时收到 turn/end 不得留下空 collector');
+  assert.equal(h.v2TurnStartAt.has(sid), false, '② 不得点亮 ④');
+  assert.equal(h.busyWatchdog.staleBusyTurns.has(sid), false, '② 无在途状态时不该留墓碑');
+  assert.equal(h.isConversationBusyV2(key, h.getSocialV2State(key)), false, '② 会话必须不忙');
+  return { hasCollector: h.collectors.has(sid) };
+}
+/** 场景③（issue #11 第二个缺陷）：中途接入 —— `tool/call` → 同号 `turn/end` 必须仍能收尾。 */
+async function rootScenarioMidJoin(h) {
+  h.setMode('reserved2');
+  const key = 'private:123';
+  const sid = await h.ensureSession(key);
+  const st = h.getSocialV2State(key);
+  h.v2TurnStartAt.set(sid, Date.now());          // ④：桥接知道有个在途回合（但它没看到那一帧 turn/start）
+  st.pendingWakeReasons = [{ reason: 'private', seq: 197 }];
+  st.unread = [{ seq: 197, text: '在吗' }];
+  st.lastUnreadSeq = 197;
+  const turnNo = 41;
+  await feedFrames(h, [frameOf(sid, { type: 'tool/call', data: { turn: turnNo, name: 'qq_send_message', callId: 'c1', arguments: { key } } })], 150);
+  assert.equal(h.collectors.has(sid), false, '③ tool/call 不得建 collector（issue #23）');
+  assert.equal(h.isConversationBusyV2(key, st), true, '（前置）④ 还在 ⇒ 此刻仍然忙');
+  const sentBefore = h.calls.sent.length;
+  await feedFrames(h, [frameOf(sid, { type: 'turn/end', data: { turn: turnNo, reason: { kind: 'completed' } } })], 350);
+  assert.equal(h.v2TurnStartAt.has(sid), false, '③ 漏掉 turn/start 的 turn/end 必须清 ④（issue #11）');
+  assert.equal(h.collectors.has(sid), false, '③ 不得留 collector');
+  assert.match(h.readLog(), /没有对应 turn\/start 的 turn\/end/, '③ 必须走到收尾路径（留下诊断行）');
+  assert.match(h.readLog(), /补发繁忙期间积压的唤醒：private@seq197/, '③ 必须重排被暂存的唤醒');
+  assert.equal(h.calls.sent.length, sentBefore, '③ 合成收尾不得发出空消息/多余回复');
+  // ④ 类判据必须从 flags 里消失（冻结文案 `v2TurnStartAt,collectors` 本身不变）
+  const flags = h.busyFlagsV2(key, st, h.state.sessions[key], false, 0);
+  assert.ok(!String(flags).includes('v2TurnStartAt,collectors'), `③ ④ 判据必须从 flags 消失，实测 flags=${flags}`);
+  assert.ok(st.pendingWakeTimer, '③ 重排的唤醒必须真的排上合并窗定时器（可投递；投递机制本身由既有 T3 覆盖）');
+  clearTimeout(st.pendingWakeTimer);          // 收起这次健康投递，才能干净地断言「卡忙已消失」
+  st.pendingWakeTimer = null;
+  assert.equal(h.isConversationBusyV2(key, st), false, '③ 清掉 ④ 且无在途唤醒后，会话必须不再忙');
+  return { cleared: !h.v2TurnStartAt.has(sid), flags: String(flags) };
+}
+
+await test('根因 F1（issue #23）：回合外帧不建 collector ⇒ 不卡忙、唤醒能正常投递；正常回合零回归', ROOT_FIX_WD, async (h) => {
+  const proof = await rootScenarioOffTurn(h);
+  console.log(`   [证据] 回合外帧 ${proof.frames} 条 ⇒ collectors.has=${proof.hasCollector}、busy=${proof.busy}、`
+    + '唤醒=排上正常投递路径（计划唤醒 + 合并窗定时器），**没有**「会话繁忙⇒暂存」');
+  // 正常回合零回归（同一 harness）
+  const key = 'private:123';
+  const sid = h.state.sessions[key];
+  const sentBefore = h.calls.sent.length;
+  await feedFrames(h, completedTurn(sid, 7, '正常回复'), 350);
+  assert.equal(h.collectors.has(sid), false, '④ 正常回合收尾后不得留 collector');
+  assert.equal(h.v2TurnStartAt.has(sid), false, '④ 正常回合收尾后 ④ 必须清空');
+  assert.equal(h.isConversationBusyV2(key, h.getSocialV2State(key)), false, '④ 正常回合收尾后必须不忙');
+  // 正常回合的文本必须被照常收集（这一状态下的投递决策=「AI 内部输出（不自动转发）」，属既有语义；
+  // 真发送路径由既有用例与 cross-session 套件覆盖）。关键是：不得走「没有对应 turn/start」那条兜底。
+  assert.match(h.readLog(), /正常回复/, '④ 正常回合的 assistant 文本必须被收集');
+  assert.doesNotMatch(h.readLog(), /没有对应 turn\/start 的 turn\/end/, '④ 正常回合不得走「漏掉 turn/start」的兜底收尾');
+  assert.equal(h.calls.sent.length, sentBefore, '④ 该状态下不自动转发（既有语义，本轮不改变）');
+  console.log(`   [证据] 正常回合 turn/start→assistant/message→turn/end 照常收尾（文本被收集：log 含「正常回复」；未走兜底收尾）；collectors/④ 已清`);
+});
+
+await test('根因 F2（issue #23）：无 collector 时收到 turn/end 不留残留', ROOT_FIX_WD, async (h) => {
+  await rootScenarioBareTurnEnd(h);
+  console.log('   [证据] 裸 turn/end ⇒ collectors/v2TurnStartAt/墓碑 全空、会话不忙');
+});
+
+await test('根因 F3（issue #11）：中途接入（tool/call → 同号 turn/end）仍能收尾并重排被暂存唤醒', ROOT_FIX_WD, async (h) => {
+  await rootScenarioMidJoin(h);
+  console.log('   [证据] ④ 被清、busy=false、日志含「没有对应 turn/start 的 turn/end」+「补发繁忙期间积压的唤醒：private@seq197」、sent 未变（无空消息）');
+});
+
+await test('根因 F4（载荷性反证）：内存副本回退成旧写法 ⇒ 场景①②③ 必红', ROOT_FIX_WD, async () => {
+  const scenarios = [['①回合外帧建 collector', rootScenarioOffTurn], ['②裸 turn/end 留残留', rootScenarioBareTurnEnd], ['③中途接入不收尾', rootScenarioMidJoin]];
+  for (const [label, scenario] of scenarios) {
+    const h = await busyHarness({ config: ROOT_FIX_WD, transformSource: revertIssue23CollectorFix });
+    let error = null;
+    try { await scenario(h); } catch (e) { error = e; } finally { await h.close(); }
+    assert.ok(error, `${label}：回退成旧写法后必须转红（否则该断言不是载荷的）`);
+    console.log(`   [反证] 旧写法下 ${label} 红：${String(error?.message ?? '').split('\n')[0].slice(0, 110)}`);
+  }
+});
+
+// ══ t69-A4/A5：多会话互不抑制 + clearBusyWatchdogRuntimeV2 清去重（含断流路径）═══════════════
+await test('t69-A4/A5：两个会话各写 1 行 WARN（A 的重复扫描不抑制 B）；清理后重新写；去重表不落盘', withWatchdog(SCALED), async (h) => {
+  h.setMode('reserved2');
+  h.cfg.allow.private = ['123', '999'];
+  await stuckByPendingWake(h, 'private:123');
+  await stuckByPendingWake(h, 'private:999');
+  const t0 = Date.now();
+  for (const k of ['private:123', 'private:999']) h.busyWatchdog.lastFrameAtV2.set(k, t0);
+  h.runBusyWatchdogScanV2(t0 + 3000);
+  h.runBusyWatchdogScanV2(t0 + 6000);
+  h.runBusyWatchdogScanV2(t0 + 9000);
+  const log = h.readLog();
+  assert.equal(count(log, /\[watchdog\] warn key=private:123/g), 1, `A 的重复扫描只写 1 行；log=\n${log}`);
+  assert.equal(count(log, /\[watchdog\] warn key=private:999/g), 1, 'B 必须各写 1 行（A 的重复扫描不得抑制 B）');
+  assert.equal(h.busyWatchdog.warnedTiersV2.size, 2, '去重表按 key 存，两个会话各一条');
+  assert.equal(JSON.stringify(h.cfg).includes('warnedTiers'), false, '不得进 config.json（无配置键）');
+  const stateDir = path.join(h.temp, 'state');
+  const persisted = fs.readdirSync(stateDir).filter((f) => f.endsWith('.json'))
+    .map((f) => fs.readFileSync(path.join(stateDir, f), 'utf8')).join('\n');
+  assert.doesNotMatch(persisted, /warnedTiers/, '去重表不得落盘（运行时状态）');
+  h.clearBusyWatchdogRuntimeV2({ keepDshDownSnapshot: true });
+  assert.equal(h.busyWatchdog.warnedTiersV2.size, 0, 'A5：keepDshDownSnapshot 路径也必须清空去重表');
+  const t1 = t0 + 30000;                       // 新的时间基（避免落进 SCALED 的 release 档）
+  for (const k of ['private:123', 'private:999']) {
+    h.busyWatchdog.lastFrameAtV2.set(k, t1);
+    h.busyWatchdog.busySinceV2.set(k, t1);
+  }
+  h.runBusyWatchdogScanV2(t1 + 3000);          // busy=3s idle=3s ⇒ warn 档
+  const afterLog = h.readLog();
+  assert.equal(count(afterLog, /\[watchdog\] warn key=private:999/g), 2,
+    `清理后必须重新写（去重状态已作废）；warn 行=${count(afterLog, /\[watchdog\] warn/g)}、尾段=${afterLog.split('\n').slice(-4).join(' | ')}`);
+  console.log('   [证据] 三连扫描：A=1 行 / B=1 行（互不抑制）；clearBusyWatchdogRuntimeV2({keepDshDownSnapshot:true}) 后重新写 ⇒ B=2 行；状态文件与 config 均无去重表');
+});
+
+// ══ t69-C5/C6/C3：陈旧 turn/end 号码闸门（在途号 > 来帧号才拒绝）══════════════════════════
+await test('t69-C5/C6/C3：陈旧 turn/end(59) 被拒（④/号码/墓碑/backlog/消息零变化）；同号与更大号保持今日行为', withWatchdog(SCALED), async (h) => {
+  h.setMode('reserved2');
+  const key = 'private:123';
+  const sid = await h.ensureSession(key);
+  h.v2TurnStartAt.set(sid, Date.now());
+  h.v2TurnNoV2.set(sid, 60);
+  const st = h.getSocialV2State(key);
+  st.pendingWakeReasons = [{ reason: 'private', seq: 197 }];
+  const sentBefore = h.calls.sent.length;
+  await feedFrames(h, [frameOf(sid, { type: 'turn/end', data: { turn: 59, reason: { kind: 'completed' } } })], 200);
+  const log = h.readLog();
+  assert.match(log, /忽略陈旧的 turn\/end[^\n]*来帧回合号 59 < 在途回合号 60/, '必须有含「陈旧」与两个号码的可区分诊断行');
+  assert.doesNotMatch(log, /收到没有对应 turn\/start 的 turn\/end/, '陈旧帧不得走合成收尾');
+  assert.equal(h.v2TurnStartAt.has(sid), true, 'C2：拒绝时 ④ 一字不动');
+  assert.equal(h.v2TurnNoV2.get(sid), 60, 'C2：拒绝时回合号一字不动');
+  assert.equal(h.busyWatchdog.staleBusyTurns.has(sid), false, 'C2：拒绝时不得打墓碑');
+  assert.equal(st.pendingWakeReasons.length, 1, 'C2：拒绝时 backlog 一字不动（不重排）');
+  assert.equal(h.calls.sent.length, sentBefore, 'C2：拒绝时不得发任何消息');
+  await feedFrames(h, [frameOf(sid, { type: 'turn/end', data: { turn: 60, reason: { kind: 'completed' } } })], 250);
+  assert.match(h.readLog(), /收到没有对应 turn\/start 的 turn\/end/, 'C6：同号必须仍走合成收尾（今日行为，文案逐字不变）');
+  assert.equal(h.v2TurnStartAt.has(sid), false, 'C6：合成收尾必须清 ④');
+  assert.equal(h.v2TurnNoV2.has(sid), false, 'C7：清 ④ 必须同时清回合号');
+  h.cfg.allow.groups = ['456'];
+  const sid2 = await h.ensureSession('group:456');
+  await feedFrames(h, [frameOf(sid2, { type: 'turn/start', data: { turn: 40 } })], 150);
+  assert.equal(h.v2TurnNoV2.get(sid2), 40, '真实 turn/start 必须记下回合号');
+  await feedFrames(h, [frameOf(sid2, { type: 'turn/end', data: { turn: 41, reason: { kind: 'completed' } } })], 250);
+  assert.match(h.readLog(), /收到没有对应 turn\/start 的 turn\/end/, 'C3：来帧号更大时仍合成收尾（兜底文案逐字不变）');
+  assert.equal(h.v2TurnStartAt.has(sid2), false, 'C3：合成收尾必须清 ④');
+  console.log('   [证据] 在途 60 + turn/end(59) ⇒ 只写「忽略陈旧的 turn/end … 59 < 60」，④/号码/墓碑/backlog/消息全未动；'
+    + 'turn/end(60) 与 turn/start(40)→turn/end(41) 仍走合成收尾并清 ④');
+});
+
+// ══ t69-C7：静态不变量 —— 每个清 ④ 的站点都必须同时清 v2TurnNoV2 ══════════════════════════
+await test('t69-C7 静态不变量：枚举所有清 ④ 的站点，逐一证明同段代码同时清 v2TurnNoV2', withWatchdog(SCALED), async (h) => {
+  const src = fs.readFileSync(path.join(root, 'src/bridge.js'), 'utf8');
+  const lines = src.split('\n');
+  const sites = lines.map((l, i) => ({ l, i }))
+    .filter(({ l }) => /v2TurnStartAt\.delete\(|collectors\.delete\(|collectors\.clear\(\)|v2TurnStartAt\.clear\(\)/.test(l));
+  assert.ok(sites.length >= 12, `站点数必须与枚举一致（清 ④ 的所有位置）：实测 ${sites.length}`);
+  const missing = sites.filter(({ i }) => !/v2TurnNoV2\.(delete|clear)\(/.test(lines.slice(Math.max(0, i - 8), i + 9).join('\n')));
+  assert.deepEqual(missing.map(({ i }) => `L${i + 1}: ${lines[i].trim()}`), [],
+    '所有清 ④ 的站点必须在同一段代码里清 v2TurnNoV2 —— 否则残留的更大号会永久封死合成收尾（#11 复发）');
+  const tierRefs = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.includes('warnedTiersV2'));
+  assert.ok(tierRefs.length >= 5 && tierRefs.length <= 8, `warnedTiersV2 引用处数必须与实现一致：实测 ${tierRefs.length}`);
+  console.log(`   [证据] 清 ④ 站点 = ${sites.length} 处，全部同段清 v2TurnNoV2（missing=0）；warnedTiersV2 引用 ${tierRefs.length} 处`);
+});
+
+// ══ t69-A1 载荷性反证：把「按档位去重」那一行中和掉 ⇒ 同一 episode 又变回 2 行 ═════════════════
+// 只在**内存副本**里变异（仓库文件不动），证明 A1 的「=1」断言确实钉在去重实现上。
+function stripWarnDedup(source) {
+  // 注意：不要带行尾换行（bridge.js 在 Windows 上是 CRLF）
+  const needle = "if (busyWatchdog.warnedTiersV2.get(key) === 'warn') return;";
+  assert.ok(source.includes(needle), '（变异体）必须能在源码里定位 WARN 去重那一行');
+  return source.replace(needle, '/* mutated: warn 档去重被中和 */');
+}
+await test('t69-A1 变异体反证：中和「warn 档去重」⇒ 同一 episode 重新变成 2 行 WARN', withWatchdog(SCALED), async () => {
+  const h = await busyHarness({ config: withWatchdog(SCALED), transformSource: stripWarnDedup });
+  let warnCount = null;
+  try {
+    const { key } = await stuckByPendingWake(h);
+    const t0 = Date.now();
+    h.busyWatchdog.lastFrameAtV2.set(key, t0);
+    h.runBusyWatchdogScanV2(t0);
+    h.runBusyWatchdogScanV2(t0 + 3000);
+    h.runBusyWatchdogScanV2(t0 + 6000);
+    warnCount = count(h.readLog(), /\[watchdog\] warn/g);
+  } finally {
+    await h.close();
+  }
+  assert.equal(warnCount, 2, `中和去重后必须变回「每档一行」=2（证明 A1 的 =1 是载荷的）：实测 ${warnCount}`);
+  console.log(`   [反证] 中和「warn 档去重」⇒ 同一 episode 写了 ${warnCount} 行 WARN（修复后为 1 行）`);
+});
+
+finish({ title: '卡忙自愈看门狗聚焦测试', failTitle: '卡忙看门狗测试' });

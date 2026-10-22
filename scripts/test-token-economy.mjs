@@ -161,10 +161,12 @@ await test('a full quiet observation allows a single combined close', async ({ h
   assert.deepEqual(seqs(st.unread), []);
 }, { observe: true });
 
-await test('wait exposes new messages and grants only their actually observed cursor', async ({ st, request, append }) => {
+await test('wait exposes new messages and grants only their actually observed cursor', async ({ h, st, request, append }) => {
+  h.cfg.socialV2.wake.preSleepWaitMs = 5000;
+  h.cfg.socialV2.wait.maxMs = 6000;
   append('message before wait');
   await request('unread');
-  const waiting = request('wait', { body: { timeoutMs: 1000, quietMs: 0 } });
+  const waiting = request('wait', { body: { timeoutMs: 5000, quietMs: 0 } });
   const timer = setTimeout(() => append('message during observation'), 60);
   let waited;
   try { waited = await waiting; } finally { clearTimeout(timer); }

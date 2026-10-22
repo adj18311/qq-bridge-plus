@@ -28,10 +28,57 @@ const consoleHtml = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), '
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const example = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
 
-/** 只要可执行代码：注释里会大段解释这些名字（直接扫原文会把说明当成实现）。 */
-const codeOf = (src) => src
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+/**
+ * 只要可执行代码：注释里会大段解释这些名字（直接扫原文会把说明当成实现）。
+ *
+ * t69 修法：改成**单趟按源码顺序扫描**，不再依赖「先剔块注释、再剔行注释」的两种正则顺序。
+ * 旧写法（先全局剔块注释、再按行剔行注释）会把**行注释里**的「斜杠+星号」当成块注释开头，
+ * 与后面某个「星号+斜杠」配对，把两者之间几十 KB 的**真源码**一起吃掉 —— t57 实测吞 30KB
+ * （本文件头部那次），更早在 bridge.js 上吞过 108KB，结果是「按源码模式断言」的用例集体假红/假绿。
+ * 语义（与旧实现一致的部分）：行注释与块注释里的内容一律剔除；字符串/模板串里的两种注释起始符号
+ * 保持原样（含反斜杠转义）；**换行数守恒**（行号与原文一致）。
+ */
+function stripComments(src) {
+  const s = String(src);
+  let out = '';
+  let i = 0;
+  const n = s.length;
+  while (i < n) {
+    const c = s[i];
+    const next = s[i + 1];
+    if (c === '/' && next === '/') {                 // 行注释：吃到行尾（换行交给下面照抄，行号守恒）
+      i += 2;
+      while (i < n && s[i] !== '\n' && s[i] !== '\r') i += 1;
+      continue;
+    }
+    if (c === '/' && next === '*') {                 // 块注释：吃到 */（内部换行保留，行号守恒）
+      i += 2;
+      while (i < n && !(s[i] === '*' && s[i + 1] === '/')) {
+        if (s[i] === '\n') out += '\n';
+        i += 1;
+      }
+      i = Math.min(n, i + 2);
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {        // 字符串/模板串：整段照抄（含转义）
+      const quote = c;
+      out += c;
+      i += 1;
+      while (i < n) {
+        if (s[i] === '\\') { out += s[i] + (s[i + 1] ?? ''); i += 2; continue; }
+        out += s[i];
+        const done = s[i] === quote;
+        i += 1;
+        if (done) break;
+      }
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+const codeOf = (src) => stripComments(src);
 const bridgeCode = codeOf(bridge);
 
 test('SnowLuma 客户端库不低于 bot_status 出现的版本（1.14.17）', () => {
@@ -123,7 +170,7 @@ test('good 取自心跳 status.good / get_status —— 绝不能取自 get_logi
   );
   assert.ok(loginCall.length > 0, '应能定位 get_login_info 调用点');
   assert.ok(
-    !/good/.test(loginCall.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')),
+    !/good/.test(codeOf(loginCall)),   // t69-B5：第二处内联剥离改用同一个实现（语义不变）
     'get_login_info 的返回里没有 good —— 不要从它身上取（会静默失效）。'
     + '若要昵称就用它，要 online/good 就用 get_status 或心跳。',
   );
@@ -183,4 +230,64 @@ test('端点自愈可关，且默认保持「跟随」（向后兼容）', () =>
     '关闭跟随时不得把 wsUrl 写回 config.json（否则"我设了别处"会被持久化抹掉）',
   );
   assert.equal(typeof example.snowluma?.silenceWarnMs, 'number', '示例配置应记录静默告警阈值');
+});
+
+// ══ t69-B：注释剥离的 fixture 自证（4 条；含对旧顺序实现的量化反向对照）══════════════════════
+/** 旧顺序实现（就地定义，只用于反向对照）：先剔块注释、再按行剔行注释 —— 这就是会吞源码的那个写法。 */
+const oldOrderStrip = (src) => String(src)
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+
+test('t69-B fixture①：行注释里的 /* 不再吞真源码（旧顺序吞 ≥30KB，新实现一行不少）', () => {
+  const filler = Array.from({ length: 1600 }, (_, i) => `const filler${i} = ${i};`).join('\n');
+  const fixture = `// 说明里出现 compaction/* 这种片段（t57 的真实形态）\n${filler}\nconst 目标标记 = 1;\n/* 尾块注释 */\n`;
+  assert.ok(filler.length >= 30000, `fixture 必须 ≥30KB 才能量化「吞源码」：实测 ${filler.length} 字符`);
+  const oldOut = oldOrderStrip(fixture);
+  const newOut = codeOf(fixture);
+  const keepOld = oldOut.split('\n').filter((l) => l.startsWith('const filler')).length;
+  const keepNew = newOut.split('\n').filter((l) => l.startsWith('const filler')).length;
+  assert.equal(keepOld, 0, '旧顺序实现必须把中间 1600 行真源码全吞掉（这就是 bug 本身，让本断言是载荷的）');
+  assert.equal(keepNew, 1600, '新实现必须一行不少地保留真源码');
+  assert.match(newOut, /const 目标标记 = 1;/, '新实现必须保留注释之后的代码');
+  assert.doesNotMatch(newOut, /compaction/, '注释内容本身仍必须被剔除');
+  assert.ok(newOut.length - oldOut.length >= 30000, `新实现保留的字节必须比旧顺序多 ≥30KB：实测 ${newOut.length - oldOut.length}`);
+});
+
+test('t69-B fixture②：块注释里的 // 与字符串/模板串里的 //、/* 不被误吃；换行守恒', () => {
+  const fixture = [
+    '/* 块注释：https://example.com/a//b 不许外溢 */',
+    'const url = "https://x//y";',
+    "const re = '/* not a comment */';",
+    'const tpl = `line1 // not a comment',
+    '${1 /* inline */} tail`;',
+    'const after = 42;',
+  ].join('\n');
+  const out = codeOf(fixture);
+  assert.match(out, /const url = "https:\/\/x\/\/y";/, '字符串里的 // 必须原样保留');
+  assert.match(out, /const re = '\/\* not a comment \*\/';/, '字符串里的 /* 必须原样保留');
+  assert.match(out, /const after = 42;/, '块注释之后的代码必须保留');
+  assert.match(out, /\$\{1 \/\* inline \*\/\} tail/, '模板串里的 /* 必须原样保留');
+  assert.doesNotMatch(out, /example\.com/, '块注释内容必须被剔除');
+  assert.equal(out.split('\n').length, fixture.split('\n').length, '剥离后行数必须守恒（行号一致）');
+});
+
+test('t69-B fixture③：真实 bridge.js 上的量化反向对照（新实现多保留 ≥30KB 真源码）', () => {
+  const oldOut = oldOrderStrip(bridge);
+  const newOut = codeOf(bridge);
+  // 载荷性：这段真源码（约 :6520-8357 的 108KB 区间内）在旧顺序下被整段吞掉，新实现保留
+  assert.doesNotMatch(oldOut, /\/api\/socialV2\/wait/, '旧顺序在真实文件上会吞掉这一整段真源码（载荷性）');
+  assert.match(newOut, /'\/api\/socialV2\/wait'/, '新实现必须保留这段真源码');
+  assert.match(newOut, /bot\.onEvent\(/, '新实现必须保留 bot.onEvent 这类真源码');
+  assert.ok(newOut.length - oldOut.length >= 30000,
+    `新实现保留的字节必须比旧顺序多 ≥30KB：实测 ${newOut.length - oldOut.length}（bridge.js ${bridge.length} 字符）`);
+});
+
+test('t69-B fixture④：字符串里的转义引号不会让 // 变成注释；剥离幂等', () => {
+  const fixture = 'const s = "a\\" // not a comment";\nconst z = 1; // 真注释\n';
+  const once = codeOf(fixture);
+  assert.match(once, /const s = "a\\" \/\/ not a comment";/, '转义引号后的 // 仍在字符串里，必须保留');
+  assert.match(once, /const z = 1;/, '真注释之后的代码必须保留');
+  assert.doesNotMatch(once, /真注释/, '真行注释必须被剔除');
+  assert.equal(codeOf(once), once, '剥离必须是幂等的（对已剥离结果再跑一次不再变化）');
+  assert.equal(once.split('\n').length, fixture.split('\n').length, '行数守恒');
 });

@@ -14,6 +14,7 @@ import path from 'node:path';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import YAML from 'js-yaml';
 import { AbstractApiClient } from '@deepseek-ai/dsh-host-apiproxy/client';
+import { discoverDshDesktopOrigins } from './dsh-desktop.js';
 
 /** DSH home：凭据文件与（历史）启动日志都在这里。 */
 export function resolveDshHome() {
@@ -324,6 +325,283 @@ export class NodeApiClient extends AbstractApiClient {
   /** Node 没有 location；把 base 固定为配置的 DSH 地址（回环地址天然通过 /api 信任栅栏）。 */
   resolveBase() {
     return this.baseUrl;
+  }
+
+  /** 健康检查：RPC 必须 resolve 且 result.ok === true；HTTP 200 但 result.ok=false 不算健康。 */
+  async checkHealth(signal) {
+    const response = await this.settings.describe({}, signal);
+    return response?.result?.ok === true;
+  }
+
+  /** Recover only a local desktop connection, after a failed health check. */
+  async refreshDesktopEndpoint(signal) {
+    if (!isLoopbackBase(this.baseUrl)) return false;
+    signal?.throwIfAborted();
+    // 同一时刻只允许一个恢复探测：并发调用共享同一个 in-flight promise。
+    if (this._desktopProbe) return this._desktopProbe;
+    // 连接监视器失败后按 2s 重试，原来的 5s 发现节流会把整段重试吞掉，改成 1s 短冷却。
+    if (this._desktopProbeAt && Date.now() - this._desktopProbeAt < 1000) return false;
+    this._desktopProbeAt = Date.now();
+    const inFlight = this._recoverDesktopEndpoint(signal);
+    this._desktopProbe = inFlight;
+    try {
+      return await inFlight;
+    } finally {
+      if (this._desktopProbe === inFlight) this._desktopProbe = null;
+    }
+  }
+
+  /**
+   * refreshDesktopEndpoint 的实际恢复流程：在总恢复预算内按顺序探测候选回环端点。
+   * 约束：候选必须 http + 回环 + 无 userinfo，且不能就是当前 base；settings.describe 必须
+   * 返回 ok 且带 qq-mode。总预算（默认 8000ms，auth.desktopRecoveryTimeoutMs 可覆盖）到期、
+   * 调用方 signal 取消、或 base 被其它配置改成新值后，绝不采用候选、也不改 base。
+   * 诊断只上报阶段/原因/code/name/毫秒，绝不包含 message/header/cookie/token。
+   */
+  async _recoverDesktopEndpoint(externalSignal) {
+    const baseAtStart = this.baseUrl;
+    const configuredBudget = Number(this.auth?.desktopRecoveryTimeoutMs);
+    const budgetMs = Number.isFinite(configuredBudget) && configuredBudget > 0 ? configuredBudget : 8000;
+    const deadline = Date.now() + budgetMs;
+    const recoveryStartedAt = Date.now();
+    let budgetExpired = false;
+    let cancelledByCaller = false;
+    const controller = new AbortController();
+    const budgetTimer = setTimeout(() => {
+      budgetExpired = true;
+      try { controller.abort(); } catch { /* 忽略：恢复已结束 */ }
+    }, budgetMs);
+    if (typeof budgetTimer?.unref === 'function') budgetTimer.unref();
+    const onExternalAbort = () => {
+      cancelledByCaller = true;
+      try { controller.abort(); } catch { /* 忽略：恢复已结束 */ }
+    };
+    if (externalSignal) {
+      if (externalSignal.aborted) onExternalAbort();
+      else externalSignal.addEventListener?.('abort', onExternalAbort, { once: true });
+    }
+    const recoverySignal = controller.signal;
+    const remainingMs = () => deadline - Date.now();
+    // 预算耗尽时 timer 可能因事件循环繁忙尚未执行，因此同时看 deadline：
+    // 一旦超时，即使 fetch 之后才返回成功也绝不采用。
+    const isStale = () => recoverySignal.aborted || Date.now() >= deadline || this.baseUrl !== baseAtStart;
+    // 明确区分「不采用」的原因：新 base 取代、外部取消、预算耗尽（候选超时单独上报）。
+    const staleReason = () => {
+      if (this.baseUrl !== baseAtStart) return 'superseded';
+      if (cancelledByCaller) return 'cancelled';
+      if (budgetExpired || Date.now() >= deadline) return 'budget-exhausted';
+      return 'cancelled';
+    };
+    // 已知 transport 错误格式：`transport failure for <path>: HTTP <status>`。
+    // postJson 在 !res.ok 时抛出的错误本身没有 status 字段，因此结构字段都缺失时
+    // 只从该固定格式中提取三位状态码，不回显原始 message，也不匹配供应商业务文本。
+    const transportHttpStatusOf = (value) => {
+      try {
+        const message = value?.message;
+        if (typeof message !== 'string') return undefined;
+        const matched = /^transport failure for .*: HTTP (\d{3})$/.exec(message);
+        if (!matched) return undefined;
+        const numeric = Number(matched[1]);
+        if (Number.isInteger(numeric) && numeric >= 100 && numeric <= 599) return numeric;
+      } catch { /* 忽略：非结构化错误 */ }
+      return undefined;
+    };
+    const httpStatusOf = (value) => {
+      try {
+        const candidates = [value?.status, value?.statusCode, value?.httpStatus, value?.response?.status, value?.result?.status];
+        for (const raw of candidates) {
+          const numeric = Number(raw);
+          if (Number.isInteger(numeric) && numeric >= 100 && numeric <= 599) return numeric;
+        }
+      } catch { /* 忽略：非结构化错误 */ }
+      // 结构字段优先；都没有时才回退到已知 transport 错误格式。
+      return transportHttpStatusOf(value);
+    };
+    const safeLabel = (value, fallback) => {
+      if (typeof value !== 'string') return fallback;
+      const trimmed = value.trim().slice(0, 48);
+      return /^[A-Za-z0-9_.:-]+$/.test(trimmed) ? trimmed : fallback;
+    };
+    const errorLabel = (error, field) => {
+      try { return safeLabel(error?.[field], undefined); } catch { return undefined; }
+    };
+    const emit = (event) => {
+      try {
+        const observer = this.auth?.onDesktopDiagnostic;
+        if (typeof observer !== 'function' || !event || typeof event !== 'object') return;
+        // 发现模块上报 {stage,status,reason,elapsedMs,code,candidateCount}，统一映射到
+        // 现有 {phase,reason,ms} 消费 schema（bridge 按 phase/reason 做 30s 去重）。
+        const phase = safeLabel(event.phase ?? event.stage, 'probe');
+        const status = safeLabel(event.status, undefined);
+        const reason = safeLabel(event.reason, undefined) ?? (status === 'success' ? 'success' : status) ?? 'unknown';
+        const safe = { phase, reason };
+        const code = safeLabel(event.code, undefined);
+        if (code) safe.code = code;
+        const name = safeLabel(event.name, undefined);
+        if (name) safe.name = name;
+        const elapsed = Number(event.ms ?? event.elapsedMs);
+        if (Number.isFinite(elapsed) && elapsed >= 0) safe.ms = Math.round(elapsed);
+        const count = Number(event.candidateCount);
+        if (Number.isFinite(count) && count >= 0) safe.candidateCount = Math.round(count);
+        if (event.recovered === true) safe.recovered = true;
+        observer(safe);
+      } catch { /* 诊断观察者不得破坏恢复流程 */ }
+    };
+    try {
+      if (recoverySignal.aborted) {
+        emit({ phase: 'discovery', reason: staleReason(), ms: Date.now() - recoveryStartedAt });
+        return false;
+      }
+      const discover = this.auth.discoverDesktopOrigins ?? discoverDshDesktopOrigins;
+      let candidates;
+      try {
+        candidates = await new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = (callback, value) => {
+            if (settled) return;
+            settled = true;
+            try { recoverySignal.removeEventListener?.('abort', onAbort); } catch { /* 忽略 */ }
+            callback(value);
+          };
+          const onAbort = () => finish(resolve, null);
+          if (recoverySignal.aborted) {
+            finish(resolve, null);
+            return;
+          }
+          recoverySignal.addEventListener?.('abort', onAbort, { once: true });
+          Promise.resolve()
+            .then(() => discover({ onDiagnostic: emit, signal: recoverySignal }))
+            .then((value) => finish(resolve, value), (error) => finish(reject, error));
+        });
+      } catch (error) {
+        if (isStale()) {
+          emit({ phase: 'discovery', reason: staleReason(), ms: Date.now() - recoveryStartedAt });
+          return false;
+        }
+        emit({
+          phase: 'discovery',
+          reason: 'failed',
+          code: errorLabel(error, 'code'),
+          name: errorLabel(error, 'name'),
+          ms: Date.now() - recoveryStartedAt
+        });
+        return false;
+      }
+      if (!Array.isArray(candidates)) {
+        emit({
+          phase: 'discovery',
+          reason: isStale() ? staleReason() : 'empty',
+          ms: Date.now() - recoveryStartedAt
+        });
+        return false;
+      }
+      if (isStale()) {
+        emit({ phase: 'discovery', reason: staleReason(), ms: Date.now() - recoveryStartedAt });
+        return false;
+      }
+      for (const candidate of candidates) {
+        if (isStale()) {
+          emit({ phase: 'discovery', reason: staleReason(), ms: Date.now() - recoveryStartedAt });
+          return false;
+        }
+        let origin;
+        try {
+          const url = new URL(candidate);
+          if (url.protocol !== 'http:' || url.username || url.password || !isLoopbackBase(url.origin)) {
+            emit({ phase: 'candidate', reason: 'rejected' });
+            continue;
+          }
+          origin = url.origin;
+        } catch {
+          emit({ phase: 'candidate', reason: 'invalid-url' });
+          continue;
+        }
+        if (origin === this.baseUrl) continue;
+        const candidateTimeoutMs = Math.min(3000, remainingMs());
+        if (candidateTimeoutMs <= 0) {
+          emit({ phase: 'candidate', reason: 'budget-exhausted', ms: Date.now() - recoveryStartedAt });
+          return false;
+        }
+        const candidateController = new AbortController();
+        const candidateSignal = candidateController.signal;
+        let candidateTimedOut = false;
+        const abortCandidate = () => {
+          try { candidateController.abort(); } catch { /* 忽略：已结束 */ }
+        };
+        const candidateTimer = setTimeout(() => {
+          candidateTimedOut = true;
+          abortCandidate();
+        }, candidateTimeoutMs);
+        if (typeof candidateTimer?.unref === 'function') candidateTimer.unref();
+        if (recoverySignal.aborted) abortCandidate();
+        else recoverySignal.addEventListener?.('abort', abortCandidate, { once: true });
+        const startedAt = Date.now();
+        let response;
+        let probeError = null;
+        try {
+          const probe = new NodeApiClient(origin, candidateTimeoutMs, this.auth);
+          response = await probe.settings.describe({}, candidateSignal);
+        } catch (error) {
+          probeError = error;
+        } finally {
+          clearTimeout(candidateTimer);
+          try { recoverySignal.removeEventListener?.('abort', abortCandidate); } catch { /* 忽略 */ }
+        }
+        const probeMs = Date.now() - startedAt;
+        if (isStale()) {
+          emit({ phase: 'candidate', reason: staleReason(), ms: probeMs });
+          return false;
+        }
+        // fetch 可能忽略 abort：候选被超时/取消后即使返回了响应也不能采用。
+        if (candidateSignal.aborted) {
+          emit({
+            phase: 'candidate',
+            reason: candidateTimedOut ? 'timeout' : 'cancelled',
+            code: candidateTimedOut ? 'ETIMEDOUT' : undefined,
+            ms: probeMs
+          });
+          continue;
+        }
+        if (probeError) {
+          const httpStatus = httpStatusOf(probeError);
+          emit({
+            phase: 'probe',
+            reason: httpStatus === 401 || httpStatus === 403 ? 'unauthorized' : 'failed',
+            code: httpStatus ? `http-${httpStatus}` : errorLabel(probeError, 'code'),
+            name: errorLabel(probeError, 'name'),
+            ms: probeMs
+          });
+          continue;
+        }
+        const result = response?.result;
+        const namespaces = result?.value?.namespaces;
+        const qqMode = Array.isArray(namespaces) && namespaces.some((item) => item?.ns === 'qq-mode');
+        if (result?.ok !== true || !qqMode) {
+          const structuredCode = safeLabel(result?.error?.code, undefined);
+          const httpStatus = httpStatusOf(result);
+          const unauthorized = httpStatus === 401 || httpStatus === 403 || structuredCode === 'unauthorized';
+          emit({
+            phase: 'probe',
+            reason: unauthorized ? 'unauthorized' : 'not-qq-mode',
+            code: httpStatus ? `http-${httpStatus}` : structuredCode,
+            ms: probeMs
+          });
+          continue;
+        }
+        this.baseUrl = origin;
+        this._preferToken = false;
+        this.invalidateAuth();
+        emit({ phase: 'probe', reason: 'recovered', ms: probeMs, recovered: true });
+        return true;
+      }
+      if (isStale()) {
+        emit({ phase: 'discovery', reason: staleReason(), ms: Date.now() - recoveryStartedAt });
+      }
+      return false;
+    } finally {
+      clearTimeout(budgetTimer);
+      try { externalSignal?.removeEventListener?.('abort', onExternalAbort); } catch { /* 忽略 */ }
+    }
   }
 
   /** 使当前 Cookie/launch token 失效；DSH 重启或 401 后会自动重新发现最新 token。 */
@@ -961,6 +1239,16 @@ export function createTurnCollector() {
     },
     has(turn) {
       return turns.has(turn);
+    },
+    /**
+     * 未结束回合数（issue #23 的第二层防护）。
+     * 用途：桥接的 ④ 忙判据必须问「还存在没结束的回合吗」，而不是「collectors 里有没有这个 sid」——
+     * 后者在历史缺陷下会被回合外的帧（`user/message` / `compaction/*` / `session/end-seed` / `step/*`）
+     * 顺手建出一个永远等不到 turn/end 的 collector，于是该会话永久 busy。
+     * 语义：`turn/start` +1、`turn/end` -1（不管 `has(turn)` 是否为真都按事件计数，只读不改行为）。
+     */
+    openTurns() {
+      return turns.size;
     }
   };
 }

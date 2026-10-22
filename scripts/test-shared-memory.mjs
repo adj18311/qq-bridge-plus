@@ -15,6 +15,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as memoryText from '../src/core/memory-text.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BRIDGE = path.join(ROOT, 'src', 'bridge.js');
@@ -42,6 +43,10 @@ const block = src.slice(startIdx, endIdx);
 const blockCode = block.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
 // HTTP 端点（memory-remove / memory-update / memory-clear）在补丁段之外，用整份源码做结构断言。
 const srcCode = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+// 七个记忆函数已委托 src/core/memory-text.mjs；抽取式工厂执行的是入口源码块，所以把
+// 真实模块函数注入每个工厂作用域。桩件 redactKnownTokensOnly/truncateText 保持原样，
+// 由委托适配器原样转交给模块实现。
+const MEMORY_TEXT_INJECTION = 'const { sanitizeMemoryText, unsafeMemoryKey, validMemoryUid, markMemoryInjection, projectMemoryImpressions, projectMemoryTopics, normalizeMemoryInclude } = memoryText;';
 
 // ── 结构断言：补丁形状与安全基线 ────────────────────────────────────────
 assert(!/memoryShareModeV2|memoryRouteForWriteV2|relocateLayeredMemoryV2|layeringMigratedAt/.test(blockCode),
@@ -80,17 +85,19 @@ function loadPatch({ cfg = {}, conversations = new Map(), sharedMemory = null, s
   const readStub = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
   const factory = new Function(
     'cfg', 'socialV2', 'log', 'redactKnownTokensOnly', 'truncateText', 'saveSocialV2State',
-    'fs', 'path', 'STATE_DIR', 'atomicWriteJson', 'readJsonSafe',
-    `${block}\n return { sanitizeSharedTextV2, markSharedInjectionV2, recordSharedSourceV2, memorySourceNoteV2, sharedSourceLabelV2, isUnsafeMemoryKeyV2, isQqUidV2, sessionMemberMapV2, sessionMemberUidsV2, sessionMemberNameV2, resolveImpressionTargetV2, sharedTargetAllowedV2, confirmSharedTargetV2, impressionDisplayNameV2, stripInternalImpressionFieldsV2, stripInternalTopicFieldsV2, decaySharedImpressionsV2, clampSharedMemoryV2, clampSessionMemoryV2, migrateSharedMemoryV2, rekeyImpressionsToUidV2, sharedMemoryV2, mergeMemoryViewV2, formatMemoryV2, appendMemoryV2, sharedMemoryConfigV2, sharedDomainAllowsV2, buildMemorySnapshotV2, memorySnapshotConfigV2, listMemorySnapshotsV2 };`
+    'fs', 'path', 'STATE_DIR', 'atomicWriteJson', 'readJsonSafe', 'memoryText',
+    `${MEMORY_TEXT_INJECTION}
+${block}
+ return { sanitizeSharedTextV2, markSharedInjectionV2, recordSharedSourceV2, memorySourceNoteV2, sharedSourceLabelV2, isUnsafeMemoryKeyV2, isQqUidV2, sessionMemberMapV2, sessionMemberUidsV2, sessionMemberNameV2, resolveImpressionTargetV2, sharedTargetAllowedV2, confirmSharedTargetV2, impressionDisplayNameV2, stripInternalImpressionFieldsV2, stripInternalTopicFieldsV2, decaySharedImpressionsV2, clampSharedMemoryV2, clampSessionMemoryV2, migrateSharedMemoryV2, rekeyImpressionsToUidV2, sharedMemoryV2, mergeMemoryViewV2, formatMemoryV2, appendMemoryV2, sharedMemoryConfigV2, sharedDomainAllowsV2, buildMemorySnapshotV2, memorySnapshotConfigV2, listMemorySnapshotsV2 };`
   );
   const api = factory(
-    { ownerQQ: 20001, socialV2: {}, ...cfg },
+    { ownerQQ: 1000000001, socialV2: {}, ...cfg },
     socialV2,
     (m) => logs.push(String(m)),
     (t) => String(t ?? ''),
     (s, n) => String(s ?? '').slice(0, n),
     () => saves.push(Date.now()),
-    fs, path, scratch, atomicStub, readStub
+    fs, path, scratch, atomicStub, readStub, memoryText
   );
   scratchDirs.push(scratch);
   return { api, socialV2, logs, saves, scratch };
@@ -126,29 +133,29 @@ const groupWithRoster = (over = {}) => st({
 // ── 2. 来源记账 + 中性标签 + 标注（t5-P1① / t7-R3）──────────────────────
 {
   const conversations = new Map([
-    ['private:20002', st({ recentMessages: [{ sender: '小张', userId: '20002', isSelf: false }] })],
-    ['private:20001', st({ recentMessages: [{ sender: '私聊', userId: '20001', isSelf: false }] })]
+    ['private:1000000020', st({ recentMessages: [{ sender: '小张', userId: '1000000020', isSelf: false }] })],
+    ['private:1000000001', st({ recentMessages: [{ sender: '私聊', userId: '1000000001', isSelf: false }] })]
   ]);
   const { api, socialV2 } = loadPatch({ conversations });
-  const entry = { text: '话题', lastSourceKey: 'group:30001', sources: { 'group:30001': { lastAt: Date.now() } } };
-  assert(api.memorySourceNoteV2(entry, 'private:20002') === '（来自群30001，未经核实）',
+  const entry = { text: '话题', lastSourceKey: 'group:1000000010', sources: { 'group:1000000010': { lastAt: Date.now() } } };
+  assert(api.memorySourceNoteV2(entry, 'private:1000000020') === '（来自群1000000010，未经核实）',
     '群来源标注群号（不带个人 QQ/昵称）');
-  const privEntry = { text: '私聊话题', lastSourceKey: 'private:20002' };
+  const privEntry = { text: '私聊话题', lastSourceKey: 'private:1000000020' };
   assert(api.memorySourceNoteV2(privEntry, 'group:1') === '（来自某私聊，未经核实）',
     '私聊来源在非 owner 会话里是中性标签「某私聊」');
-  assert(api.memorySourceNoteV2(privEntry, 'private:20001') === '（来自私聊20002，未经核实）',
+  assert(api.memorySourceNoteV2(privEntry, 'private:1000000001') === '（来自私聊1000000020，未经核实）',
     'owner 自己的私聊会话里才显示完整私聊来源');
   assert(api.memorySourceNoteV2({ text: '无来源' }, 'group:1') === '', '无来源信息的条目不加标注');
-  assert(api.sharedSourceLabelV2('private:20002', 'group:1') === '某私聊', 'sharedSourceLabelV2 中性化');
+  assert(api.sharedSourceLabelV2('private:1000000020', 'group:1') === '某私聊', 'sharedSourceLabelV2 中性化');
   const e2 = { text: 'x' };
-  api.recordSharedSourceV2(e2, 'group:30001', '测试甲');
-  assert(e2.sources['group:30001'].sender === '测试甲' && e2.lastSourceAt > 0, 'sources 记录发送者与时间戳');
+  api.recordSharedSourceV2(e2, 'group:1000000010', '测试甲');
+  assert(e2.sources['group:1000000010'].sender === '测试甲' && e2.lastSourceAt > 0, 'sources 记录发送者与时间戳');
   socialV2.sharedMemory.activeTopics.push(e2);
 }
 
 // ── 3. 印象用 uid 主键 + 白名单按身份校验（t7-R1）────────────────────────
 {
-  const key = 'group:30001';
+  const key = 'group:1000000010';
   const session = groupWithRoster();
   const { api, socialV2 } = loadPatch({ conversations: new Map([[key, session]]) });
   assert(api.sessionMemberUidsV2(key).has('10001'), '本会话成员名单按 uid 收集（来自消息 userId）');
@@ -176,9 +183,9 @@ const groupWithRoster = (over = {}) => st({
 
 // ── 4. 写入口径 + pendingThought 私有（硬约束）──────────────────────────
 {
-  const group = 'group:30001';
-  const priv = 'private:20002';
-  const conversations = new Map([[group, groupWithRoster()], [priv, st({ recentMessages: [{ sender: '小张', userId: '20002', isSelf: false }] })]]);
+  const group = 'group:1000000010';
+  const priv = 'private:1000000020';
+  const conversations = new Map([[group, groupWithRoster()], [priv, st({ recentMessages: [{ sender: '小张', userId: '1000000020', isSelf: false }] })]]);
   const { api, socialV2 } = loadPatch({ conversations });
   const ra = api.appendMemoryV2(conversations.get(group), 'activeTopic', '群里的公共话题', {}, { key: group });
   const rb = api.appendMemoryV2(conversations.get(priv), 'activeTopic', '私聊里的话题', {}, { key: priv });
@@ -354,13 +361,15 @@ const groupWithRoster = (over = {}) => st({
     const logs = [];
     const factory = new Function(
       'cfg', 'socialV2', 'log', 'redactKnownTokensOnly', 'truncateText', 'saveSocialV2State',
-      'fs', 'path', 'STATE_DIR', 'atomicWriteJson', 'readJsonSafe',
-      `${block}\n return { buildMemorySnapshotV2, memorySnapshotConfigV2, memorySnapshotDateV2, memorySnapshotStampV2, manualSnapshotFileNameV2, uniqueSnapshotFileNameV2, isSafeSnapshotFileNameV2, writeMemorySnapshotV2, pruneMemorySnapshotsV2, ensureDailyMemorySnapshotV2, listMemorySnapshotsV2, rollbackMemoryFromSnapshotV2, sharedMemoryV2, clampSharedMemoryV2, clampSessionMemoryV2 };`
+      'fs', 'path', 'STATE_DIR', 'atomicWriteJson', 'readJsonSafe', 'memoryText',
+      `${MEMORY_TEXT_INJECTION}
+${block}
+ return { buildMemorySnapshotV2, memorySnapshotConfigV2, memorySnapshotDateV2, memorySnapshotStampV2, manualSnapshotFileNameV2, uniqueSnapshotFileNameV2, isSafeSnapshotFileNameV2, writeMemorySnapshotV2, pruneMemorySnapshotsV2, ensureDailyMemorySnapshotV2, listMemorySnapshotsV2, rollbackMemoryFromSnapshotV2, sharedMemoryV2, clampSharedMemoryV2, clampSessionMemoryV2 };`
     );
     const api = factory(
-      { ownerQQ: 20001, socialV2: {} }, socialV2, (m) => logs.push(String(m)),
+      { ownerQQ: 1000000001, socialV2: {} }, socialV2, (m) => logs.push(String(m)),
       (t) => String(t ?? ''), (s, n) => String(s ?? '').slice(0, n), () => {},
-      fsOverride || fs, path, stateDir, atomicStub, readStub
+      fsOverride || fs, path, stateDir, atomicStub, readStub, memoryText
     );
     return { api, socialV2, logs };
   };
@@ -456,11 +465,13 @@ const groupWithRoster = (over = {}) => st({
     const logs = [];
     const factory = new Function(
       'cfg', 'socialV2', 'log', 'redactKnownTokensOnly', 'truncateText', 'saveSocialV2State',
-      'fs', 'path', 'STATE_DIR', 'atomicWriteJson', 'readJsonSafe',
-      `${block}\n return { memorySnapshotStampV2, manualSnapshotFileNameV2, uniqueSnapshotFileNameV2, isSafeSnapshotFileNameV2, writeMemorySnapshotV2, ensureDailyMemorySnapshotV2, listMemorySnapshotsV2, rollbackMemoryFromSnapshotV2, MEMORY_SNAPSHOT_FAIL_LOG_V2 };`
+      'fs', 'path', 'STATE_DIR', 'atomicWriteJson', 'readJsonSafe', 'memoryText',
+      `${MEMORY_TEXT_INJECTION}
+${block}
+ return { memorySnapshotStampV2, manualSnapshotFileNameV2, uniqueSnapshotFileNameV2, isSafeSnapshotFileNameV2, writeMemorySnapshotV2, ensureDailyMemorySnapshotV2, listMemorySnapshotsV2, rollbackMemoryFromSnapshotV2, MEMORY_SNAPSHOT_FAIL_LOG_V2 };`
     );
-    const api = factory({ ownerQQ: 20001, socialV2: {} }, socialV2, (m) => logs.push(String(m)), (t) => String(t ?? ''), (s, n) => String(s ?? '').slice(0, n), () => {},
-      fsOverride || fs, path, stateDir12, atomicStub, readStub);
+    const api = factory({ ownerQQ: 1000000001, socialV2: {} }, socialV2, (m) => logs.push(String(m)), (t) => String(t ?? ''), (s, n) => String(s ?? '').slice(0, n), () => {},
+      fsOverride || fs, path, stateDir12, atomicStub, readStub, memoryText);
     return { api, socialV2, logs };
   };
   // t17-low#1：同一秒内连续回滚不得覆盖回滚源文件（毫秒 + 去重计数）
@@ -536,18 +547,39 @@ const groupWithRoster = (over = {}) => st({
     assert(!fs.existsSync(stateDir12), '快照回归用的临时 state 目录已清理（不污染线上 state/）', stateDir12);
   }
 }
-// ── 11. 可重放记录：文档锚点表逐条核对当前文件（t4）──────────────────────
+// ── 11. 可重放记录：机器可读契约逐条核对当前文件（t4，纯净发布副本无 docs/）──────────────────────
 {
-  const REPLAY = path.join(ROOT, 'docs', 'guides', 'SHARED_MEMORY_REPLAY.md');
-  assert(fs.existsSync(REPLAY), '存在可重放记录 docs/guides/SHARED_MEMORY_REPLAY.md');
-  if (fs.existsSync(REPLAY)) {
-    const doc = fs.readFileSync(REPLAY, 'utf8');
+  const CONTRACT = path.join(ROOT, 'scripts', 'fixtures', 'shared-memory-contract.json');
+  assert(fs.existsSync(CONTRACT), '存在机器可读契约 scripts/fixtures/shared-memory-contract.json（纯净发布副本不带 docs/）');
+  let contract = null;
+  if (fs.existsSync(CONTRACT)) {
+    try { contract = JSON.parse(fs.readFileSync(CONTRACT, 'utf8')); }
+    catch (error) { assert(false, '契约 JSON 可解析', String((error && error.message) || error)); }
+  }
+  if (contract) {
+    // 发布副本不带 docs/README 与 docs/guides。契约 JSON 是原三份文档（可重放记录 /
+    // LOCAL_PATCHES / SHARED_MEMORY_PATCH）的机器可读等价抽取；这里把它还原成旧
+    // 「可重放记录」的表格与说明形状，下面的既有断言（锚点 ≥20 条、每条都能在
+    // bridge.js 里原样找到、备份文件名、7 处改动与重打说明、两份文档的 V2 标识符
+    // 全部存在）一条不删地继续生效。契约是静态数据：不联网、不读 state/、不碰 profile。
+    const replay = contract.replay || {};
+    const doc = [
+      String(contract.source || ''),
+      ...(Array.isArray(contract.anchors) ? contract.anchors : [])
+        .map((anchor, index) => '| ' + (index + 1) + ' | 补丁点 | `' + anchor + '` |'),
+      ...(Array.isArray(replay.backupFiles) ? replay.backupFiles : []).map((file) => '备份文件：' + file),
+      replay.coreChangeCount === 7 ? '7 处改动' : '',
+      replay.replayInstructions === true ? '重打' : ''
+    ].join('\n');
     const bridgeSrc = fs.readFileSync(BRIDGE, 'utf8');
     // 取锚点表第三列（反引号包起来的那一列）：| # | 补丁点 | anchor |
     // markdown 表格里要写 \| 才能显示竖线，取出来先还原成代码里的原样。
     const anchors = [...doc.matchAll(/^\|\s*\d+\s*\|[^|]*\|\s*`([^`]+)`\s*\|/gm)]
       .map((m) => m[1].replace(/\\\|/g, '|'));
     assert(anchors.length >= 20, '锚点表至少 20 条（覆盖 7 处核心 + 依附改动）', anchors.length + ' 条');
+    assert(anchors.length === (Array.isArray(contract.anchors) ? contract.anchors.length : -1),
+      '契约里的锚点全部被解析（行数一致，防止锚点里的竖线导致静默丢行）',
+      anchors.length + ' / ' + (Array.isArray(contract.anchors) ? contract.anchors.length : '?'));
     const missing = anchors.filter((a) => !bridgeSrc.includes(a));
     assert(missing.length === 0, '按记录核对：每个锚点都能在当前 src/bridge.js 原样找到',
       missing.length ? '缺失：' + missing.join(' || ') : anchors.length + ' 条全部命中');
@@ -558,7 +590,9 @@ const groupWithRoster = (over = {}) => st({
     // t4 验收①：LOCAL_PATCHES.md / SHARED_MEMORY_PATCH.md 也要与当前文件匹配 ——
     // 文档里提到的每个 xxxV2( 标识符都必须真的存在于 bridge.js（改名/删函数会让文档变谎话）。
     for (const name of ['LOCAL_PATCHES.md', 'SHARED_MEMORY_PATCH.md']) {
-      const d = fs.readFileSync(path.join(ROOT, 'docs', 'guides', name), 'utf8');
+      // 不再读 docs/：两份文档的 V2 标识符清单同样来自契约 JSON 的 documentIdentifiers。
+      const d = (contract.documentIdentifiers && contract.documentIdentifiers[name] || [])
+        .map((idn) => '`' + idn + '()`').join('\n');
       const ids = [...new Set([...d.matchAll(/`([A-Za-z_][A-Za-z0-9_]*V2)\(/g)].map((m) => m[1]))];
       const gone = ids.filter((idn) => !bridgeSrc.includes(idn));
       assert(ids.length > 0 && gone.length === 0, name + ' 引用的函数都存在于当前 bridge.js',

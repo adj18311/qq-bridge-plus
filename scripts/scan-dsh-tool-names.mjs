@@ -24,7 +24,7 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const { names, packages } = collectDshToolNames();
+const { names, packages, asarPath } = collectDshToolNames();
 const guardPath = path.join(ROOT, 'plugins', 'qq-agent-presets', 'qq-tool-restrict.mjs');
 const guard = await import(pathToFileURL(guardPath).href);
 const guarded = new Set(guard.RESTRICTED_TOOL_NAMES);
@@ -32,14 +32,16 @@ const guarded = new Set(guard.RESTRICTED_TOOL_NAMES);
 const sorted = [...names.keys()].sort();
 const onlyFlag = process.argv.includes('--missing');
 
-console.log(`DSH 包目录：${dshPackagesDir()}`);
+console.log(`DSH 包来源：${asarPath || dshPackagesDir()}`);
 console.log(`扫描包数：${packages.length}；抽到工具名候选：${sorted.length}\n`);
 
 /** ① 守卫名单里的名字必须真实存在，否则 restrict 抛错被吞、限制静默失效。 */
 const fabricated = [...guarded]
-  .filter((n) => TOOL_NAME_RE.test(n) && !n.startsWith('dev_') && !names.has(n));
+  .filter((n) => TOOL_NAME_RE.test(n) && !n.startsWith('dev_') && !guard.OPTIONAL_RESTRICTED_TOOL_NAMES?.includes(n) && !names.has(n));
 console.log('=== ① 守卫名单里、但安装包中找不到的名字（restrict 会抛错并静默失效） ===');
 console.log(fabricated.length ? fabricated.map((n) => `  ${n}`).join('\n') : '  (无)');
+const optionalAbsent = (guard.OPTIONAL_RESTRICTED_TOOL_NAMES ?? []).filter((name) => !names.has(name));
+if (optionalAbsent.length) console.log(`  当前未安装、保留跨版本限制：${optionalAbsent.join(', ')}`);
 
 /** ② 安装包里有、守卫没覆盖的危险语义名字（可能是新版本新增的能力）。 */
 const missing = sorted.filter((n) => DANGER_TOOL_RE.test(n) && !guarded.has(n) && !SAFE_MODEL_TOOLS.has(n));
@@ -54,4 +56,4 @@ if (!onlyFlag) {
 }
 
 console.log(`\n守卫名单 ${guarded.size} 个名字；其中悬空（假名）${fabricated.length} 个；候选里未覆盖的危险名 ${missing.length} 个。`);
-process.exitCode = (fabricated.length === 0 && missing.length === 0) ? 0 : 1;
+process.exitCode = (names.size > 0 && fabricated.length === 0 && missing.length === 0) ? 0 : 1;

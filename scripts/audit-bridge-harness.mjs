@@ -19,6 +19,15 @@ import * as modelPrices from '../src/model-prices.js';
 import * as tokenLedger from '../src/token-ledger.js';
 import * as voiceLib from '../src/send-voice-lib.js';
 import * as stateAcl from '../src/state-acl.mjs';
+// bridge.js 真的 import 了 tieba-lib（贴吧端点 + qq_send_image 的图床白名单/移动版 UA）。
+// 这个 VM 是把源码里的 import 行删掉再靠 context 注入绑定的，所以这里也得把这套绑定注进去，
+// 否则一走到贴吧端点或 sendImageV2 就是 ReferenceError（以前没有测试碰它们，所以一直没暴露）。
+import * as tiebaLib from '../src/tieba-lib.js';
+import * as coreBindings from './bridge-core-bindings.mjs';
+import * as roleCard from '../src/role-card.js';
+import * as retryObserver from '../src/retry-observer.js';
+import * as retryDiagnostic from '../src/retry-diagnostic.js';
+import * as errorNotice from '../src/error-notice.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -108,8 +117,37 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
     flushQueue, retireSession,
+    // Timer ownership integration tests use these real business entry points with an injected clock.
+    scheduleWakeV2, cancelPendingWakeTimerV2, setupSleepTimerV2,
+    scheduleReplyCheckV2, cancelReplyCheckV2, scheduleProactiveCheckV2, cancelProactiveCheckV2,
+    clearSocialV2Timers, armPendingWakeLease, disarmPendingWakeLease, clearAllPendingWakeLeases,
+    pendingWakeKeys, pendingWakeLeaseTimers,
+    // Wake-policy extraction: expose the real bridge adapters + refresh/ensure helpers
+    // so integration tests exercise the same functions production calls.
+    normalizeSpeakerIdsV2, defaultWakeConfigV2, hasExplicitEndV2, isSleepingConfigV2,
+    preSleepWaitBlockedV2, computeWakeSafetyV2, wakePriorityV2,
+    isDirectedAtAi, evaluateWakeTriggerV2,
+    // Reply timing baseline preparation: direct access to the unchanged production functions.
+    suggestQuietMsV2, replyTimingV2,
+    setSelfNickname(value) { selfNickname = value; },
+    refreshDefaultWakeConfigV2, refreshAllDefaultWakeConfigsV2, ensureWakeableV2,
     voiceCfg, voiceLibrary, resolveVoicePathForV2, resolveVoicePathForOperator,
     voiceBudgetCheck, sendVoiceV2, sendVoiceForV2, assertOutboundAuditOk,
+    sendImageV2, resolveSendImageUrl, SEND_IMAGE_MAX_BYTES, sendImageHeaders,
+    // Three pure seams: retain old-name adapters as test surface, plus the real
+    // consumers used by the integration test. Harness-only, not production APIs.
+    isCjkLikeChar, convertExampleSpacesToComma, findCjkSpaceWarning, findSplitBoundaryWarning,
+    mimeFromBuffer, mimeFromUrl, getImageDimensions, base64FromMaybe,
+    currentRoleHintV2, fetchOneBotImage,
+    // Pure-policy wave: retain the 11 old-name adapters as a focused test surface
+    // (send gaps / tool-log formatting / shared-memory text). Not production APIs.
+    clampGapV2, computeGapsV2,
+    redactSensitive, sanitizeToolArgs,
+    // Node3 runtime records: the four legacy-named wrappers stay private to main() in
+    // production; the harness exposes them only so fixtures can exercise the real store.
+    readFeedbackEntries, appendFeedbackEntry, readToolLog, appendToolLog,
+    sanitizeSharedTextV2, isUnsafeMemoryKeyV2, isQqUidV2, markSharedInjectionV2,
+    stripInternalImpressionFieldsV2, stripInternalTopicFieldsV2, normalizeMemoryIncludeV2,
     setMode(value) { currentMode = value; },
     setReady(value) { dshReady = value; },
     setPresets(value) { dshPresetIds = value; dshDefaultPreset = 'standard'; },
@@ -132,7 +170,10 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
-    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl,
+    ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...tiebaLib,
+    // 与生产入口使用同一组职责模块；只把调用者提供的临时路径传给文件仓库。
+    ...coreBindings, ...roleCard, ...retryObserver, ...retryDiagnostic, ...errorNotice,
+    defaultErrorNoticeGate: errorNotice.createErrorNoticeGate(),
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
     // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。
     hardenDir: () => ({ ok: true, detail: 'stub' }),

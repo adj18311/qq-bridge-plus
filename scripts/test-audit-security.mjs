@@ -59,7 +59,7 @@ function mockTransport(t, scripts) {
 test('sensitive audit catches UNC paths and quoted JSON credentials', () => {
   for (const value of [
     String.raw`\\server\share\private.txt`,
-    String.raw`C:\Users\someone\config.json`,
+    String.raw`C:\Users\fixture-user\config.json`,
     '/root/.ssh/id_rsa',
     '{"token":"fixture-only-token"}',
     '{"accessToken": "fixture-only-token"}',
@@ -105,6 +105,68 @@ test('HTTP transport pins the validated IP and preserves Host and TLS SNI', asyn
   assert.equal(requests[0].options.path, '/page?q=1');
 });
 
+// ── 追加请求头（safeFetch 的第三个参数）：登录态接入的最小口子 ──────────────
+//
+// 三条必须钉住的回归：
+//   ① 不传 opts 时请求头**逐字节不变**（默认头集合的精确断言，防止顺手改动把反爬头弄丢）；
+//   ② 传了 opts.headers 只追加/覆盖这些头，Host 仍由 URL 决定；
+//   ③ 追加头不能变成绕过防护的手段（覆盖 host / 头注入 / 内网地址全部照旧拒绝）。
+test('without opts the request headers stay exactly the pinned default set', async (t) => {
+  const { requests } = mockTransport(t, [{ body: 'fixture' }]);
+  await safeFetch('https://public.test/page?q=1');
+  assert.deepEqual(requests[0].options.headers, {
+    host: 'public.test',
+    'user-agent': 'Mozilla/5.0',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'accept-language': 'zh-CN,zh;q=0.9',
+  });
+});
+
+test('opts.headers only appends, and Host stays pinned to the URL', async (t) => {
+  const { requests } = mockTransport(t, [{ body: 'fixture' }]);
+  await safeFetch('https://public.test/page', 50000, { headers: { Cookie: 'fixture_key=fixture_value' } });
+  assert.deepEqual(requests[0].options.headers, {
+    host: 'public.test',
+    'user-agent': 'Mozilla/5.0',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'accept-language': 'zh-CN,zh;q=0.9',
+    cookie: 'fixture_key=fixture_value',
+  });
+  // 值里的空对象等价于「什么都没加」；undefined/null 走默认路径。
+  const { requests: noop } = mockTransport(t, [{ body: 'fixture' }]);
+  await safeFetch('https://public.test/page', 50000, { headers: {} });
+  assert.deepEqual(Object.keys(noop[0].options.headers), ['host', 'user-agent', 'accept', 'accept-language']);
+  assert.equal(noop[0].options.headers.cookie, undefined);
+});
+
+test('appended headers survive same-origin redirects but are dropped across origins', async (t) => {
+  // 跨源用「同 IP 不同端口」构造（离线测试里的 DNS 只认少数夹具域名，不能换域名）。
+  const { requests } = mockTransport(t, [
+    { status: 302, headers: { location: '/next' }, produce() {} },
+    { body: 'ok' },
+    { status: 302, headers: { location: 'http://93.184.216.34:8080/next' }, produce() {} },
+    { body: 'ok' },
+  ]);
+  await safeFetch('http://93.184.216.34/start', 1000, { headers: { cookie: 'a=1' } });
+  assert.equal(requests[0].options.headers.cookie, 'a=1');
+  assert.equal(requests[1].options.headers.cookie, 'a=1', '同源重定向必须保留（否则登录态一跳转就丢）');
+  await safeFetch('http://93.184.216.34/start', 1000, { headers: { cookie: 'a=1' } });
+  assert.equal(requests[2].options.headers.cookie, 'a=1');
+  assert.equal(requests[3].options.headers.cookie, undefined, '跨源重定向必须丢掉追加头：不能把 cookie 送给第三方');
+});
+
+test('header overrides cannot bypass the address guard, replace Host, or inject lines', async (t) => {
+  const { requests } = mockTransport(t, []);
+  await assert.rejects(safeFetch('http://93.184.216.34/', 1000, { headers: { Host: 'evil.test' } }), /host/);
+  await assert.rejects(safeFetch('http://93.184.216.34/', 1000, { headers: { host: 'evil.test' } }), /host/);
+  await assert.rejects(safeFetch('http://93.184.216.34/', 1000, { headers: { cookie: 'a=1\r\nx-evil: 1' } }), /换行/);
+  await assert.rejects(safeFetch('http://93.184.216.34/', 1000, { headers: 'cookie' }), /普通对象/);
+  // 内网地址防护仍在**最终目标**上生效：带着 headers 也照旧在发请求前拒绝。
+  await assert.rejects(safeFetch('http://127.0.0.1/', 1000, { headers: { cookie: 'a=1' } }), /禁止/);
+  await assert.rejects(safeFetch('http://[::1]/', 1000, { headers: { cookie: 'a=1' } }), /禁止/);
+  assert.equal(requests.length, 0, '这些调用一个请求都不该发出去');
+});
+
 test('redirect bodies are closed immediately and internal redirects are rejected', async (t) => {
   const { requests, responses } = mockTransport(t, [{ status: 302, headers: { location: 'http://127.0.0.1/' }, produce() {} }]);
   await assert.rejects(safeFetch('http://93.184.216.34/'), /禁止/);
@@ -138,6 +200,74 @@ test('image byte limits and signatures are checked', async (t) => {
   await assert.rejects(safeFetchBuffer('http://93.184.216.34/', 11), /大小限制/);
   assert.equal(responses[1].destroyed, true);
   await assert.rejects(safeFetchBuffer('http://93.184.216.34/'), /不是有效图片/);
+});
+
+// ── safeFetchBuffer 的追加请求头（t78）：贴吧图床要 referer，口子必须和 safeFetch 同一套边界 ──
+//
+// 三条必须钉住的回归：不传时请求头**逐字节不变**（图片默认头集合是独立的一份，别顺手改动）、
+// 传了只追加且 `host` 仍由 URL 决定、以及「带着头也不能绕过防护」（覆盖 host / 头注入 / 内网）。
+test('safeFetchBuffer without opts keeps the pinned image default headers', async (t) => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 0]);
+  const { requests } = mockTransport(t, [{ body: png }]);
+  await safeFetchBuffer('http://93.184.216.34/', 12);
+  assert.deepEqual(requests[0].options.headers, {
+    host: '93.184.216.34',
+    'user-agent': 'Mozilla/5.0',
+    accept: 'image/*,*/*;q=0.8',
+    'accept-language': 'zh-CN,zh;q=0.9',
+  });
+  // 追加头只影响这一次请求：紧接着的默认调用仍然一个额外头都没有。
+  const { requests: again } = mockTransport(t, [{ body: png }]);
+  await safeFetchBuffer('http://93.184.216.34/', 12, { headers: {} });
+  assert.deepEqual(Object.keys(again[0].options.headers), ['host', 'user-agent', 'accept', 'accept-language']);
+});
+
+test('safeFetchBuffer appends headers, keeps Host pinned, and still refuses bypasses', async (t) => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 0]);
+  const { requests } = mockTransport(t, [{ body: png }, { body: png }, { body: png }, { body: png }]);
+  const fetched = await safeFetchBuffer('https://public.test/pic.png', 12, {
+    headers: { Referer: 'https://tieba.baidu.com/', Cookie: 'fixture_key=fixture_value' }
+  });
+  assert.deepEqual(fetched.buffer, png);
+  assert.deepEqual(requests[0].options.headers, {
+    host: 'public.test',
+    'user-agent': 'Mozilla/5.0',
+    accept: 'image/*,*/*;q=0.8',
+    'accept-language': 'zh-CN,zh;q=0.9',
+    referer: 'https://tieba.baidu.com/',
+    cookie: 'fixture_key=fixture_value',
+  });
+  assert.equal(requests[0].options.hostname, '93.184.216.34', '请求仍然打到已校验的 IP');
+  assert.equal(requests[0].options.servername, 'public.test', 'TLS SNI 仍是原始域名');
+
+  // 同源重定向保留追加头、跨源丢掉（图床常 302 到 CDN，但凭据不能跟着走）。
+  const { requests: redir } = mockTransport(t, [
+    { status: 302, headers: { location: '/moved.png' }, produce() {} },
+    { body: png },
+  ]);
+  await safeFetchBuffer('http://93.184.216.34/pic', 12, { headers: { referer: 'https://tieba.baidu.com/' } });
+  assert.equal(redir[0].options.headers.referer, 'https://tieba.baidu.com/');
+  assert.equal(redir[1].options.headers.referer, 'https://tieba.baidu.com/', '同源重定向必须保留');
+  const { requests: cross } = mockTransport(t, [
+    { status: 302, headers: { location: 'http://93.184.216.34:8080/moved.png' }, produce() {} },
+    { body: png },
+  ]);
+  await safeFetchBuffer('http://93.184.216.34/pic', 12, { headers: { cookie: 'a=1' } });
+  assert.equal(cross[0].options.headers.cookie, 'a=1');
+  assert.equal(cross[1].options.headers.cookie, undefined, '跨源重定向必须丢掉追加头');
+
+  // 防护照旧：覆盖 host / 头注入 / 非法类型 / 内网地址，全部在发请求前拒绝。
+  const { requests: guard } = mockTransport(t, []);
+  await assert.rejects(safeFetchBuffer('http://93.184.216.34/', 12, { headers: { Host: 'evil.test' } }), /host/);
+  await assert.rejects(safeFetchBuffer('http://93.184.216.34/', 12, { headers: { referer: 'a\r\nx-evil: 1' } }), /换行/);
+  await assert.rejects(safeFetchBuffer('http://93.184.216.34/', 12, { headers: 'referer' }), /普通对象/);
+  await assert.rejects(safeFetchBuffer('http://127.0.0.1/', 12, { headers: { referer: 'https://tieba.baidu.com/' } }), /禁止/);
+  await assert.rejects(safeFetchBuffer('http://[::1]/', 12, { headers: { referer: 'https://tieba.baidu.com/' } }), /禁止/);
+  assert.equal(guard.length, 0, '这些调用一个请求都不该发出去');
+
+  // 跳转到内网：带着追加头也照旧在**最终目标**上被拒。
+  mockTransport(t, [{ status: 302, headers: { location: 'http://127.0.0.1/x.png' }, produce() {} }]);
+  await assert.rejects(safeFetchBuffer('http://93.184.216.34/', 12, { headers: { referer: 'https://tieba.baidu.com/' } }), /禁止/);
 });
 
 test('text and image requests have a total deadline despite continuous incoming data', async (t) => {

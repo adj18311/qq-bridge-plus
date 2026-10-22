@@ -51,9 +51,14 @@ fs.writeFileSync(path.join(tmpHome, 'profiles', 'web', 'package.json'), JSON.str
 fs.symlinkSync(path.join(ROOT, 'plugins', 'qq-mode-console'), path.join(tmpHome, 'plugins', 'qq-mode-console'), 'junction');
 
 function runSetup(label) {
+  // 固定「没有 DSH CLI」的环境：不让宿主机的 PATH / DSH_INSTALL_ASAR / DSH_CLI 干扰断言。
+  // DSH_INSTALL_ASAR 指向不存在的路径 ⇒ ASAR 推断失败；PATH 只有 Node 目录 ⇒ PATH 查找失败。
+  const env = { ...process.env, DSH_HOME: tmpHome, PATH: path.dirname(process.execPath) };
+  delete env.DSH_CLI;
+  env.DSH_INSTALL_ASAR = path.join(tmpHome, 'absent-install', 'resources', 'app.asar');
   const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'setup-dsh.mjs'), 'web'], {
     // 保留最小 PATH（进程启动需要），但把 dsh CLI 排除在外 → 跳过自动 pnpm 安装那一步
-    env: { ...process.env, DSH_HOME: tmpHome, PATH: path.dirname(process.execPath) },
+    env,
     encoding: 'utf8',
     cwd: ROOT,
   });
@@ -63,8 +68,8 @@ function runSetup(label) {
   return r;
 }
 
-runSetup('第 1 次运行');
-runSetup('第 2 次运行');
+const firstRun = runSetup('第 1 次运行');
+const secondRun = runSetup('第 2 次运行');
 
 const finalPatch = fs.readFileSync(path.join(tmpHome, 'profiles', 'web', 'cordis.patch.yml'), 'utf8');
 
@@ -125,6 +130,21 @@ for (const p of ['qq-chat', 'qq-chat-v2']) {
 const legacyDir = path.join(tmpHome, '.agent-presets');
 console.log(`${legacyDir && !fs.existsSync(legacyDir) ? '✅' : '❌'} 未创建 0.1.7 已废弃的 ~/.dsh/.agent-presets`);
 if (fs.existsSync(legacyDir)) failed += 1;
+
+// 断言 7：没有 DSH CLI 时优雅降级 —— 只打 info 级「无需操作」，
+// 不再出现旧版的 exit 1 / "is not recognized" / "请把 bin 加入 PATH 后重跑" 告警，且退出码仍为 0。
+for (const [label, result] of [['第 1 次运行', firstRun], ['第 2 次运行', secondRun]]) {
+  const out = String(result.stdout ?? '');
+  const infoOk = out.includes('未找到 dsh CLI') && out.includes('无需操作');
+  const exitOk = result.status === 0;
+  const noMisleadingWarn = !/(退出码|exit\s*[1-9]|is not recognized|请手动|加入 PATH|手动执行)/i.test(out);
+  console.log(`${infoOk ? '✅' : '❌'} ${label}：无 CLI 时输出 info 级「未找到 dsh CLI；…无需操作」`);
+  console.log(`${exitOk ? '✅' : '❌'} ${label}：退出码 0（实际 ${result.status}）`);
+  console.log(`${noMisleadingWarn ? '✅' : '❌'} ${label}：无 exit 1 / 手动重跑 / 改 PATH 之类误导告警`);
+  if (!infoOk) failed += 1;
+  if (!exitOk) failed += 1;
+  if (!noMisleadingWarn) failed += 1;
+}
 
 console.log(failed === 0 ? '\n✅ setup-dsh.mjs 幂等性测试通过' : `\n❌ ${failed} 项失败`);
 process.exit(failed === 0 ? 0 : 1);

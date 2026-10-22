@@ -154,9 +154,36 @@ function validateLimit(value, name) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} 必须为正整数`);
 }
 
+/**
+ * 把调用方**追加**的请求头规范成可安全合并的普通对象（`safeFetch(url, maxChars, { headers })`）。
+ *
+ * 三条硬边界（都是为了让「追加头」不变成新的注入面）：
+ *   · 不传（undefined/null）⇒ 返回 null：调用方走**逐字节不变**的默认头路径，行为与以前完全一致；
+ *   · **不允许覆盖 `host`**（含任意大小写）：请求打到哪个 IP 由 URL 校验决定，Host/SNI 必须与 URL
+ *     一致，否则「已校验 IP + 任意 Host」就是一台可被用来打任意虚拟主机的代理；直接抛错而不是静默丢弃，
+ *     避免调用方以为设置生效了；
+ *   · 名称必须是合法 HTTP token、值必须单行（拒 CR/LF，防请求头注入）。非法输入在**发请求之前**抛错。
+ */
+function normalizeHeaderOverrides(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('headers 必须是普通对象');
+  const out = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const key = String(name).trim().toLowerCase();
+    if (!/^[!#$%&'*+\-.^_`|~0-9a-z]+$/.test(key)) throw new Error(`请求头名称非法：${name}`);
+    if (key === 'host') throw new Error('headers 不能覆盖 host');
+    if (value === undefined || value === null) continue;
+    const text = String(value);
+    if (/[\r\n]/.test(text)) throw new Error(`请求头值不能包含换行：${name}`);
+    out[key] = text;
+  }
+  return out;
+}
+
 // 使用已校验的 IP 发起请求，保留原始 Host/SNI，禁止重新解析 DNS。
 // 总时限包含 TCP/TLS、响应头和响应体；仅 socket idle timeout 无法阻止慢速滴流。
-function requestOnce(url, ip, limit, binary = false) {
+// `extraHeaders` 为已规范化的追加头（见 normalizeHeaderOverrides）：null 表示一个字节都不加。
+function requestOnce(url, ip, limit, binary = false, extraHeaders = null) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let req;
@@ -176,18 +203,21 @@ function requestOnce(url, ip, limit, binary = false) {
     }, REQUEST_TIMEOUT_MS);
     const mod = url.protocol === 'https:' ? https : http;
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    // 默认头集合逐字节保持原样（键序也不变）；只有调用方显式传了 headers 时才在后面追加。
+    const headers = {
+      host: url.host,
+      'user-agent': 'Mozilla/5.0',
+      accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'accept-language': 'zh-CN,zh;q=0.9',
+    };
+    if (extraHeaders) Object.assign(headers, extraHeaders);
     try {
       req = mod.request({
         hostname: ip,
         port: url.port || (url.protocol === 'https:' ? 443 : 80),
         path: url.pathname + url.search,
         method: 'GET',
-        headers: {
-          host: url.host,
-          'user-agent': 'Mozilla/5.0',
-          accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'accept-language': 'zh-CN,zh;q=0.9',
-        },
+        headers,
         servername: url.protocol === 'https:' && !net.isIP(hostname) ? hostname : undefined,
         rejectUnauthorized: url.protocol === 'https:',
         timeout: REQUEST_TIMEOUT_MS,
@@ -254,16 +284,27 @@ function requestOnce(url, ip, limit, binary = false) {
   });
 }
 
-export async function safeFetch(urlString, maxChars = 50000) {
+/**
+ * 读取一个 URL 并返回正文。
+ *
+ * `opts.headers`（可选）是**追加/覆盖**请求头的最小口子：不传时请求头、超时、重定向与地址防护
+ * 与以前**逐字节一致**；传了也仍然遵守原有防护——每一跳（含重定向后的最终目标）都重新
+ * `validateFetchUrl`，`host` 由 URL 决定不接受覆盖，且跨源重定向会**丢掉**追加头（否则调用方给的
+ * 凭据会被一次开放重定向送去第三方）。
+ */
+export async function safeFetch(urlString, maxChars = 50000, opts = {}) {
   validateLimit(maxChars, 'maxChars');
   const MAX_REDIRECTS = 5;
+  let extraHeaders = normalizeHeaderOverrides(opts?.headers);
   let { url, ip } = await validateFetchUrl(urlString);
+  const origin = url.origin;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, ip, maxChars);
+    const result = await requestOnce(url, ip, maxChars, false, extraHeaders);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
       ({ url, ip } = await validateFetchUrl(next));
+      if (url.origin !== origin) extraHeaders = null;
       continue;
     }
     const body = result.body || '';
@@ -287,17 +328,32 @@ export function looksLikeImageBuffer(buf) {
   return false;
 }
 
-/** 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。 */
-export async function safeFetchBuffer(urlString, maxBytes = 4 * 1024 * 1024) {
+/**
+ * 抓取图片字节并返回 Buffer（带 SSRF 防护，且校验确实为图片）。
+ *
+ * `opts.headers`（可选）与 `safeFetch` 走**同一套**规范化与边界（`normalizeHeaderOverrides`）：
+ *   · 不传 ⇒ 请求头、超时、重定向、逐跳地址校验与以前**逐字节一致**（`binary` 形态的默认头集合
+ *     也一个键都没动）；
+ *   · 传了 ⇒ 只**追加/覆盖**这些头，`host` 仍由 URL 决定（覆盖 `host` 直接抛错，不静默丢弃）；
+ *   · 头名必须是合法 token、值必须单行（拒 CR/LF）；非法输入在发请求之前抛错；
+ *   · 跨源重定向丢掉追加头（否则贴吧图床的 referer/cookie 会被一次开放重定向送去第三方）。
+ *
+ * 为什么需要它（t78）：贴吧图床对 `referer` 有要求（不带 referer 会 403），而「带上来源页」这件事
+ * 只能由调用方追加。
+ */
+export async function safeFetchBuffer(urlString, maxBytes = 4 * 1024 * 1024, opts = {}) {
   validateLimit(maxBytes, 'maxBytes');
   const MAX_REDIRECTS = 5;
+  let extraHeaders = normalizeHeaderOverrides(opts?.headers);
   let { url, ip } = await validateFetchUrl(urlString);
+  const origin = url.origin;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, ip, maxBytes, true);
+    const result = await requestOnce(url, ip, maxBytes, true, extraHeaders);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
       ({ url, ip } = await validateFetchUrl(next));
+      if (url.origin !== origin) extraHeaders = null;
       continue;
     }
     if (result.statusCode < 200 || result.statusCode >= 300) {

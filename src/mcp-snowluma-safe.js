@@ -18,6 +18,7 @@ import { z } from 'zod';
 // 在 MCP 里拦会连「安全拒绝理由」都拿不到，反而让模型无法把话说清楚。
 import { SENSITIVE_RE } from './sensitive.js';
 import { serializeModelData } from './qq-model-view.js';
+import { longWaitFetch, longWaitBudget } from './long-wait-http.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -138,9 +139,11 @@ async function agentApi(path, init = {}) {
   // 令牌本身仍然只在真有时才发：/api/status 的模式探测（legacyReadToolAllowed）本来就是
   // 无令牌调用，桥接对它单独放行并按最小对象返回。
   headers['x-agent-call'] = '1';
-  const res = await fetch(`${agentApiBase()}${path}`, { ...rest, headers, signal: AbortSignal.timeout(timeoutMs) });
+  const request = path === '/api/socialV2/wait' ? longWaitFetch : fetch;
+  const res = await request(`${agentApiBase()}${path}`, { ...rest, headers, signal: AbortSignal.timeout(timeoutMs) });
   let body = null;
   try { body = await res.json(); } catch { body = null; }
+  if (path === '/api/socialV2/wait' && body === null) throw new Error('等待接口返回无效 JSON');
   if (!res.ok) {
     throw new Error(body?.error || `桥接 API HTTP ${res.status}`);
   }
@@ -171,7 +174,7 @@ async function legacyReadToolAllowed() {
   return String(status?.mode ?? '') === 'closed-agent';
 }
 
-const server = new McpServer({ name: 'snowluma-safe', version: '0.3.1' });
+const server = new McpServer({ name: 'snowluma-safe', version: '1.0.0' });
 
 // ── 工具开关必须在**注册期**生效，而不是只在校验期 ──────────────────────────
 //
@@ -218,10 +221,13 @@ const TOOL_CONFIG_FLAGS = {
   qq_list_stickers: 'listStickers',
   qq_get_sticker_image: 'getStickerImage',
   qq_send_sticker: 'sendSticker',
+  qq_send_image: 'sendImage',
   qq_collect_sticker: 'collectSticker',
   qq_get_self_image: 'getSelfImage',
   qq_sticker_note: 'stickerNote',
   qq_set_sticker_remark: 'setStickerRemark',
+  qq_tieba_list: 'tiebaList',
+  qq_tieba_read: 'tiebaRead',
 };
 const disabledTools = [];
 {
@@ -643,14 +649,14 @@ if (cfg.socialV2?.tools?.sendPoke !== false) {
 
 server.tool(
   'qq_wait_for_messages',
-  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 quietMs 静默，已安静足够就立即返回；读取/思考时新到的消息也会返回，新消息重算静默。timeoutMs 是最长预算，不要求等满；预算到但 quiet=false 不代表对方已说完。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；先等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。静默下限由后台配置，默认 10000ms。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。决定潜水/收尾时才用默认用途加 timeoutMs=300000 完成沉睡前观察，不能把 5 分钟观察放在首答之前；短等待不能代替。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。preSleepWaitRemainingMs 仅供准备收尾时参考。',
+  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 quietMs 静默，已安静足够就立即返回；读取/思考时新到的消息也会返回。群聊静默固定 3 秒，且无论 purpose 是 messages 还是 reply，从第一条新消息到达起最多再等 6 秒（固定上限，后续消息不延长）；私聊沿用推荐旧配置（通常 10~12 秒）。timeoutMs 是最长预算，不要求等满；返回 waitLimitReached=true 或 quiet=false 只表示这次等待结束，不代表对方已说完——先看本次 newMessages 再决定回复还是收尾，不要机械重开等待。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；先等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。群聊的 quietMs 由桥接固定覆盖为 3 秒（不是后台配置下限）；私聊按后台推荐配置。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。决定潜水/收尾时才用默认用途加 timeoutMs=300000 完成沉睡前观察，不能把 5 分钟观察放在首答之前；短等待不能代替。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。preSleepWaitRemainingMs 仅供准备收尾时参考。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
     purpose: z.enum(['messages', 'reply']).optional().describe('默认 messages：等新消息/回复/睡前观察；reply：回复前短静默，计入最后来信后已过去的时间，绝不授予睡前观察资格'),
     timeoutMs: z.number().optional().describe('等待预算毫秒数，默认 30000、最大 600000；reply 达到静默即返回，不必等满；沉睡前观察用 messages 并传 300000'),
     minNewMessages: z.number().optional().describe('仅 messages 用途：至少等到多少条新消息才进入静默窗口，默认 1；reply 用途会忽略它'),
-    quietMs: z.number().optional().describe('静默窗口毫秒数，建议 10000~12000；reply 从最后来信开始计时，messages 只在等到新消息后计时；后台默认至少 10000')
+    quietMs: z.number().optional().describe('静默窗口毫秒数：群聊由桥接固定覆盖为 3000，且无论 purpose 是 messages 还是 reply，首条新消息后最多再等 6000 毫秒（后续消息不延长）；私聊按 qq_get_prompt 推荐值（通常 10000~12000）；reply 从最后来信开始计时，messages 只在等到新消息后计时；群聊不受该参数与后台配置影响，私聊缺省取后台配置')
   },
   async ({ key, token, purpose, timeoutMs, minNewMessages, quietMs }) => {
     try {
@@ -658,7 +664,7 @@ server.tool(
         method: 'POST',
         body: JSON.stringify({ key, purpose, timeoutMs, minNewMessages, quietMs }),
         headers: { 'x-agent-token': token },
-        timeoutMs: Math.min(725000, (Number(timeoutMs) || 30000) + Math.max(Number(quietMs) || 0, 10000) + 20000)
+        timeoutMs: longWaitBudget(timeoutMs, getConfig()?.socialV2?.wait)
       });
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
@@ -1009,6 +1015,35 @@ if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.sendSticker
   );
 }
 
+// 发图片（qq_send_image）：与表情/语音同属"发送类"，但**不受** sticker.enabled 影响（它不是表情）。
+// 硬边界全部在桥接侧（白名单图床 / 单张 ≤4MiB / 频率上限 / 白名单会话），这里只负责把
+// `url` 原样交给 /api/socialV2/send-image 并把失败原因**如实**带回给模型。
+if (cfg.socialV2?.tools?.sendImage !== false) {
+  server.tool(
+    'qq_send_image',
+    '把一张图片发到指定会话（群聊或私聊）。url **必须是白名单图床的图片地址**（目前只允许贴吧图床：*.baidu.com / *.bdstatic.com / *.bdimg.com / *.bcebos.com；qq_tieba_read 的返回文本里会逐张列出可用地址，格式是「- 图N: <url>」）。桥接会自己下载后按 OneBot 的 image 段发出，所以：① 其它地址（example.com 之类的普通网址、本机/内网地址、data:/base64: 串）一律被拒绝，不要反复重试；② 单张 ≤4MiB，超限**如实失败**（不会截断成半张图）；③ 下载失败 / 非白名单主机 / 超过体积 / 发送失败都会把**原因如实**告诉你，不要把这些失败说成"已经发出去了"；④ 发送计入该会话的发送频率上限（maxSendPerMinute / maxSendPerHour），被限流会明确报错，不会静默放行。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      url: z.string().describe('白名单图床的图片地址（贴吧图床 *.baidu.com / *.bdstatic.com / *.bdimg.com / *.bcebos.com 下的 http(s) 图片；来自 qq_tieba_read 文本里的「- 图N: <url>」）')
+    },
+    async ({ key, token, url }) => {
+      try {
+        const data = await agentApi('/api/socialV2/send-image', {
+          method: 'POST',
+          body: JSON.stringify({ key, url: String(url), token }),
+          headers: { 'x-agent-token': token },
+          // 下载最多 4MiB + 一次发送，给 120 秒（与 send-sticker 同一量级，但不必给到 300 秒）。
+          timeoutMs: 120000
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `发送图片失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
 if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.collectSticker !== false) {
   server.tool(
     'qq_collect_sticker',
@@ -1241,6 +1276,194 @@ if (cfg.socialV2?.tools?.getForwardMsg !== false) {
         return { content };
       } catch (error) {
         return { content: [{ type: 'text', text: `查看合并转发失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+}
+
+// ── 贴吧楼层图片：URL → 图像内容（t78 切片）─────────────────────────────────
+//
+// 分工（设计如此）：桥接端点只**提取并返回 URL 数组**（`images: [...]`），
+// 下载与「变成图像内容」在这里——因为 MCP 侧已有现成范式：`qq_get_message_images` 就是把图片
+// 作为 `{ type:'image', mimeType, data }` 直接返回给视觉模型。
+//
+// 数量/体积上限、逐张的「未取」说明都由 `tieba-lib.js` 的 `buildTiebaImageContent` 实现
+// （那里同一处放 `TIEBA_IMAGE_MAX` / `TIEBA_IMAGE_BYTES_MAX` / `TIEBA_IMAGE_TOTAL_BYTES_MAX` /
+// 移动版 UA，避免两处漂移），这里只负责**按需加载**并把它交付给模型。依赖是**惰性**加载的：
+//   · 模块按需加载（不是进程启动时）：读帖工具第一次被调用（或第一次真的读到带图的楼层）才加载；
+//   · 加载失败（模块缺失/环境裁剪）**如实说明**，绝不让整个工具报错——正文本身还是有价值的；
+//   · 也不写成文件顶部的静态 import：那会让「只复制少数几个文件」的测试夹具直接启动失败
+//     （scripts/test-qq-model-view.mjs 就只复制 mcp-snowluma-safe.js / qq-model-view.js / sensitive.js）。
+let tiebaImageModulePromise = null;
+function loadTiebaImageModule() {
+  if (!tiebaImageModulePromise) {
+    tiebaImageModulePromise = import('./tieba-lib.js').catch((error) => {
+      tiebaImageModulePromise = null; // 失败不缓存，下次调用可以重试
+      throw error;
+    });
+  }
+  return tiebaImageModulePromise;
+}
+
+/**
+ * `qq_tieba_read` 的调用超时：`60000 + 20000 × 计划页数`（不传 pages / 单页 ⇒ 80 秒，
+ * 5 页 ⇒ 160 秒，10 页 ⇒ 260 秒）。
+ *
+ * 为什么按页数自适应：桥接端是**逐页串行**抓取（每页之间还有节流间隔），固定 120 秒在 10 页时
+ * 会把「还在正常抓取」误判成超时；反过来单页请求也没必要占着 260 秒的预算。
+ * 「计划页数」**复用 tieba-lib 的 `normalizePageRange`**（就是上面那条惰性加载路径，没有第二份
+ * 页码范围解析）：它已经把「一次最多 `THREAD_PAGES_MAX`（10）页」的截断算好了，所以 `pages=1-12`
+ * 的计划页数是 10、超时也是 260 秒，与桥接真正会抓的页数一致。
+ * 纯算术单独一个函数，是为了可离线断言（`scripts/test-tieba-lib.mjs` 直接看真实回调用的毫秒数）。
+ */
+function tiebaReadTimeoutMs(plannedPages) {
+  const count = Number.isFinite(plannedPages) && plannedPages > 0 ? Math.floor(plannedPages) : 1;
+  return 60000 + 20000 * count;
+}
+
+/** 巡逻单次读帖的页数兜底（与 `tieba-lib.js` 的 `PATROL_DEFAULTS.maxPagesPerThread` 一致）。 */
+const PATROL_MAX_PAGES_FALLBACK = 2;
+
+/**
+ * 从 `pages` 参数解析出计划页数（走 tieba-lib 的惰性加载入口），再算超时；模块不可用就按单页预算。
+ *
+ * `reason="patrol"`（自主逛贴吧，t79）时额外按巡逻的页数预算截断：桥接会把巡逻读帖**钳到前 N 页**，
+ * 所以等待预算也该按截断后的页数算，不能按模型「想要 10 页」占着 260 秒。
+ * ⚠️ 只在**显式**传 `patrol` 时钳制：不传 reason（或 `user`）时与改动前逐字节一致 ——
+ * `scripts/test-tieba-lib.mjs` 里那组超时断言（10 页 ⇒ 260 秒）就是这个契约的钉子。
+ */
+async function resolveTiebaReadTimeoutMs(pages, { reason, maxPagesPerThread } = {}) {
+  try {
+    const { normalizePageRange } = await loadTiebaImageModule();
+    if (typeof normalizePageRange === 'function') {
+      const patrol = String(reason ?? '').trim().toLowerCase() === 'patrol';
+      const bound = Number(maxPagesPerThread) >= 1 ? Math.floor(Number(maxPagesPerThread)) : PATROL_MAX_PAGES_FALLBACK;
+      const { pages: planned } = patrol
+        ? normalizePageRange(pages, { maxPages: bound })
+        : normalizePageRange(pages);
+      return tiebaReadTimeoutMs(Array.isArray(planned) ? planned.length : 1);
+    }
+  } catch {
+    // 模块缺失/被裁剪：算不出计划页数不该让读帖整体失败，退回单页预算（80 秒）。
+  }
+  return tiebaReadTimeoutMs(1);
+}
+
+/**
+ * 巡逻页数预算（`socialV2.patrol.maxPagesPerThread`）。配置里通常没有这一节（默认值在桥接的
+ * 默认表里），所以读不到就用 `PATROL_MAX_PAGES_FALLBACK`。
+ */
+function patrolMaxPagesPerThread() {
+  try {
+    const n = Number(getConfig()?.socialV2?.patrol?.maxPagesPerThread);
+    return Number.isFinite(n) && n >= 1 ? Math.floor(n) : PATROL_MAX_PAGES_FALLBACK;
+  } catch {
+    return PATROL_MAX_PAGES_FALLBACK;
+  }
+}
+
+// ── 贴吧只读工具（二代仿真模式） ──────────────────────────────────────────────
+//
+// 桥接侧是 GET 端点 `/api/socialV2/tieba/bar` 与 `/api/socialV2/tieba/thread`，成功返回
+// `{ok:true,key,url,blocked,text}`，失败返回 `{ok:false,error,throttled}`（被节流时 HTTP 429）。
+// agentApi 已经在非 2xx 和 `ok:false` 两种情况下抛出 `error`，所以这里**不需要**再解析一遍 body.ok。
+//
+// text / error 都是桥接写好的成品文案：命中百度安全验证时 text 就是那句
+// 「【贴吧】被百度安全验证拦住了…改用 mcp__web-search-safe__web_search 搜 site:tieba.baidu.com」。
+// 这里原样透传，不改写、不吞掉、也不再追加自己的解释 —— 多包一层措辞只会让降级路径失真。
+if (cfg.socialV2?.tools?.tiebaList !== false) {
+  server.tool(
+    'qq_tieba_list',
+    '查看某个百度贴吧「吧」的帖子列表（只读）。bar 传**吧名本身**（例如「原神」「编程」），不要带 http 链接、不要带「吧」以外的后缀、也不要加多余符号；page 从 1 开始、最多 100（默认 1）。这是只读工具：不会发帖、不会回帖、不需要登录。**发起方必须自己说清**：你自己想起来看一眼（话题相关，不是定时巡逻）传 reason="patrol"（缺省也算 patrol）——这会占用**每日 12 次自主访问上限**，并在静默时段 01:00–08:00 被拒；用户在会话里**明确要求**你去看时传 reason="user"（不受限、不计数）。想看更多页要在会话里先问用户，被拒（如 PATROL_DAILY_CAP / PATROL_DISABLED）如实说明、不要重试、不要绕道。如果这次抓取被百度安全验证拦住，返回的 text 会直接给出降级搜索建议（用 mcp__web-search-safe__web_search 搜 site:tieba.baidu.com），照那段话做即可，不要反复重试本工具。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      bar: z.string().describe('吧名本身，例如「原神」「编程」（不是 URL，也不要写成「原神吧」以外的形式）'),
+      page: z.number().int().positive().optional().describe('页码，从 1 开始（最多 100），默认 1'),
+      reason: z.enum(['patrol', 'user']).optional().describe('发起方：自己想起来看 = "patrol"（缺省即 patrol，占每日上限）；用户明确要求 = "user"（不受限、不计数）'),
+      trigger: z.string().optional().describe('触发这次访问的话题（一句话，如「群里在聊原神新版本」），只记进巡逻日志；patrol 时请填')
+    },
+    async ({ key, token, bar, page, reason, trigger }) => {
+      try {
+        const q = new URLSearchParams({ key, bar: String(bar) });
+        if (page !== undefined) q.set('page', String(page));
+        if (reason !== undefined) q.set('reason', String(reason));
+        if (trigger !== undefined && String(trigger).trim() !== '') q.set('trigger', String(trigger).slice(0, 120));
+        const data = await agentApi(`/api/socialV2/tieba/bar?${q.toString()}`, {
+          headers: { 'x-agent-token': token },
+          timeoutMs: 120000
+        });
+        // 端点给的 text 是给模型看的成品（含被拦时的降级建议），原样返回。
+        if (typeof data?.text === 'string' && data.text) {
+          return { content: [{ type: 'text', text: data.text }] };
+        }
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        // 失败时同样原样透传 error（被节流/被安全验证/被巡逻闸门拒绝的说明都在这句里）。
+        return { content: [{ type: 'text', text: String(error?.message ?? error) }], isError: true };
+      }
+    }
+  );
+}
+
+if (cfg.socialV2?.tools?.tiebaRead !== false) {
+  server.tool(
+    'qq_tieba_read',
+    '读取某个百度贴吧帖子的正文与回复（只读）。tid 是帖子链接里的那串数字，从这些形态里取：…/p/<tid>、…/f?kz=<tid>、…/mo/q/m?kz=<tid>（三种链接指向同一个帖子）。链接里带 pn=N 或页面上写「第 N 页」时，把 N 传给 page；page 从 1 开始、最多 100（默认 1）。**想看更多页就带 pages**：pages 是字符串，写单页 "2" 或范围 "1-3"（也接受 "1,3"），一次最多 10 页，超出会被截断并在正文里写明「只取了前 N 页」；不传 pages 就只读 page 那一页。**页数越多越慢**（逐页串行抓取），所以本工具的等待预算按页数自适应（单页 80 秒、10 页 260 秒）。**发起方必须自己说清**：你自己想起来看（话题相关，不是定时巡逻）传 reason="patrol"（缺省也算 patrol）——巡逻**单次最多读前两页**（第 3 页起没有预算，超出的页会被钳掉并在正文里写明），并占用**每日 12 次自主访问上限**、静默时段 01:00–08:00 被拒；**想继续往后读，先在会话里问一句「这条帖后面还有料，要我继续读吗？」，用户同意后再读（继续读的部分不占每日次数）**；用户在会话里**明确要求**你去看时传 reason="user"（不受限、不计数）。被拒（如 PATROL_DAILY_CAP / PATROL_DISABLED）如实说明、不要重试、不要绕道。**楼层里的图片会直接作为图像内容返回**（一次最多 10 张、单张 ≤4MiB、合计 ≤25MiB，超出的会在文字里注明「未取」及张数）——所以第一页没图时，用 pages 往后翻页也常常能看到后面几页的图。这是只读工具：不会回帖、不会点赞、不需要登录。如果这次抓取被百度安全验证拦住，返回的 text 会直接给出降级搜索建议（用 mcp__web-search-safe__web_search 搜 site:tieba.baidu.com），照那段话做即可，不要反复重试本工具。',
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      tid: z.string().describe('帖子 tid（帖子链接里的那串数字：…/p/<tid>、…/f?kz=<tid>、…/mo/q/m?kz=<tid>；必须是纯数字）'),
+      page: z.number().int().positive().optional().describe('页码：链接带 pn=N 或写着「第 N 页」时传 N；从 1 开始（最多 100），默认 1'),
+      pages: z.string().optional().describe('想看多页时传页码范围字符串：单页 "2"、连续多页 "1-3"、离散页 "1,3"；一次最多 10 页（超出会截断并说明）。不传就只读 page 那一页'),
+      reason: z.enum(['patrol', 'user']).optional().describe('发起方：自己想起来看 = "patrol"（缺省即 patrol：最多前两页、占每日上限、静默时段被拒）；用户明确要求 = "user"（不受限、不计数）'),
+      trigger: z.string().optional().describe('触发这次访问的话题（一句话，如「群里在聊原神新版本」），只记进巡逻日志；patrol 时请填')
+    },
+    async ({ key, token, tid, page, pages, reason, trigger }) => {
+      try {
+        const q = new URLSearchParams({ key, tid: String(tid) });
+        if (page !== undefined) q.set('page', String(page));
+        if (pages !== undefined && String(pages).trim() !== '') q.set('pages', String(pages).trim());
+        if (reason !== undefined) q.set('reason', String(reason));
+        if (trigger !== undefined && String(trigger).trim() !== '') q.set('trigger', String(trigger).slice(0, 120));
+        // 超时按**计划页数**自适应（见 `resolveTiebaReadTimeoutMs`）：桥接逐页串行抓取，
+        // 页数越多越慢，固定 120 秒在 10 页时会误杀正常抓取、单页时又白白占预算；
+        // patrol 还要按巡逻的页数预算再截一次（桥接会把巡逻读帖钳到前 N 页）。
+        const timeoutMs = await resolveTiebaReadTimeoutMs(pages, {
+          reason,
+          maxPagesPerThread: patrolMaxPagesPerThread()
+        });
+        const data = await agentApi(`/api/socialV2/tieba/thread?${q.toString()}`, {
+          headers: { 'x-agent-token': token },
+          timeoutMs
+        });
+        // 楼层图片：桥接只给了 URL 数组，**下载与变成图像内容在这里做**（见上面的惰性加载器）。
+        // 数量/体积超限与下载失败都写进文字里，绝不静默：模型要能知道「本来有几张、为什么少了几张」。
+        const imageUrls = Array.isArray(data?.images) ? data.images : [];
+        const foundCount = Number(data?.imagesFound) > imageUrls.length ? Number(data.imagesFound) : imageUrls.length;
+        let imageContent = [];
+        let notes = [];
+        if (imageUrls.length) {
+          try {
+            const { buildTiebaImageContent } = await loadTiebaImageModule();
+            ({ content: imageContent, notes } = await buildTiebaImageContent(imageUrls));
+          } catch (error) {
+            notes = [`（图片模块不可用，本次未取图：${error?.message ?? error}）`];
+          }
+        }
+        // 同 qq_tieba_list：text 原样透传；图片说明单独一段，不去改写桥接写好的正文。
+        // 没有 `notes` = 桥接**没给任何图片地址**：这里如实说「没有楼层图片可取」并留一个出口——
+        // 桥接正文里可能已经写明「只认出 N 个服务端占位地址」，别让这两句看起来互相矛盾
+        // （占位地址是「有图片槽位但取不到真图」，不是「这帖没有图」）。
+        const baseText = typeof data?.text === 'string' && data.text ? data.text : serializeModelData(data);
+        const text = notes.length
+          ? `${baseText}\n\n本次楼层图片（页面里共认出 ${foundCount} 张）：\n${notes.join('\n')}`
+          : imageUrls.length
+            ? `${baseText}\n\n（本次认出的 ${imageUrls.length} 张楼层图片地址没能取回图像内容）`
+            : `${baseText}\n\n（本次读的页面里没有楼层图片可取；若正文里写了「占位地址」，那就是服务端只给占位图、没有真图）`;
+        return { content: [{ type: 'text', text }, ...imageContent] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: String(error?.message ?? error) }], isError: true };
       }
     }
   );

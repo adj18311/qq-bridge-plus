@@ -19,6 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { dshModulesDir } from './dsh-modules.mjs';
+import { discoverDshAsar, visitDshAsarSources } from './dsh-asar.mjs';
 
 /** 名字形态：小写字母开头，允许下划线与连字符，长度合理。 */
 export const TOOL_NAME_RE = /^[a-z][a-z0-9_-]{1,40}$/;
@@ -32,7 +33,16 @@ export function dshPackagesDir() {
 export function dshPluginDirs() {
   const home = process.env.DSH_HOME
     || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, '.dsh') : null);
-  return [home ? path.join(home, 'plugins') : null].filter((p) => p && fs.existsSync(p));
+  return [
+    home ? path.join(home, 'plugins') : null,
+    home ? path.join(home, 'profiles', process.env.DSH_PROFILE || 'desktop', 'node_modules') : null,
+  ].filter((p) => p && fs.existsSync(p));
+}
+
+function isDirectory(entry, full) {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try { return fs.statSync(full).isDirectory(); } catch { return false; }
 }
 
 function walkFiles(dir, out = [], depth = 0, maxDepth = 5) {
@@ -41,7 +51,7 @@ function walkFiles(dir, out = [], depth = 0, maxDepth = 5) {
   for (const e of entries) {
     if (e.name === 'node_modules' || e.name === '.git') continue;
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) { if (depth < maxDepth) walkFiles(full, out, depth + 1, maxDepth); }
+    if (isDirectory(e, full)) { if (depth < maxDepth) walkFiles(full, out, depth + 1, maxDepth); }
     else out.push(full);
   }
   return out;
@@ -75,7 +85,7 @@ function extractFromPatch(text, source, add) {
  * @returns `{ names: Map<name, Set<source>>, packages: string[] }`。
  *          `packages` 是实际扫过的包/插件名，便于诊断「一个都没扫到」。
  */
-export function collectDshToolNames({ packagesDir, pluginDirs } = {}) {
+export function collectDshToolNames({ packagesDir, pluginDirs, asarPath } = {}) {
   const names = new Map();
   const packages = [];
   const add = (name, source) => {
@@ -84,9 +94,19 @@ export function collectDshToolNames({ packagesDir, pluginDirs } = {}) {
     names.get(name).add(source);
   };
 
+  const archive = asarPath ?? (packagesDir === undefined && !process.env.DSH_TOOL_PACKAGES ? discoverDshAsar() : null);
+  if (archive) {
+    packages.push(...visitDshAsarSources(archive, ({ filename, text, pkg }) => {
+      if (/\.(?:js|mjs|cjs|ts)$/.test(filename)) extractFromSource(text, pkg, add);
+      else if (/\.patch\.ya?ml$/.test(filename)) extractFromPatch(text, pkg, add);
+    }));
+  }
   const roots = [];
-  const pkgRoot = packagesDir ?? dshPackagesDir();
-  if (fs.existsSync(pkgRoot)) roots.push({ dir: pkgRoot, filter: /^dsh-/ });
+  let pkgRoot = packagesDir;
+  if (pkgRoot === undefined) {
+    try { pkgRoot = dshPackagesDir(); } catch (error) { if (!archive) throw error; }
+  }
+  if (pkgRoot && fs.existsSync(pkgRoot)) roots.push({ dir: pkgRoot, filter: /^dsh-/ });
   for (const dir of pluginDirs ?? dshPluginDirs()) {
     // 用户的插件目录里全是插件包（含 .bak-* 备份，也一起扫：备份里的旧名字
     // 仍然说明这个名字曾经真实存在）。
@@ -97,7 +117,8 @@ export function collectDshToolNames({ packagesDir, pluginDirs } = {}) {
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
     for (const e of entries) {
-      if (!e.isDirectory()) continue;
+      if (e.name === '.bin' || e.name === '.pnpm' || (!filter && e.name === '@deepseek-ai')) continue;
+      if (!isDirectory(e, path.join(dir, e.name))) continue;
       if (filter && !filter.test(e.name)) continue;
       const pkgDir = path.join(dir, e.name);
       packages.push(e.name);
@@ -109,7 +130,7 @@ export function collectDshToolNames({ packagesDir, pluginDirs } = {}) {
       }
     }
   }
-  return { names, packages };
+  return { names, packages: [...new Set(packages)], asarPath: archive };
 }
 
 /** 便利包装：只要名字集合。 */

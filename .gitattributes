@@ -5,3 +5,14 @@
 # 实测（git ls-files --eol）：索引里 start.bat / restart.bat 是 LF、只有工作区是 CRLF ⇒
 # autocrlf=false 的 clone 会拿到 LF-only 的 .bat。这一行让检出恒为 CRLF。
 *.bat text eol=crlf
+
+# 冻结 fixture / 测试脚本的跨平台完整性：这些文件的内容哈希与锚点被回归逐字比对，
+# 工作区被 core.autocrlf 或编辑器转成 CRLF 就会让 bodyhash / mutant-anchor 类断言失败。
+*.js text eol=lf
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yml text eol=crlf
+*.yaml text eol=crlf
+# 批处理 / 命令脚本仍是 CRLF（cmd.exe 解析 LF-only 批处理的 goto/标签会出错）。
+*.cmd text eol=crlf

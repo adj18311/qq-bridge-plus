@@ -16,6 +16,8 @@ import {
 } from '../src/send-voice-lib.js';
 // 独立发语音工具在仓库上一级（不在本仓库里）：位置解析与"不在时怎么跳过"走共享口径。
 import { hasVoiceTool, skipVoiceTool, voiceToolPath } from './voice-tool-locator.mjs';
+import { splitLongSegment } from '../src/core/qq-text.mjs';
+import { parseRuntimeConfig } from '../src/core/runtime-config.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -133,10 +135,11 @@ console.log('## 配置项（AI 发语音默认关闭，等语音库准备好再�
   const cfg = exCfg;
   const ex = exCfg;
   ok(ex.socialV2?.voice?.dir === 'audio', 'config.example.json 含 voice 段');
-  // 代码里的默认值也必须一致，否则删掉 config.json 里那两行就会变回"默认开"
-  const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
-  ok(/sendVoice: false,/.test(bridgeSrc), 'bridge.js 里 tools 默认 sendVoice: false');
-  ok(/cfg\.socialV2\.voice = \{\s*\n\s*enabled: false,/.test(bridgeSrc), 'bridge.js 里 voice 默认 enabled: false');
+  // 代码里的默认值也必须一致，否则删掉 config.json 里那两行就会变回"默认开"。
+  // 默认值已抽到 core/runtime-config；直接解析空配置，断言真实生效的默认（不是源码文本位置）。
+  const { config: defaults } = parseRuntimeConfig({});
+  ok(defaults.socialV2?.tools?.sendVoice === false, 'runtime-config 默认 tools.sendVoice=false');
+  ok(defaults.socialV2?.voice?.enabled === false, 'runtime-config 默认 voice.enabled=false');
 }
 
 console.log('## MCP 工具与 bridge 路由');
@@ -213,7 +216,14 @@ console.log('## 控制台契约');
   const html = fs.readFileSync(path.join(ROOT, 'public', 'console.html'), 'utf8');
   const bridgeSrc = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
   ok(html.includes('data-v2-tool="sendVoice"'), '控制台有 sendVoice 工具开关');
-  ok(bridgeSrc.includes("'sendVoice']"), 'config API 的 toolFlags 含 sendVoice');
+  // 这条断言的本意是「config API 归一化用的 toolFlags 白名单里含 sendVoice」，
+  // 而不是「sendVoice 恰好排在数组最后」。旧写法匹配字面量 `'sendVoice']`，把**顺序**
+  // 也一起钉死了：只要往 toolFlags 末尾追加新工具（例如 tiebaList / tiebaRead），
+  // 收敛点从 sendVoice 挪走，断言就会与真实事实脱节而误报。
+  // 这里改成先从源码里取出 toolFlags 数组字面量，再查它是否含该元素 —— 顺序无关。
+  // 取不到数组（重命名/删除）时 flagsSrc 为空串，断言同样失败（fail closed，没有放松判定）。
+  const flagsSrc = (/const toolFlags = \[([\s\S]*?)\]/.exec(bridgeSrc) ?? ['', ''])[1];
+  ok(/'sendVoice'/.test(flagsSrc), 'config API 的 toolFlags 含 sendVoice');
   const uniq = (a) => [...new Set(a)].sort();
   const views = uniq([...html.matchAll(/data-view="([a-z0-9-]+)"/g)].map((m) => m[1]));
   const pages = uniq([...html.matchAll(/data-page="([a-z0-9-]+)"/g)].map((m) => m[1]));
@@ -271,14 +281,8 @@ console.log('## 回归：长消息里的 URL 不许被切碎（P1，曾静默丢
 {
   // 由来：splitLongSegment 用 \u0000URL<n>\u0000 占位符保护 URL，但对超长片段直接按
   // max 硬切，会拦腰切断占位符 → 还原正则失配 → URL 整条消失 + 裸 NUL + 字面量 "URL0"
-  // 被发进 QQ 消息。这里把函数从 bridge.js 抽出来，对 1..max+20 所有长度做校验。
-  const src = fs.readFileSync(path.join(ROOT, 'src', 'bridge.js'), 'utf8');
-  const at = src.indexOf('function splitLongSegment');
-  ok(at > 0, '在 bridge.js 里找到 splitLongSegment');
-  if (at > 0) {
-    const endMarker = src.indexOf('\n  }', src.indexOf('return out', at));
-    const fnSrc = src.slice(at, endMarker + 4);
-    const splitLongSegment = eval(`(${fnSrc})`);   // eslint-disable-line no-eval
+  // 被发进 QQ 消息。直接测试生产模块，对 1..max+20 所有长度做校验。
+  {
     const url = 'https://example.com/very/long/path?q=1&x=2';
     const max = 500;
     let broken = 0;

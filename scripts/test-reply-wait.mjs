@@ -12,7 +12,9 @@ async function fixture(run, cfg = {}) {
     ...cfg,
   } } });
   h.setMode('reserved2');
-  const key = 'group:456';
+  // 这一份 fixture 锁的是通用（私聊）旧语义；群聊固定 3s/6s 的新行为由
+  // scripts/test-group-wait.mjs 专门覆盖，避免两边互相污染。
+  const key = 'private:123';
   const st = h.getSocialV2State(key);
   const server = h.startConsoleServer();
   if (!server.listening) await new Promise(resolve => server.once('listening', resolve));
@@ -46,9 +48,46 @@ async function fixture(run, cfg = {}) {
     req.end();
   });
   const append = text => h.appendSocialV2Message(key, 'fixture-person', text, text, false, false, `fixture-${st.lastUnreadSeq + 1}`, [], '789', []);
-  try { await run({ h, key, st, request, get, append }); }
+  try { await run({ h, key, st, request, get, append, server }); }
   finally { await new Promise(resolve => server.close(resolve)); await h.close(); }
 }
+
+test('disconnected long wait releases its lease and cannot grant sleep observation', () => fixture(async ({ st, key, request, server }) => {
+  const controller = new AbortController();
+  const pending = fetch(`http://127.0.0.1:${server.address().port}/api/socialV2/wait`, {
+    method: 'POST', headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': st.agentToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ key, timeoutMs: 1800 }), signal: controller.signal,
+  }).catch(() => null);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  controller.abort();
+  await pending;
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const next = await request('wait', { timeoutMs: 500 });
+  assert.equal(next.status, 200, JSON.stringify(next.data));
+  assert.equal(next.data.timeout, true);
+  assert.equal(st.preSleepWaitSatisfiedAt, 0);
+  assert.equal(st.preSleepWaitObservedAt, 0);
+}));
+
+test('disconnect during the quiet window does not expose a message or record an observation', () => fixture(async ({ st, key, request, server, append }) => {
+  const controller = new AbortController();
+  const pending = fetch(`http://127.0.0.1:${server.address().port}/api/socialV2/wait`, {
+    method: 'POST', headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': st.agentToken, 'content-type': 'application/json' },
+    body: JSON.stringify({ key, timeoutMs: 1800, quietMs: 800 }), signal: controller.signal,
+  }).catch(() => null);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  append('arrived before disconnect');
+  await new Promise(resolve => setTimeout(resolve, 350));
+  controller.abort();
+  await pending;
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(st.modelSeenSeqs.size, 0);
+  assert.equal(st.preSleepWaitSatisfiedAt, 0);
+  assert.equal(st.preSleepWaitObservedAt, 0);
+  assert.equal(st.unread.length, 1);
+  const next = await request('wait', { timeoutMs: 500 });
+  assert.equal(next.status, 200);
+}));
 
 test('first reply does not wait out timeout when the snapshot message is already quiet', () => fixture(async ({ h, key, st, request, append }) => {
   append('a complete first message');

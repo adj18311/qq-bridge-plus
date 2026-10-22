@@ -21,9 +21,19 @@ function fixture(name, patch = '') {
   const repo = path.join(base, 'repo');
   const home = path.join(base, 'home');
   fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
-  fs.copyFileSync(path.join(root, 'scripts/setup-dsh.mjs'), path.join(repo, 'scripts/setup-dsh.mjs'));
-  // setup-dsh.mjs 直接从仓库源生成 bundle patch，生成器必须一起进夹具。
-  fs.copyFileSync(path.join(root, 'scripts/build-agent-preset-patches.mjs'), path.join(repo, 'scripts/build-agent-preset-patches.mjs'));
+  for (const file of [
+    'setup-dsh.mjs',
+    // setup-dsh.mjs 直接从仓库源生成 bundle patch，生成器必须一起进夹具。
+    'build-agent-preset-patches.mjs',
+    // F.2：setup 现在还会导入 0.2.1 Team 片段部署模块及其两个依赖。
+    'dsh-021-team-patch.mjs',
+    'dsh-asar.mjs',
+    'file-io.mjs',
+    // setup 用绝对路径定位 DSH CLI（DSH_CLI → 安装目录 → PATH）；新模块必须一起进夹具。
+    'dsh-cli.mjs',
+  ]) {
+    fs.copyFileSync(path.join(root, 'scripts', file), path.join(repo, 'scripts', file));
+  }
   fs.cpSync(path.join(root, 'dsh'), path.join(repo, 'dsh'), { recursive: true });
   fs.cpSync(path.join(root, 'plugins'), path.join(repo, 'plugins'), { recursive: true });
   fs.cpSync(parserRoot, path.join(repo, 'node_modules/js-yaml'), { recursive: true });
@@ -35,7 +45,16 @@ function fixture(name, patch = '') {
     dsh: { profile: { bundles: ['existing'] } },
   }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
-  Object.assign(env, { PATH: path.dirname(process.execPath), DSH_HOME: home, HOME: home, USERPROFILE: home, QQ_BRIDGE_SKIP_DSH_INSTALL: '1' });
+  Object.assign(env, {
+    PATH: path.dirname(process.execPath),
+    DSH_HOME: home,
+    HOME: home,
+    USERPROFILE: home,
+    QQ_BRIDGE_SKIP_DSH_INSTALL: '1',
+    // 夹具刻意不含 DSH ASAR：把 Team 片段固定为「版本读不到 ⇒ 跳过」，
+    // 结果不受宿主机 DSH 版本或 DSH_INSTALL_ASAR 影响。
+    QQ_SKIP_021_TEAM_PATCH: '1',
+  });
   const run = (profile = 'web', extraEnv = {}) => spawnSync(process.execPath, [path.join(repo, 'scripts/setup-dsh.mjs'), profile], {
     env: { ...env, ...extraEnv }, cwd: repo, encoding: 'utf8', timeout: 15000,
   });

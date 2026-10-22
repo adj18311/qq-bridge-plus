@@ -19,7 +19,7 @@ async function loadPersona() {
   } catch (dshError) {
     try {
       const mod = await import(pathToFileURL(require_.resolve('@deepseek-ai/dsh-persona')).href);
-      return { mod, from: '仓库依赖 @deepseek-ai/dsh-persona（devDependency，与目标 DSH 版本对齐）' };
+      return { mod, from: '仓库 devDependency（仅校验字段；0.2.1 运行时另跑 verify:adaptation）' };
     } catch (repoError) {
       return { mod: null, why: `DSH 安装处：${dshError?.message ?? dshError}；仓库依赖：${repoError?.message ?? repoError}` };
     }
@@ -56,12 +56,12 @@ check('新配置 {prefix} 通过（个人前缀）', () => {
   if (v.prefix.length === 0) throw new Error('prefix 为空');
 });
 
-check('新配置 {prefix, suffix} 通过（含 {{cwd}} 模板）', () => {
+check('新配置 {prefix, suffix} 通过（0.2.1 不再引用 cwd 模板）', () => {
   const v = persona.Config({
     prefix: 'You are a coding agent powered by the {{model}} model.',
-    suffix: 'Your working directory is {{cwd}}.',
+    suffix: '',
   });
-  if (v.suffix !== 'Your working directory is {{cwd}}.') throw new Error('suffix 未保留');
+  if (v.suffix !== '') throw new Error('suffix 应为空');
   if (v.complete !== false) throw new Error('complete 默认值异常');
   if (v.includeRuntimeContext !== true) throw new Error('includeRuntimeContext 默认值异常');
 });
@@ -83,8 +83,8 @@ for (const preset of ['qq-chat', 'qq-chat-v2']) {
   check('保留了 {{model}} 变量', () => {
     if (!/\{\{model\}\}/.test(row.config.prefix)) throw new Error('prefix 缺少 {{model}}');
   });
-  check('保留了 {{cwd}} 变量', () => {
-    if (!/\{\{cwd\}\}/.test(row.config.suffix ?? '')) throw new Error('suffix 缺少 {{cwd}}');
+  check('不引用 0.2.1 已移除的 {{cwd}} 变量', () => {
+    if (/\{\{cwd\}\}/.test(`${row.config.prefix}\n${row.config.suffix ?? ''}`)) throw new Error('仍引用 {{cwd}}');
   });
   check('不再包含已废弃的 text 字段', () => {
     if (Object.hasOwn(row.config, 'text')) throw new Error('仍有 text 字段');

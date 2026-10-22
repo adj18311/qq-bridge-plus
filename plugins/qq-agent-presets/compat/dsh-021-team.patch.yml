@@ -1,0 +1,10 @@
+# DSH 0.2.1 desktop profile deployment fragment; keep outside the generic bundle
+# so earlier DSH installations do not load the version-specific Team adapter.
+- id: tool-agent-team
+  disabled: true
+- insert:
+    - id: qq-native-team-filter
+      name: qq-agent-presets/qq-native-team-filter.mjs
+      config:
+        freshProvider: spawn
+        forkProvider: fork

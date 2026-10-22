@@ -88,7 +88,7 @@ for (const p of ['qq-chat', 'qq-chat-v2']) {
     try { persona.Config(row.config); schemaOk = true; } catch {}
     check(`preset ${p}: persona.config 通过 DSH schema`, schemaOk);
   }
-  check(`preset ${p}: 保留 {{model}} / {{cwd}} 变量`, /\{\{model\}\}/.test(row.config.prefix) && /\{\{cwd\}\}/.test(row.config.suffix ?? ''));
+  check(`preset ${p}: 保留 {{model}} 且不引用已移除的 {{cwd}}`, /\{\{model\}\}/.test(row.config.prefix) && !/\{\{cwd\}\}/.test(row.config.suffix ?? ''));
 }
 
 // ── 2. 部署侧：DSH 0.1.7 的 preset 机制 ──────────────────────────────────────
@@ -158,7 +158,7 @@ const scanned = collectDshToolNames();
 if (scanned.names.size === 0) {
   skip('守卫名单与 DSH 真实工具名对账', '未扫到任何 DSH 包（DSH 未安装？）');
 } else {
-  const fabricated = [...guardNames].filter((n) => !n.startsWith('dev_') && !scanned.names.has(n));
+  const fabricated = [...guardNames].filter((n) => !n.startsWith('dev_') && !guardMod.OPTIONAL_RESTRICTED_TOOL_NAMES?.includes(n) && !scanned.names.has(n));
   check('守卫名单无拼错的假名（restrict 不会静默失效）', fabricated.length === 0, fabricated.join(', ') || `扫过 ${scanned.packages.length} 个包`);
 }
 
