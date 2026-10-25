@@ -7,6 +7,7 @@
 [![upstream](https://img.shields.io/badge/upstream-Derpyu520%2Fqq--bridge-informational)](https://github.com/Derpyu520/qq-bridge)
 
 只在 Windows 11 x64 + DSH Desktop 0.2.1-rc.2 上做过实机验证。这是 [qq-bridge](https://github.com/Derpyu520/qq-bridge) 的衍生项目，上游和致谢放到后面单独说。
+跟随Bilibili视频教程可以配置好除贴吧功能以外的所有功能:https://www.bilibili.com/video/BV1ss8R6zERG/（视频来自上游）
 
 ## 这是什么
 
