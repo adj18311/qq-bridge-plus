@@ -1,0 +1,23 @@
+{
+  "name": "qzone-safe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "QQ空间 qzone-safe DSH plugin entry (default closed; dispatch injected by runtime)",
+  "type": "module",
+  "main": "./index.mjs",
+  "license": "UNLICENSED",
+  "engines": {
+    "dsh": ">=0.2.2-0 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.2.2-0 <0.3.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.2.2-rc.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

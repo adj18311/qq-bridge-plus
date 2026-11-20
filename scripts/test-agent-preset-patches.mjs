@@ -112,11 +112,48 @@ console.log('## 4. bundle 声明与安全边界');
     assert.equal(guardFn({ name }), undefined, `白名单应放行 ${name}`);
   }
   ok(true, '白名单放行 QQ MCP 与无害模型侧工具');
+  // Fish Diary 的 4 个工具：既被 mcp__snowluma__ 前缀覆盖，也显式在 SAFE_EXACT 里
+  // （防它们哪天改由 preset 注册成裸名时被 fail-closed 白名单误拒）。
+  for (const name of [
+    'qq_diary_read', 'qq_diary_edit', 'qq_diary_write', 'qq_diary_delete',
+    'mcp__snowluma__qq_diary_read', 'mcp__snowluma__qq_diary_edit',
+    'mcp__snowluma__qq_diary_write', 'mcp__snowluma__qq_diary_delete',
+  ]) {
+    assert.equal(guardFn({ name }), undefined, `白名单应放行日记工具 ${name}`);
+  }
+  ok(true, '白名单放行 4 个日记工具（裸名与 MCP 全名两种形态）');
   let deniedAll = true;
   for (const name of ['bash', 'read', 'write', 'dev_future_unknown_tool', 'mcp__other__x', '', null, undefined, 123]) {
     if (typeof guardFn({ name }) !== 'string') deniedAll = false;
   }
   ok(deniedAll, '非法/未知/空工具名一律拒绝（fail-closed）');
+}
+
+console.log('## 5. Fish Diary：两套预设都写明了日记工具边界（设计卡 §9）');
+{
+  // 这 5 条是用户裁定的边界，缺一条都可能让模型在实际会话里越界（尤其私密日记那条：
+  // 已知风险不加硬闸，全靠提示词自律）。按语义锚点逐条断言，不只数长度。
+  const needles = [
+    // ① 可用 4 个日记工具读写两本日记
+    'qq_diary_read', 'qq_diary_edit', 'qq_diary_write', 'qq_diary_delete',
+    'notebook', 'privy',
+    // ② 每文件每天 10 次写，00:00（北京）重置，超额会被拒
+    '10 次', '北京时间 00:00', 'daily-write-limit',
+    // ③ 覆盖/编辑/删除会自动备份，保留最近 10 份
+    '自动备份', '10 份',
+    // ④ 私密日记内容不得在群聊中转述或复述
+    '私密日记内容不得在群聊中转述或复述',
+    // ⑤ 日记工具本身不发 QQ 消息
+    '不发 QQ 消息',
+  ];
+  for (const name of PRESETS) {
+    const row = load(patchFileFor(name))[0].insert[0];
+    const prefix = row.config.plugins.find((r) => r.id === 'persona')?.config?.prefix ?? '';
+    ok(prefix.includes('【日记'), `${name}: 有独立的日记规则段`);
+    for (const needle of needles) {
+      ok(prefix.includes(needle), `${name}: 日记边界写明「${needle}」`);
+    }
+  }
 }
 
 console.log(failures === 0 ? '\n✅ agent preset patch 契约通过' : `\n❌ ${failures} 项失败`);

@@ -17,6 +17,9 @@ import {
 } from '../src/core/role-store.mjs';
 import { roleCharStats } from '../src/role-card.js';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+// 端口安全：harness 的 console server 用 OS 临时端口，请求由测试自己发出 ⇒ 用原生 http，
+// 避免命中 undici fetch 的 blocked-port 列表（listen(0) ≈0.15%/次 假红）。见 scripts/test-port-safe.mjs。
+import { httpRequest, postJson } from './test-port-safe.mjs';
 
 test('bridge role endpoints use the extracted store and observe hot-updated limits', async () => {
   const h = await bridgeHarness();
@@ -25,11 +28,9 @@ test('bridge role endpoints use the extracted store and observe hot-updated limi
     if (!server.listening) await new Promise(resolve => server.once('listening', resolve));
     const base = `http://127.0.0.1:${server.address().port}`;
     const request = async (endpoint, body) => {
-      const response = await fetch(base + endpoint, {
-        method: body === undefined ? 'GET' : 'POST',
-        headers: { 'x-console-token': 'fixture-console-token', 'content-type': 'application/json' },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
+      const response = body === undefined
+        ? await httpRequest(base + endpoint, { headers: { 'x-console-token': 'fixture-console-token' } })
+        : await postJson(base + endpoint, body, { 'x-console-token': 'fixture-console-token' });
       return { status: response.status, value: await response.json() };
     };
     const content = '# Fixture\n\n' + '字'.repeat(1500);

@@ -399,7 +399,10 @@ export function parseRuntimeConfig(file, configPath = 'config.json') {
   // 注入模块绑定；在启动期多要一个绑定，会让这些夹具在 main() 里直接 ReferenceError。
   cfg.socialV2.patrol = {
     enabled: true,
-    dailyVisitCap: 12,
+    // task-128：自主访问日额度默认 6，可配置 0..99（校验在 src/tieba-lib.js 的
+    // normalizePatrolConfig；新账本 src/core/tieba-patrol-ledger.mjs 也按同一范围校验）。
+    // 调整上限只影响后续放行判定，**不会清空当天已用次数**。
+    dailyVisitCap: 6,
     maxPagesPerThread: 2,
     quietHours: [1, 8],
     ...((cfg.socialV2 && typeof cfg.socialV2.patrol === 'object' && !Array.isArray(cfg.socialV2.patrol)) ? cfg.socialV2.patrol : {})

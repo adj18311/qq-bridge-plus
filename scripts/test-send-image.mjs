@@ -302,6 +302,27 @@ await test('send-image-8：可发图床与 tieba-lib 的 isTiebaImageHost 判定
   }, { globals: { safeFetchBuffer: downloader } });
 });
 
+// ── 8b. 小黑盒图床：精确放行 max-c.com 的图片子域，仿冒域仍拒绝 ──────────────
+await test('send-image-8b：小黑盒图床放行、仿冒域拒绝', async () => {
+  const downloader = fakeDownloader();
+  const allowedHosts = ['imgheybox.max-c.com', 'imgheybox1.max-c.com', 'cdn.max-c.com'];
+  const deniedHosts = ['max-c.com.evil.test', 'evil-max-c.com', 'imgheybox.max-c.com.evil.test'];
+  await withBridge(async (h, server) => {
+    const token = h.getSocialV2State(KEY).agentToken;
+    for (const host of allowedHosts) {
+      assert.equal(isTiebaImageHost(host), true, `${host} 应被白名单接受`);
+      const res = await sendImage(server, { url: `https://${host}/fixture-image.png`, agentToken: token });
+      assert.equal(res.data?.ok, true, `${host} 应放行：${res.raw}`);
+    }
+    for (const host of deniedHosts) {
+      assert.equal(isTiebaImageHost(host), false, `${host} 不应被接受`);
+      const res = await sendImage(server, { url: `https://${host}/fixture-image.png`, agentToken: token });
+      assert.equal(res.status, 400, `${host} 应拒绝：${res.raw}`);
+    }
+    assert.equal(downloader.calls.length, allowedHosts.length, '只有放行域名才会触发下载');
+  }, { globals: { safeFetchBuffer: downloader } });
+});
+
 // ── 9. MCP 侧：qq_send_image 的注册期开关与接线 ───────────────────────────────
 /** 用 vm 跑**真实的** mcp-snowluma-safe.js（去掉 import、桩掉 stdio 与 fetch），拿它注册的工具。 */
 function loadMcpTools(configJson) {

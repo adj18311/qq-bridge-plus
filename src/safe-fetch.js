@@ -183,7 +183,7 @@ function normalizeHeaderOverrides(raw) {
 // 使用已校验的 IP 发起请求，保留原始 Host/SNI，禁止重新解析 DNS。
 // 总时限包含 TCP/TLS、响应头和响应体；仅 socket idle timeout 无法阻止慢速滴流。
 // `extraHeaders` 为已规范化的追加头（见 normalizeHeaderOverrides）：null 表示一个字节都不加。
-function requestOnce(url, ip, limit, binary = false, extraHeaders = null) {
+function requestOnce(url, ip, limit, binary = false, extraHeaders = null, signal = null) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let req;
@@ -192,6 +192,7 @@ function requestOnce(url, ip, limit, binary = false, extraHeaders = null) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (error) reject(error);
       else resolve(result);
     };
@@ -201,6 +202,14 @@ function requestOnce(url, ip, limit, binary = false, extraHeaders = null) {
       req?.destroy(error);
       response?.destroy();
     }, REQUEST_TIMEOUT_MS);
+    const onAbort = () => {
+      const error = new Error('图片下载已取消');
+      finish(error);
+      req?.destroy(error);
+      response?.destroy();
+    };
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
     const mod = url.protocol === 'https:' ? https : http;
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
     // 默认头集合逐字节保持原样（键序也不变）；只有调用方显式传了 headers 时才在后面追加。
@@ -343,16 +352,23 @@ export function looksLikeImageBuffer(buf) {
  */
 export async function safeFetchBuffer(urlString, maxBytes = 4 * 1024 * 1024, opts = {}) {
   validateLimit(maxBytes, 'maxBytes');
+  if (opts?.allowRedirect !== undefined && typeof opts.allowRedirect !== 'boolean') throw new TypeError('allowRedirect 必须为布尔值');
+  const signal = opts?.signal ?? null;
+  if (signal && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function' || typeof signal.aborted !== 'boolean')) throw new TypeError('signal 必须是 AbortSignal');
+  if (signal?.aborted) throw new Error('图片下载已取消');
   const MAX_REDIRECTS = 5;
   let extraHeaders = normalizeHeaderOverrides(opts?.headers);
   let { url, ip } = await validateFetchUrl(urlString);
+  if (signal?.aborted) throw new Error('图片下载已取消');
   const origin = url.origin;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, ip, maxBytes, true, extraHeaders);
+    const result = await requestOnce(url, ip, maxBytes, true, extraHeaders, signal);
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
+      if (opts?.allowRedirect === false) throw new Error('图片重定向不允许');
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
       ({ url, ip } = await validateFetchUrl(next));
+      if (signal?.aborted) throw new Error('图片下载已取消');
       if (url.origin !== origin) extraHeaders = null;
       continue;
     }

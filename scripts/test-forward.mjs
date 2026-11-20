@@ -102,7 +102,24 @@ if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
     const social = JSON.parse(fs.readFileSync(socialV2File, 'utf8'));
-    const conv = social?.conversations ? Object.entries(social.conversations)[0] : null;
+    // ⚠️ Pick a conversation the bridge is actually ALLOWED to read, not just the first one.
+    //
+    // The endpoint checks `modeAllowed(key, ...)` BEFORE the visibility check, so a conversation
+    // outside the allowlist answers 403 "当前模式不允许读取该会话" — and this case was asserting a
+    // 404 for an unknown id against that conversation, i.e. it could never pass, and had it passed
+    // by accident it would have proved nothing about visibility. Measured: the first entry in
+    // state/social-v2.json is group:894089522, which is not in config.allow.groups.
+    const allow = config?.allow ?? {};
+    const allowed = (key) => {
+      const [kind, id] = String(key).split(':');
+      const list = kind === 'group' ? (allow.groups ?? []) : (allow.private ?? []);
+      return list.map(String).includes(String(id));
+    };
+    const entries = social?.conversations ? Object.entries(social.conversations) : [];
+    const conv = entries.find(([key]) => allowed(key)) ?? null;
+    if (conv === null && entries.length > 0) {
+      console.log('⚠️ 跳过桥接端点检查：state/social-v2.json 里没有白名单内的会话');
+    }
     const consoleToken = fs.readFileSync(consoleTokenFile, 'utf8').trim();
     if (conv) {
       const [key, st] = conv;

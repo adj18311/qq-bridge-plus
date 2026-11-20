@@ -8,6 +8,8 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { EventEmitter } from 'node:events';
+import { bindQzoneConnectionEpoch } from '../src/core/qzone-connection-epoch-runtime.mjs';
 import * as markdown from '../src/md-to-plain.js';
 import * as sensitive from '../src/sensitive.js';
 import * as wait from '../src/v2-wait.js';
@@ -28,10 +30,12 @@ import * as roleCard from '../src/role-card.js';
 import * as retryObserver from '../src/retry-observer.js';
 import * as retryDiagnostic from '../src/retry-diagnostic.js';
 import * as errorNotice from '../src/error-notice.js';
+import * as quotaNotice from '../src/quota-notice.js';
+import * as quotaRuntime from '../src/quota-notice-runtime.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-export async function bridgeHarness({ config = {}, savedState, globals = {} } = {}) {
+export async function bridgeHarness({ config = {}, savedState, globals = {}, consoleSettings = null } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-audit-bridge-'));
   fs.mkdirSync(path.join(temp, 'src'));
   fs.mkdirSync(path.join(temp, 'state'));
@@ -41,6 +45,21 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     consoleToken: 'fixture-console-token', slang: { enabled: false }, ...config,
   }));
   if (savedState) fs.writeFileSync(path.join(temp, 'state/sessions.json'), JSON.stringify(savedState));
+  // 小黑盒专栏配置：测试默认写一份「全天窗口 + 全开 + 非只读」的快照，
+  // 否则巡逻窗口会随执行时刻摆动（凌晨跑测试时 07:00–23:00 会把所有投递都跳过）。
+  // 窗口语义本身由 test-xiaoheihe-console-settings.mjs 的时刻无关用例覆盖。
+  const defaultConsoleSettings = {
+    schemaVersion: 1,
+    capabilities: { browse: true, post: true, comment: true, reply: true },
+    readOnly: false,
+    patrol: { enabled: true, window: { start: '00:00', end: '00:00' } },
+    quota: { browse: 14, post: 2, comment: 12 },
+  };
+  // consoleSettings === false 表示「故意不写文件」，用于验证 bridge 走 ENOENT ⇒ 任务卡默认值。
+  if (consoleSettings !== false) {
+    fs.writeFileSync(path.join(temp, 'state/xiaoheihe-console-settings.json'), JSON.stringify(consoleSettings ?? defaultConsoleSettings));
+  }
+
   const calls = { created: [], archived: [], sent: [], prompts: [], follows: [], cancelled: [], images: [], http: [] };
   // 语音发送在桥接里是**直接 fetch 网关**（与文本/表情共用 sendChain，但要自己带 record 段），
   // 所以这里给 VM 注入一个记录型 fetch：既不让测试真的发 QQ 消息，又能断言发出的段内容。
@@ -81,9 +100,10 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     stopSessionWork: async (sessionId) => { calls.cancelled.push(sessionId); return { removed: 0 }; },
     callUnary: async (method, params) => { calls.cancelled.push({ method, params }); return success({ accepted: true }); },
   };
-  class FakeBot {
-    async sendPrivateMessage(id, text) { calls.sent.push({ kind: 'private', id, text }); }
-    async sendGroupMessage(id, text) { calls.sent.push({ kind: 'group', id, text }); }
+  class FakeBot extends EventEmitter {
+    // 与真实网关一致：成功发送返回 message_id（汇报回执据此判定 delivered）。
+    async sendPrivateMessage(id, text) { calls.sent.push({ kind: 'private', id, text }); return { message_id: 900000 + calls.sent.length }; }
+    async sendGroupMessage(id, text) { calls.sent.push({ kind: 'group', id, text }); return { message_id: 900000 + calls.sent.length }; }
     async getImage({ file }) {
       calls.images.push(file);
       // Valid 1 × 1 PNG, supplied entirely in memory by the fixture gateway.
@@ -111,12 +131,39 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   source = source.replaceAll('import.meta.url', JSON.stringify(pathToFileURL(path.join(temp, 'src/bridge.js')).href));
   source = source.slice(0, source.indexOf("process.on('SIGINT'"));
   source = source.replace('  bot.onPrivateMessage(async (event) => {', `
+  // 测试接缝：harness 提前 return，无法走到 main 末尾的就绪等待；这里同步启动后台巡逻。
+  if (typeof globalThis === 'object' && globalThis.__backgroundPatrolForceStart === true
+    && cfg.backgroundPatrol?.enabled === true
+    && typeof globalThis.__startBackgroundPatrolWiring === 'function') {
+    await globalThis.__startBackgroundPatrolWiring();
+  }
   return {
     ensureSession, ensureSlangLearnerSession, resolvePresetName, deliverPrompt, drainPromptQueue,
-    sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, promptQueues,
+    sendToQQ, sendStickerV2, handleIncoming, startConsoleServer, cfg, state, api, promptQueues, queued,
     getSocialV2State, appendSocialV2Message, recordSentMessagesV2,
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
     flushQueue, retireSession,
+    // task-86（E1）：后台巡逻运行时（生命周期 + 机会调度）测试控制面。
+    getBackgroundPatrolRuntime: () => backgroundPatrolRuntime,
+    // m33778 方案 2：受限令牌 store（轮换/吊销需要直接驱动真实 store，而不是伪造文件）。
+    getBackgroundAgentTokenStore: () => backgroundAgentTokenStore,
+    getBackgroundPatrolSessionId: () => backgroundPatrolSessionId,
+    getBackgroundPatrolReportOnce: () => backgroundPatrolReportOnce,
+    // 小黑盒汇报状态机：与贴吧各自独立，混用会读错对象（曾导致断言恒绿）。
+    getXhhPatrolReportOnce: () => xhhPatrolReportOnce,
+    getBackgroundPatrolNotifyQueue: () => backgroundPatrolNotifyQueue,
+    getBackgroundPatrolAuditTap: () => backgroundPatrolAuditTap,
+    // m46812：审计写入的直接观察面（失败不抛异常，必须看返回值/计数）。
+    recordBackgroundPatrolAudit,
+    getAuditFailures: () => backgroundPatrolAuditFailures,
+    onBackgroundPatrolAudit,
+    maybeSendTiebaPatrolReport,
+    flushPendingPatrolReports, handleBackgroundPatrolFrame,
+    enqueueBackgroundPatrolNotification,
+    flushBackgroundPatrolNotifications,
+    beginTiebaPatrol,
+    dispatchBackgroundPatrolOpportunity,
+    stopBackgroundPatrolRuntime,
     // Timer ownership integration tests use these real business entry points with an injected clock.
     scheduleWakeV2, cancelPendingWakeTimerV2, setupSleepTimerV2,
     scheduleReplyCheckV2, cancelReplyCheckV2, scheduleProactiveCheckV2, cancelProactiveCheckV2,
@@ -148,15 +195,24 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     readFeedbackEntries, appendFeedbackEntry, readToolLog, appendToolLog,
     sanitizeSharedTextV2, isUnsafeMemoryKeyV2, isQqUidV2, markSharedInjectionV2,
     stripInternalImpressionFieldsV2, stripInternalTopicFieldsV2, normalizeMemoryIncludeV2,
+    // 阶段 2C：桥接侧回执与关停顺序的行为级测试需要这些真实函数（不是复制品）。
+    sendOwnerPrivateWithReceipt, startOwnerNoticeWiring, stopOwnerNoticeWiring, shutdownBridge, bot,
     setMode(value) { currentMode = value; },
     setReady(value) { dshReady = value; },
     setPresets(value) { dshPresetIds = value; dshDefaultPreset = 'standard'; },
     resetEpoch() { sessionEpoch++; },
   };
-  bot.onPrivateMessage(async (event) => {`);
+  bot.onPrivateMessage(async (event) => {
+  if (typeof globalThis === 'object' && globalThis.__backgroundPatrolForceStart === true
+    && cfg.backgroundPatrol?.enabled === true
+    && typeof globalThis.__startBackgroundPatrolWiring === 'function') {
+    await globalThis.__startBackgroundPatrolWiring();
+  }`);
   const timers = new Set();
   const context = vm.createContext({
     fs, path, http, crypto, fileURLToPath, URL, Buffer, AbortSignal, console: { log() {}, error() {} },
+    // 测试接缝：harness 无法驱动真实 DSH ready/preset/mode，直接让后台巡逻立即启动。
+    __backgroundPatrolForceStart: true,
     fetch: fakeFetch,
     // 锁文件探测用（bridge.js 顶层的 consolePortInUse）；
     // 固定桩掉：测试不应该真去 netstat 宿主机。
@@ -167,13 +223,14 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
     setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timers.add(timer); return timer; },
     clearTimeout, setInterval: () => ({ unref() {} }), clearInterval: () => {},
     NodeApiClient: class { constructor() { return api; } },
-    SnowLumaWebSocketClient: FakeBot, text: (s) => s,
+    SnowLumaWebSocketClient: FakeBot, bindQzoneConnectionEpoch, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...tiebaLib,
     // 与生产入口使用同一组职责模块；只把调用者提供的临时路径传给文件仓库。
     ...coreBindings, ...roleCard, ...retryObserver, ...retryDiagnostic, ...errorNotice,
     defaultErrorNoticeGate: errorNotice.createErrorNoticeGate(),
+    ...quotaNotice, ...quotaRuntime,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
     // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。
     hardenDir: () => ({ ok: true, detail: 'stub' }),
@@ -204,7 +261,7 @@ export async function bridgeHarness({ config = {}, savedState, globals = {} } = 
   const bridge = await context.auditReady;
   bridge.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
   bridge.setReady(true);
-  return { ...bridge, calls, temp, async close() {
+  return { ...bridge, calls, temp, context, async close() {
     for (const timer of timers) clearTimeout(timer);
     fs.rmSync(temp, { recursive: true, force: true });
   } };

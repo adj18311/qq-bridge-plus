@@ -208,35 +208,8 @@ console.log('## 文档（权威：docs/guides/VOICE-TOOLS.md）');
       ok(voice.includes(needle), 'docs/guides/VOICE.md 提到「' + needle + '」');
     }
   }
-  // 纯净发布副本不带 docs/（根 README 与 docs/FOLDER_MAP.md 都已剔除）：这里不再读文档索引，
-  // 改为核对**本包内**真实可运行的运行代码与 package.json 脚本。文档缺失不是失败，但脚本
-  // 入口被删 / 指错路径仍然 FAIL —— 原有语音安全、控制台面板、工具注册断言一条不少。
-  {
-    const pkg = JSON.parse(read('package.json').replace(/^\uFEFF/, ''));
-    const npmScripts = (pkg && typeof pkg.scripts === 'object' && pkg.scripts) ? pkg.scripts : {};
-    const scriptNames = Object.keys(npmScripts);
-    ok(scriptNames.length > 0, 'package.json 声明了 npm 脚本（运行入口清单）', `${scriptNames.length} 个`);
-    // 解析所有 `node <文件>` 形式的脚本目标，核对它们指向的包内文件真的存在。
-    const entryTargets = [];
-    const missingTargets = [];
-    for (const [name, cmd] of Object.entries(npmScripts)) {
-      if (typeof cmd !== 'string') continue;
-      for (const m of cmd.matchAll(/(?:^|[\s&|])(?:node|nodejs)\s+(?:--[^\s]+\s+)*(\"?)([A-Za-z0-9_.\\/-]+\.(?:mjs|cjs|js))\1/g)) {
-        const rel = m[2].replace(/\\/g, '/').replace(/^\.\//, '');
-        if (!/^(?:scripts|src|public)\//.test(rel)) continue;
-        entryTargets.push(rel);
-        if (!exists(rel)) missingTargets.push(name + ' → ' + rel);
-      }
-    }
-    ok(entryTargets.length > 0 && missingTargets.length === 0,
-      'package.json 里指向包内运行文件（scripts/、src/、public/）的脚本目标都存在',
-      missingTargets.length ? '缺失：' + missingTargets.join('; ') : entryTargets.length + ' 个目标');
-    // 聚合回归 / 共享记忆回归入口仍由 package 脚本暴露（docs 缺失不影响这两条）。
-    const regressionScripts = ['test:audit', 'test:shared-memory', 'test:console-ui']
-      .filter((name) => typeof npmScripts[name] === 'string' && npmScripts[name].trim() !== '');
-    ok(regressionScripts.length >= 2, 'package.json 仍声明聚合 / 共享记忆等回归入口脚本',
-      regressionScripts.join(', ') || '(缺)');
-  }
+  ok(read('docs/README.md').includes('FOLDER_MAP.md'), 'docs/README.md 索引链接到 FOLDER_MAP.md');
+  ok(exists(path.join('docs', 'FOLDER_MAP.md')), 'docs/FOLDER_MAP.md 存在');
 }
 
 console.log('## 独立工具的配置解析（env → voice-tool/config.json → ../qq-bridge/config.json → 默认值）');

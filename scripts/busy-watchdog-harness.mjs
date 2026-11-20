@@ -20,6 +20,8 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import vm from 'node:vm';
+import { EventEmitter } from 'node:events';
+import { bindQzoneConnectionEpoch } from '../src/core/qzone-connection-epoch-runtime.mjs';
 import * as coreBindings from './bridge-core-bindings.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as markdown from '../src/md-to-plain.js';
@@ -36,6 +38,8 @@ import * as stateAcl from '../src/state-acl.mjs';
 import * as retryObserver from '../src/retry-observer.js';
 import * as retryDiagnostic from '../src/retry-diagnostic.js';
 import * as errorNotice from '../src/error-notice.js';
+import * as quotaNotice from '../src/quota-notice.js';
+import * as quotaRuntime from '../src/quota-notice-runtime.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 export const root = fileURLToPath(new URL('..', import.meta.url));
@@ -53,6 +57,9 @@ export async function busyHarness({ config = {}, transformSource = null, globals
     consoleToken: CONSOLE_TOKEN, slang: { enabled: false }, ...config,
   }));
   const calls = { created: [], prompts: [], sent: [], follows: [], http: [], sessionList: 0 };
+  // 自主机会投递记录：{ key, text, opts }。与 calls.prompts（DSH prompt）分开，
+  // 因为一条 deliverPrompt 可能因重试产生多次 DSH prompt。
+  const deliverPromptCalls = [];
   // C-stall（t44）：`api.sessions.list({})` 的夹具。默认**故意不提供**（等于 DSH 没有这个 API），
   // 由 D 系列用例用 setSessionsList 显式注入；计数器用来断言「窗口未到 ⇒ 一次都不探测」。
   let sessionsListImpl = null;
@@ -86,8 +93,9 @@ export async function busyHarness({ config = {}, transformSource = null, globals
     },
     agentPresets: { list: async () => success({ presets: [{ id: 'standard', isDefault: true }, { id: 'qq-chat' }, { id: 'qq-chat-v2' }] }) },
   };
-  class FakeBot {
-    async sendPrivateMessage(id, text) { calls.sent.push({ kind: 'private', id, text }); }
+  class FakeBot extends EventEmitter {
+    // 回执带非零 message_id：owner 通知通道靠它判「已送达」（真实 QQ 私聊 id 可能为负）。
+    async sendPrivateMessage(id, text) { calls.sent.push({ kind: 'private', id, text }); return { message_id: 12345 }; }
     async sendGroupMessage(id, text) { calls.sent.push({ kind: 'group', id, text }); }
     async request() { return { status: 'ok', retcode: 0, data: [] }; }
   }
@@ -113,6 +121,8 @@ export async function busyHarness({ config = {}, transformSource = null, globals
   source = source.replaceAll('import.meta.url', JSON.stringify(pathToFileURL(path.join(temp, 'src/bridge.js')).href));
   source = source.slice(0, source.indexOf("process.on('SIGINT'"));
   // 在 main() 里提前返回：把看门狗内部结构暴露给断言（不改变 bridge.js 自身）。
+  // 机会投递证据：把返回对象里的 deliverPrompt 包一层（不改 bridge.js 自身行为）。
+  // 只能在实际拿到 bridge 句柄后包，所以放在 startBridge 之后（见下方返回值包装）。
   source = source.replace('  bot.onPrivateMessage(async (event) => {', `
   return {
     cfg, state, api, socialV2, getSocialV2State, ensureSession, sendToQQ,
@@ -135,6 +145,43 @@ export async function busyHarness({ config = {}, transformSource = null, globals
     setPresets(value) { dshPresetIds = value; dshDefaultPreset = 'standard'; },
     resetEpoch() { sessionEpoch++; },
     stallProbeConfigV2, maybeStartStallProbeV2, scanBusyWatchdogKeyV2,
+    // 自主机会接线（t-opp）：定时器与判定必须能在不真等 100 分钟的前提下被驱动。
+    // 暴露的是**函数与状态读取器**，不是内部变量本身 —— 测试不能直接改写定时器。
+    QZONE_OPP: {
+      timer: () => qzoneOpportunityTimer,
+      stopped: () => qzoneOpportunityStopped,
+      readInterval: () => readQzoneOpportunityInterval(),
+      // 诊断接缝：readInterval 吞掉了异常（fail-closed 的正确行为），但测试需要知道为什么。
+      // A1：熔断通知消费的接缝（测试驱动一次消费，不等 60s reconcile）。
+      consumeNotices: () => consumeQzoneOwnerNotices(),
+      noticeCursor: () => qzoneNoticeCursor,
+      readIntervalDiag() {
+        const pluginPath = path.join(STATE_DIR, 'qzone-plugin-state.sqlite');
+        const out = { pluginPath, exists: fs.existsSync(pluginPath) };
+        if (!out.exists) return out;
+        let handle = null;
+        try {
+          handle = openOfflineStore(pluginPath, { enabled: false, tools: {}, limits: {} });
+          const state = handle.read();
+          out.intervalMinutes = state?.intervalMinutes;
+          out.readOk = true;
+        } catch (error) {
+          out.error = error?.constructor?.name + ': ' + (error?.message ?? String(error));
+        } finally {
+          try { handle?.close?.(); } catch {}
+        }
+        return out;
+      },
+      tick: () => runQzoneOpportunityTick(),
+      // 结果日志的纯格式化器（2026-11-19 补）：17:54 那次 tick 留下 offer 却零日志，
+      // 无法区分「宿主拒绝」/「已投递」/「失败」。测试直接断言它的三分支不张冠李戴
+      // ——尤其不能把 skipped 或 delivered 说成成功。
+      describe: (result) => describeQzoneOpportunityResult(result),
+      scheduleNext: () => scheduleNextQzoneOpportunity(),
+      start: () => startQzoneOpportunityLoop(),
+      stop: () => stopQzoneOpportunityLoop(),
+      pluginPath: () => path.join(STATE_DIR, 'qzone-plugin-state.sqlite'),
+    },
   };
   bot.onPrivateMessage(async (event) => {`);
   const context = vm.createContext({
@@ -149,11 +196,25 @@ export async function busyHarness({ config = {}, transformSource = null, globals
     setInterval: (fn, ms) => { const handle = { fn, ms, unrefCalled: false, unref() { this.unrefCalled = true; } }; intervals.push(handle); return handle; },
     clearInterval: () => {},
     NodeApiClient: class { constructor() { return api; } },
-    SnowLumaWebSocketClient: FakeBot, text: (s) => s,
+    SnowLumaWebSocketClient: FakeBot, bindQzoneConnectionEpoch, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...coreBindings, ...retryObserver, ...retryDiagnostic, ...errorNotice,
+    // ── CROSS-REALM ADAPTER for `openOfflineStore` ────────────────────────────────────────────
+    //
+    // MEASURED FAILURE (t-opp): calling `openOfflineStore(path, seed)` from INSIDE the VM throws
+    //
+    //     TypeError: state must be a synchronous plain object
+    //
+    // not because the seed is wrong but because `Object.getPrototypeOf(seed) !== Object.prototype`
+    // across realms: the seed literal is built against the VM's `Object`, while `encode()` compares
+    // against the HOST's `Object.prototype`. Production never sees this (same realm); only the VM
+    // harness does. Rebuilding the seed on the host side is the honest fix — the alternative,
+    // loosening `encode()`'s prototype check, would weaken a real anti-forgery guard in production
+    // code to accommodate a test artifact.
+    openOfflineStore: (target, initial) => coreBindings.openOfflineStore(target, JSON.parse(JSON.stringify(initial))),
     defaultErrorNoticeGate: errorNotice.createErrorNoticeGate(),
+    ...quotaNotice, ...quotaRuntime,
     hardenDir: () => ({ ok: true, detail: 'stub' }),
     processAudioVolume: async (file) => ({ path: String(file), converted: false, applied: false, mode: 'original', volume: 1, loudness: null }),
     cleanupTemp: () => {},
@@ -163,6 +224,13 @@ export async function busyHarness({ config = {}, transformSource = null, globals
   vm.runInContext(`Object.assign(globalThis, (() => { ${modelViewSource}\nreturn { compactModelMessage, compactModelData, serializeModelData }; })());`, context);
   vm.runInContext(source + '\nglobalThis.busyHarnessReady = main();', context);
   const bridge = await context.busyHarnessReady;
+  // 机会投递证据：包一层 deliverPrompt 记录 (key, text, opts)。
+  // 只包**返回句柄上那一份**，不碰 bridge.js 内部闭包 —— 所以生产行为零变化。
+  const originalDeliverPrompt = bridge.deliverPrompt;
+  bridge.deliverPrompt = async (key, text, opts) => {
+    deliverPromptCalls.push({ key, text, opts: opts ?? {} });
+    return originalDeliverPrompt(key, text, opts);
+  };
   bridge.setPresets(['standard', 'qq-chat', 'qq-chat-v2']);
   bridge.setReady(true);
   const logFile = path.join(temp, 'state', 'bridge.log');
@@ -171,6 +239,7 @@ export async function busyHarness({ config = {}, transformSource = null, globals
     calls,
     intervals,
     temp,
+    deliverPromptCalls,
     readLog: () => { try { return fs.readFileSync(logFile, 'utf8'); } catch { return ''; } },
     // C-stall（t44）：注入 api.sessions.list({}) 的返回（探测唯一的 DSH 输入）+ 调用计数。
     // 必须放在 harness 作用域里（`calls`/`sessionsListImpl` 只在这里可见 —— 桥接源码里没有它们）。

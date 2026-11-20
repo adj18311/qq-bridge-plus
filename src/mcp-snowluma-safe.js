@@ -123,6 +123,28 @@ function readConsoleToken() {
   }
 }
 
+// 桥接的 error 字段不保证是字符串：有的端点会把结构化原因（{code,...}）直接塞进 error。
+// `new Error(obj)` 的 message 会变成 "[object Object]"，模型只能看到这个字面量，
+// 既不知道失败原因也无从重试（2026-11-06 线上就是这样丢掉 qq_wait_for_messages 的原因）。
+// 这里统一降级成可读文本：字符串原样，对象取 message/error/code，再不行就 JSON。
+function describeBridgeError(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return value.message || value.name || 'Error';
+  if (typeof value === 'object') {
+    for (const field of ['message', 'error', 'detail', 'code']) {
+      const picked = value[field];
+      if (typeof picked === 'string' && picked) return picked;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
 async function agentApi(path, init = {}) {
   const timeoutMs = init.timeoutMs || 15000;
   const { timeoutMs: _omit, ...rest } = init;
@@ -140,18 +162,22 @@ async function agentApi(path, init = {}) {
   // 无令牌调用，桥接对它单独放行并按最小对象返回。
   headers['x-agent-call'] = '1';
   const request = path === '/api/socialV2/wait' ? longWaitFetch : fetch;
-  const res = await request(`${agentApiBase()}${path}`, { ...rest, headers, signal: AbortSignal.timeout(timeoutMs) });
+  const requestInit = { ...rest, headers, signal: AbortSignal.timeout(timeoutMs) };
+  // 只在长等待路径上补预算：这条分支同时保证 `longWaitFetch` 不会在非等待调用里被求值
+  // （测试夹具用 vm 跑本文件时会剥掉 import，那个标识符在沙箱里不存在）。
+  if (path === '/api/socialV2/wait') requestInit.timeoutMs = timeoutMs;
+  const res = await request(`${agentApiBase()}${path}`, requestInit);
   let body = null;
   try { body = await res.json(); } catch { body = null; }
   if (path === '/api/socialV2/wait' && body === null) throw new Error('等待接口返回无效 JSON');
   if (!res.ok) {
-    throw new Error(body?.error || `桥接 API HTTP ${res.status}`);
+    throw new Error(describeBridgeError(body?.error) || `桥接 API HTTP ${res.status}`);
   }
   // 桥接的部分端点会用 200 + {ok:false,error} 表达业务失败（例如发送被审计拦截）。
   // 不检查 body.ok 会把「被拦截」当成「发送成功」上报给模型 —— 模型据此认为消息已发出，
   // 于是不再重试也不告诉用户，是典型的静默错误。
   if (body && typeof body === 'object' && body.ok === false) {
-    throw new Error(body.error || '桥接 API 返回 ok:false（未说明原因）');
+    throw new Error(describeBridgeError(body.error) || '桥接 API 返回 ok:false（未说明原因）');
   }
   return body;
 }
@@ -228,6 +254,11 @@ const TOOL_CONFIG_FLAGS = {
   qq_set_sticker_remark: 'setStickerRemark',
   qq_tieba_list: 'tiebaList',
   qq_tieba_read: 'tiebaRead',
+  // 鱼缸日记四件套：同一个 'diary' 开关。控制台关掉后四个工具一起从注册表消失。
+  qq_diary_read: 'diary',
+  qq_diary_edit: 'diary',
+  qq_diary_write: 'diary',
+  qq_diary_delete: 'diary',
 };
 const disabledTools = [];
 {
@@ -649,14 +680,14 @@ if (cfg.socialV2?.tools?.sendPoke !== false) {
 
 server.tool(
   'qq_wait_for_messages',
-  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 quietMs 静默，已安静足够就立即返回；读取/思考时新到的消息也会返回。群聊静默固定 3 秒，且无论 purpose 是 messages 还是 reply，从第一条新消息到达起最多再等 6 秒（固定上限，后续消息不延长）；私聊沿用推荐旧配置（通常 10~12 秒）。timeoutMs 是最长预算，不要求等满；返回 waitLimitReached=true 或 quiet=false 只表示这次等待结束，不代表对方已说完——先看本次 newMessages 再决定回复还是收尾，不要机械重开等待。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；先等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。群聊的 quietMs 由桥接固定覆盖为 3 秒（不是后台配置下限）；私聊按后台推荐配置。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。决定潜水/收尾时才用默认用途加 timeoutMs=300000 完成沉睡前观察，不能把 5 分钟观察放在首答之前；短等待不能代替。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。preSleepWaitRemainingMs 仅供准备收尾时参考。',
+  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 3 秒静默（群聊与私聊 reply 均固定 3 秒；群聊另有首条新消息后最多再等 6 秒的上限，私聊没有），已安静足够就立即返回；读取/思考时新到的消息也会返回。群聊静默固定 3 秒，且无论 purpose 是 messages 还是 reply，从第一条新消息到达起最多再等 6 秒（固定上限，后续消息不延长）；私聊 purpose="reply" 同样固定 3 秒（按最后来信计时，不受 quietMs 与后台最小静默抬高，也没有 6 秒上限）；私聊 purpose="messages" 省略 quietMs 时使用后台原默认值（通常 10~12 秒，无 6 秒上限），不要拿 replyTiming=3000 的 3 秒代入 messages。timeoutMs 是最长预算，不要求等满；返回 waitLimitReached=true 或 quiet=false 只表示这次等待结束，不代表对方已说完——先看本次 newMessages 再决定回复还是收尾，不要机械重开等待。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；先等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。群聊的 quietMs 由桥接固定覆盖为 3 秒（不是后台配置下限）；私聊 purpose="reply" 也由桥接固定覆盖为 3000，私聊 purpose="messages" 省略 quietMs 时按后台原默认值（通常 10~12 秒，不是 replyTiming=3000 的 3 秒）。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。决定潜水/收尾时才用默认用途加 timeoutMs=300000 完成沉睡前观察，不能把 5 分钟观察放在首答之前；短等待不能代替。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。preSleepWaitRemainingMs 仅供准备收尾时参考。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
-    purpose: z.enum(['messages', 'reply']).optional().describe('默认 messages：等新消息/回复/睡前观察；reply：回复前短静默，计入最后来信后已过去的时间，绝不授予睡前观察资格'),
+    purpose: z.enum(['messages', 'reply']).optional().describe('默认 messages：等新消息/回复/睡前观察；reply：回复前短静默，群聊与私聊 reply 均固定 3 秒（群聊还有 6 秒上限，私聊无），计入最后来信后已过去的时间，绝不授予睡前观察资格'),
     timeoutMs: z.number().optional().describe('等待预算毫秒数，默认 30000、最大 600000；reply 达到静默即返回，不必等满；沉睡前观察用 messages 并传 300000'),
     minNewMessages: z.number().optional().describe('仅 messages 用途：至少等到多少条新消息才进入静默窗口，默认 1；reply 用途会忽略它'),
-    quietMs: z.number().optional().describe('静默窗口毫秒数：群聊由桥接固定覆盖为 3000，且无论 purpose 是 messages 还是 reply，首条新消息后最多再等 6000 毫秒（后续消息不延长）；私聊按 qq_get_prompt 推荐值（通常 10000~12000）；reply 从最后来信开始计时，messages 只在等到新消息后计时；群聊不受该参数与后台配置影响，私聊缺省取后台配置')
+    quietMs: z.number().optional().describe('静默窗口毫秒数：群聊由桥接固定覆盖为 3000，且无论 purpose 是 messages 还是 reply，首条新消息后最多再等 6000 毫秒（后续消息不延长）；私聊 purpose="reply" 同样固定覆盖为 3000（不受该参数与后台最小静默影响，无 6 秒上限）；私聊 purpose="messages" 省略 quietMs 时使用后台原默认值（通常 10000~12000），不要拿 replyTiming=3000 的 3 秒代入 messages；reply 从最后来信开始计时，messages 只在等到新消息后计时；群聊与私聊 reply 不受该参数与后台配置影响，私聊 messages 缺省取后台配置')
   },
   async ({ key, token, purpose, timeoutMs, minNewMessages, quietMs }) => {
     try {
@@ -1021,11 +1052,11 @@ if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.sendSticker
 if (cfg.socialV2?.tools?.sendImage !== false) {
   server.tool(
     'qq_send_image',
-    '把一张图片发到指定会话（群聊或私聊）。url **必须是白名单图床的图片地址**（目前只允许贴吧图床：*.baidu.com / *.bdstatic.com / *.bdimg.com / *.bcebos.com；qq_tieba_read 的返回文本里会逐张列出可用地址，格式是「- 图N: <url>」）。桥接会自己下载后按 OneBot 的 image 段发出，所以：① 其它地址（example.com 之类的普通网址、本机/内网地址、data:/base64: 串）一律被拒绝，不要反复重试；② 单张 ≤4MiB，超限**如实失败**（不会截断成半张图）；③ 下载失败 / 非白名单主机 / 超过体积 / 发送失败都会把**原因如实**告诉你，不要把这些失败说成"已经发出去了"；④ 发送计入该会话的发送频率上限（maxSendPerMinute / maxSendPerHour），被限流会明确报错，不会静默放行。',
+    '把一张图片发到指定会话（群聊或私聊）。url **必须是白名单图床的图片地址**（允许：贴吧图床 *.baidu.com / *.bdstatic.com / *.bdimg.com / *.bcebos.com，以及小黑盒图片 CDN imgheybox.max-c.com / imgheybox1.max-c.com / cdn.max-c.com；qq_tieba_read 的返回文本里会逐张列出可用地址，格式是「- 图N: <url>」，qq_tieba_read 和小黑盒 get_post_detail 返回的 images 里的 https 图片地址都可以直接传）。桥接会自己下载后按 OneBot 的 image 段发出，所以：① 其它地址（example.com 之类的普通网址、本机/内网地址、data:/base64: 串）一律被拒绝，不要反复重试；② 单张 ≤4MiB，超限**如实失败**（不会截断成半张图）；③ 下载失败 / 非白名单主机 / 超过体积 / 发送失败都会把**原因如实**告诉你，不要把这些失败说成"已经发出去了"；④ 发送计入该会话的发送频率上限（maxSendPerMinute / maxSendPerHour），被限流会明确报错，不会静默放行。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
-      url: z.string().describe('白名单图床的图片地址（贴吧图床 *.baidu.com / *.bdstatic.com / *.bdimg.com / *.bcebos.com 下的 http(s) 图片；来自 qq_tieba_read 文本里的「- 图N: <url>」）')
+      url: z.string().describe('白名单图床的图片地址（贴吧图床 *.baidu.com / *.bdstatic.com / *.bdimg.com / *.bcebos.com，以及小黑盒图片 CDN imgheybox.max-c.com / imgheybox1.max-c.com / cdn.max-c.com 下的 http(s) 图片；来自 qq_tieba_read 的「- 图N: <url>」或小黑盒 get_post_detail 返回的 images）')
     },
     async ({ key, token, url }) => {
       try {
@@ -1374,13 +1405,13 @@ function patrolMaxPagesPerThread() {
 if (cfg.socialV2?.tools?.tiebaList !== false) {
   server.tool(
     'qq_tieba_list',
-    '查看某个百度贴吧「吧」的帖子列表（只读）。bar 传**吧名本身**（例如「原神」「编程」），不要带 http 链接、不要带「吧」以外的后缀、也不要加多余符号；page 从 1 开始、最多 100（默认 1）。这是只读工具：不会发帖、不会回帖、不需要登录。**发起方必须自己说清**：你自己想起来看一眼（话题相关，不是定时巡逻）传 reason="patrol"（缺省也算 patrol）——这会占用**每日 12 次自主访问上限**，并在静默时段 01:00–08:00 被拒；用户在会话里**明确要求**你去看时传 reason="user"（不受限、不计数）。想看更多页要在会话里先问用户，被拒（如 PATROL_DAILY_CAP / PATROL_DISABLED）如实说明、不要重试、不要绕道。如果这次抓取被百度安全验证拦住，返回的 text 会直接给出降级搜索建议（用 mcp__web-search-safe__web_search 搜 site:tieba.baidu.com），照那段话做即可，不要反复重试本工具。',
+    '查看某个百度贴吧「吧」的帖子列表（只读）。bar 传**吧名本身**（例如「原神」「编程」），不要带 http 链接、不要带「吧」以外的后缀、也不要加多余符号；page 从 1 开始、最多 100（默认 1）。这是只读工具：不会发帖、不会回帖、不需要登录。**发起方必须自己说清**：你自己想起来看一眼（话题相关，属于自主巡逻；后台机会按北京时间 07:00–23:00 调度）传 reason="patrol"（缺省也算 patrol）——这会占用**每日自主访问上限（以当前生效配置为准）**，并在静默时段 23:00–07:00（北京时间）被拒；用户在会话里**明确要求**你去看时传 reason="user"（是否豁免以桥接校验为准，来源不明按自主访问计数）。想看更多页要在会话里先问用户，被拒（如 PATROL_DAILY_CAP / PATROL_DISABLED）如实说明、不要重试、不要绕道。如果这次抓取被百度安全验证拦住，返回的 text 会直接给出降级搜索建议（用 mcp__web-search-safe__web_search 搜 site:tieba.baidu.com），照那段话做即可，不要反复重试本工具。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
       bar: z.string().describe('吧名本身，例如「原神」「编程」（不是 URL，也不要写成「原神吧」以外的形式）'),
       page: z.number().int().positive().optional().describe('页码，从 1 开始（最多 100），默认 1'),
-      reason: z.enum(['patrol', 'user']).optional().describe('发起方：自己想起来看 = "patrol"（缺省即 patrol，占每日上限）；用户明确要求 = "user"（不受限、不计数）'),
+      reason: z.enum(['patrol', 'user']).optional().describe('发起方：自己想起来看 = "patrol"（缺省即 patrol，占每日上限，静默时段 23:00–07:00 北京时间被拒）；用户明确要求 = "user"（是否豁免以桥接校验为准，来源不明按自主访问计数）'),
       trigger: z.string().optional().describe('触发这次访问的话题（一句话，如「群里在聊原神新版本」），只记进巡逻日志；patrol 时请填')
     },
     async ({ key, token, bar, page, reason, trigger }) => {
@@ -1409,14 +1440,14 @@ if (cfg.socialV2?.tools?.tiebaList !== false) {
 if (cfg.socialV2?.tools?.tiebaRead !== false) {
   server.tool(
     'qq_tieba_read',
-    '读取某个百度贴吧帖子的正文与回复（只读）。tid 是帖子链接里的那串数字，从这些形态里取：…/p/<tid>、…/f?kz=<tid>、…/mo/q/m?kz=<tid>（三种链接指向同一个帖子）。链接里带 pn=N 或页面上写「第 N 页」时，把 N 传给 page；page 从 1 开始、最多 100（默认 1）。**想看更多页就带 pages**：pages 是字符串，写单页 "2" 或范围 "1-3"（也接受 "1,3"），一次最多 10 页，超出会被截断并在正文里写明「只取了前 N 页」；不传 pages 就只读 page 那一页。**页数越多越慢**（逐页串行抓取），所以本工具的等待预算按页数自适应（单页 80 秒、10 页 260 秒）。**发起方必须自己说清**：你自己想起来看（话题相关，不是定时巡逻）传 reason="patrol"（缺省也算 patrol）——巡逻**单次最多读前两页**（第 3 页起没有预算，超出的页会被钳掉并在正文里写明），并占用**每日 12 次自主访问上限**、静默时段 01:00–08:00 被拒；**想继续往后读，先在会话里问一句「这条帖后面还有料，要我继续读吗？」，用户同意后再读（继续读的部分不占每日次数）**；用户在会话里**明确要求**你去看时传 reason="user"（不受限、不计数）。被拒（如 PATROL_DAILY_CAP / PATROL_DISABLED）如实说明、不要重试、不要绕道。**楼层里的图片会直接作为图像内容返回**（一次最多 10 张、单张 ≤4MiB、合计 ≤25MiB，超出的会在文字里注明「未取」及张数）——所以第一页没图时，用 pages 往后翻页也常常能看到后面几页的图。这是只读工具：不会回帖、不会点赞、不需要登录。如果这次抓取被百度安全验证拦住，返回的 text 会直接给出降级搜索建议（用 mcp__web-search-safe__web_search 搜 site:tieba.baidu.com），照那段话做即可，不要反复重试本工具。',
+    '读取某个百度贴吧帖子的正文与回复（只读）。tid 是帖子链接里的那串数字，从这些形态里取：…/p/<tid>、…/f?kz=<tid>、…/mo/q/m?kz=<tid>（三种链接指向同一个帖子）。链接里带 pn=N 或页面上写「第 N 页」时，把 N 传给 page；page 从 1 开始、最多 100（默认 1）。**想看更多页就带 pages**：pages 是字符串，写单页 "2" 或范围 "1-3"（也接受 "1,3"），一次最多 10 页，超出会被截断并在正文里写明「只取了前 N 页」；不传 pages 就只读 page 那一页。**页数越多越慢**（逐页串行抓取），所以本工具的等待预算按页数自适应（单页 80 秒、10 页 260 秒）。**发起方必须自己说清**：你自己想起来看（话题相关，属于自主巡逻；后台机会按北京时间 07:00–23:00 调度）传 reason="patrol"（缺省也算 patrol）——巡逻**单次最多读前两页**（第 3 页起没有预算，超出的页会被钳掉并在正文里写明），并占用**每日自主访问上限（以当前生效配置为准）**、静默时段 23:00–07:00（北京时间）被拒；**想继续往后读，先在会话里问一句「这条帖后面还有料，要我继续读吗？」，用户同意后再读（是否计入额度以桥接判定为准）**；用户在会话里**明确要求**你去看时传 reason="user"（是否豁免以桥接校验为准，来源不明按自主访问计数）。被拒（如 PATROL_DAILY_CAP / PATROL_DISABLED）如实说明、不要重试、不要绕道。**楼层里的图片会直接作为图像内容返回**（一次最多 10 张、单张 ≤4MiB、合计 ≤25MiB，超出的会在文字里注明「未取」及张数）——所以第一页没图时，用 pages 往后翻页也常常能看到后面几页的图。这是只读工具：不会回帖、不会点赞、不需要登录。如果这次抓取被百度安全验证拦住，返回的 text 会直接给出降级搜索建议（用 mcp__web-search-safe__web_search 搜 site:tieba.baidu.com），照那段话做即可，不要反复重试本工具。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
       tid: z.string().describe('帖子 tid（帖子链接里的那串数字：…/p/<tid>、…/f?kz=<tid>、…/mo/q/m?kz=<tid>；必须是纯数字）'),
       page: z.number().int().positive().optional().describe('页码：链接带 pn=N 或写着「第 N 页」时传 N；从 1 开始（最多 100），默认 1'),
       pages: z.string().optional().describe('想看多页时传页码范围字符串：单页 "2"、连续多页 "1-3"、离散页 "1,3"；一次最多 10 页（超出会截断并说明）。不传就只读 page 那一页'),
-      reason: z.enum(['patrol', 'user']).optional().describe('发起方：自己想起来看 = "patrol"（缺省即 patrol：最多前两页、占每日上限、静默时段被拒）；用户明确要求 = "user"（不受限、不计数）'),
+      reason: z.enum(['patrol', 'user']).optional().describe('发起方：自己想起来看 = "patrol"（缺省即 patrol：最多前两页、占每日上限、静默时段 23:00–07:00 北京时间被拒）；用户明确要求 = "user"（是否豁免以桥接校验为准，来源不明按自主访问计数）'),
       trigger: z.string().optional().describe('触发这次访问的话题（一句话，如「群里在聊原神新版本」），只记进巡逻日志；patrol 时请填')
     },
     async ({ key, token, tid, page, pages, reason, trigger }) => {
@@ -1464,6 +1495,140 @@ if (cfg.socialV2?.tools?.tiebaRead !== false) {
         return { content: [{ type: 'text', text }, ...imageContent] };
       } catch (error) {
         return { content: [{ type: 'text', text: String(error?.message ?? error) }], isError: true };
+      }
+    }
+  );
+}
+
+// ── 鱼缸日记（Fish Diary）：两个纯文本日记文件的读写工具 ──────────────────
+// 隐私铁律（四个工具的描述里都写了，这里再说一遍）：**私密日记内容不得在群聊中转述**。
+// 日记永远只在「用户主动问起 / 用户明确要求记录」时使用；读到的正文默认只对用户本人
+// 复述，绝不主动贴进群聊、也不在群聊里做摘要。
+if (cfg.socialV2?.tools?.diary !== false) {
+  const DIARY_PRIVACY_NOTE = '**私密日记内容不得在群聊中转述**：日记正文只对用户本人复述，绝不主动贴进群聊或在群里做摘要。';
+
+  server.tool(
+    'qq_diary_read',
+    `读取鱼缸日记（只读，不计入每日写入额度）。两本日记：which="notebook"（日常记录）或 which="privy"（私密）。分页参数三选一即可：offset（字节偏移，来自上次返回的 nextOffset，最精确）、afterLine（从第 N 行开始，1-based 行号）、都不给就从头读。maxLines/maxBytes 可以调小单页大小（上限 500 行 / 64KB），单行本身超长时整行返回并置 overlongLine=true。返回里 hasMore 表示后面还有、nextOffset 原样传给下一次调用即可接着读；afterLine 超过文件总行数时不会回落第一页，而是返回空页（text 为空、lineCount=0、startLine=总行数+1、afterLineBeyondEnd=true），用它探「有没有新内容」是安全的；sha256 是全文快照，edit/delete 时可以带上做乐观锁。${DIARY_PRIVACY_NOTE}`,
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      which: z.enum(['notebook', 'privy']).describe('读哪一本：notebook = 日常记录，privy = 私密日记'),
+      offset: z.number().int().nonnegative().optional().describe('字节偏移，直接传上次返回的 nextOffset；与 afterLine 二选一'),
+      afterLine: z.number().int().positive().optional().describe('从第几行开始读（1-based）；与 offset 二选一'),
+      maxLines: z.number().int().positive().optional().describe('本页最多多少行（上限 500），默认 500'),
+      maxBytes: z.number().int().positive().optional().describe('本页最多多少字节（上限 65536），默认 65536')
+    },
+    async ({ key, token, which, offset, afterLine, maxLines, maxBytes }) => {
+      try {
+        const payload = { key, which };
+        if (offset !== undefined) payload.offset = offset;
+        if (afterLine !== undefined) payload.afterLine = afterLine;
+        if (maxLines !== undefined) payload.maxLines = maxLines;
+        if (maxBytes !== undefined) payload.maxBytes = maxBytes;
+        const data = await agentApi('/api/socialV2/diary/read', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          headers: { 'x-agent-token': token }
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `读取日记失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_diary_write',
+    `写入鱼缸日记（整篇覆盖或追加）。which="notebook" 或 "privy"。mode="overwrite" 整篇替换（会先备份旧版本）、mode="append" 追加到末尾（不备份，自动补行尾换行）。文件不存在会自动创建。限额（默认值，可在控制台调整）：单次 1MB、单文件 10MB、每本每北京自然日 10 次写入（append 也算一次）；超限直接拒绝且**不会部分写入**。返回里有 sha256 和 lineCount，可留给后续 edit/delete 做乐观锁。${DIARY_PRIVACY_NOTE}`,
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      which: z.enum(['notebook', 'privy']).describe('写哪一本：notebook = 日常记录，privy = 私密日记'),
+      text: z.string().describe('要写入的正文（整篇替换时的完整内容，追加时是要追加的那段）'),
+      mode: z.enum(['overwrite', 'append']).optional().describe('overwrite = 整篇替换（默认，先备份）；append = 追加到末尾')
+    },
+    async ({ key, token, which, text, mode }) => {
+      try {
+        const payload = { key, which, text };
+        if (mode !== undefined) payload.mode = mode;
+        const data = await agentApi('/api/socialV2/diary/write', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          headers: { 'x-agent-token': token }
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `写入日记失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_diary_edit',
+    `精细编辑鱼缸日记（改一处，不是整篇覆盖）。which="notebook" 或 "privy"。两种模式**二选一**：
+① 内容模式（最常用）：给 oldText + newText，把 oldText 换成 newText；oldText 在文件里出现多次会报 ambiguous-match，这时加 replaceAll=true 全换；newText 传空字符串等于删除这段。不做正则。
+② 行号模式：op="replaceLines" 配 start/end（1-based，闭区间）+ text；op="insertBefore"/"insertAfter" 配 line + text；op="deleteLines" 配 start/end。
+可以给 sha256（来自 read/write/edit 的返回）做乐观锁：文件在此期间被改过就报 stale-snapshot，要求重新读取。会先备份旧版本。${DIARY_PRIVACY_NOTE}`,
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      which: z.enum(['notebook', 'privy']).describe('改哪一本：notebook = 日常记录，privy = 私密日记'),
+      sha256: z.string().optional().describe('可选乐观锁：带上 read/write 返回的 sha256，文件被改过就拒绝并报 stale-snapshot'),
+      oldText: z.string().optional().describe('内容模式：要被替换的原文（必须精确匹配、非空）。与 op 行号模式二选一'),
+      newText: z.string().optional().describe('内容模式：替换成的新文本；传空字符串 = 删除这段'),
+      replaceAll: z.boolean().optional().describe('内容模式：oldText 出现多次时是否全部替换（默认 false，多次会报 ambiguous-match）'),
+      op: z.enum(['replaceLines', 'insertBefore', 'insertAfter', 'deleteLines', 'replaceText']).optional().describe('行号模式的编辑类型；日常替换请直接用 oldText/newText，不要传 op'),
+      start: z.number().int().positive().optional().describe('行号模式：起始行（1-based，闭区间），配 replaceLines / deleteLines'),
+      end: z.number().int().positive().optional().describe('行号模式：结束行（1-based，闭区间，含该行），配 replaceLines / deleteLines'),
+      line: z.number().int().positive().optional().describe('行号模式：目标行（1-based），配 insertBefore / insertAfter'),
+      text: z.string().optional().describe('行号模式：替换或插入的正文（deleteLines 不需要）')
+    },
+    async ({ key, token, which, sha256, oldText, newText, replaceAll, op, start, end, line, text }) => {
+      try {
+        const payload = { key, which };
+        if (sha256 !== undefined && sha256 !== null) payload.sha256 = sha256;
+        if (op !== undefined) payload.op = op;
+        if (oldText !== undefined) payload.oldText = oldText;
+        if (newText !== undefined) payload.newText = newText;
+        if (replaceAll !== undefined) payload.replaceAll = replaceAll;
+        if (start !== undefined) payload.start = start;
+        if (end !== undefined) payload.end = end;
+        if (line !== undefined) payload.line = line;
+        if (text !== undefined && text !== null) payload.text = text;
+        const data = await agentApi('/api/socialV2/diary/edit', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          headers: { 'x-agent-token': token }
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `编辑日记失败：${error?.message ?? error}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    'qq_diary_delete',
+    `清空一本鱼缸日记（软删除：正文清空，文件保留为空，不删文件本身）。which="notebook" 或 "privy"。可选传 sha256 做乐观锁 —— 只有当前内容和这个快照一致时才清空，避免误删用户刚写的东西。算一次写入额度，清空前会自动留一份备份（正文本来就是空的话没有内容可备份）。工具面没有 restore 工具，但这份备份可以在控制台「鱼缸日记」的备份列表里恢复回原文件；对用户说明时按这个事实讲，别承诺找不回来。执行前先跟用户确认。${DIARY_PRIVACY_NOTE}`,
+    {
+      key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+      token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+      which: z.enum(['notebook', 'privy']).describe('清空哪一本：notebook = 日常记录，privy = 私密日记'),
+      sha256: z.string().optional().describe('可选乐观锁：只有当前内容 sha256 与此一致才清空（不一致报 stale-snapshot）')
+    },
+    async ({ key, token, which, sha256 }) => {
+      try {
+        const payload = { key, which };
+        if (sha256 !== undefined && sha256 !== null) payload.sha256 = sha256;
+        const data = await agentApi('/api/socialV2/diary/delete', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          headers: { 'x-agent-token': token }
+        });
+        return { content: [{ type: 'text', text: serializeModelData(data) }] };
+      } catch (error) {
+        return { content: [{ type: 'text', text: `清空日记失败：${error?.message ?? error}` }], isError: true };
       }
     }
   );

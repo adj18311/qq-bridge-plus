@@ -6,13 +6,10 @@
 # autocrlf=false 的 clone 会拿到 LF-only 的 .bat。这一行让检出恒为 CRLF。
 *.bat text eol=crlf
 
-# 冻结 fixture / 测试脚本的跨平台完整性：这些文件的内容哈希与锚点被回归逐字比对，
-# 工作区被 core.autocrlf 或编辑器转成 CRLF 就会让 bodyhash / mutant-anchor 类断言失败。
-*.js text eol=lf
-*.cjs text eol=lf
+# 只针对 .mjs：提交时规范化为 LF，检出也保持 LF。
+# 范围刻意窄：只碰 .mjs，不动 .bat（上面那条）与其它类型。
 *.mjs text eol=lf
-*.json text eol=lf
-*.yml text eol=crlf
-*.yaml text eol=crlf
-# 批处理 / 命令脚本仍是 CRLF（cmd.exe 解析 LF-only 批处理的 goto/标签会出错）。
-*.cmd text eol=crlf
+
+# 只针对 .js：与上面 .mjs 同理。范围仍然窄——只碰 .js，不动 .bat 与其它类型。
+# 注意：r3-bridge.js / r3-mcp.js 被 git 判为二进制（i/-text），本规则不会碰它们。
+*.js text eol=lf

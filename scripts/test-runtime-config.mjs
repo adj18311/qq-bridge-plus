@@ -145,7 +145,7 @@ test('默认配置：loadConfig 的全部默认值', () => {
   assert.equal(config.socialV2.context.wakeMaxChars, 6000);
   assert.deepEqual(config.socialV2.tieba, { cookieFile: '' });
   assert.deepEqual(config.socialV2.patrol, {
-    enabled: true, dailyVisitCap: 12, maxPagesPerThread: 2, quietHours: [1, 8]
+    enabled: true, dailyVisitCap: 6, maxPagesPerThread: 2, quietHours: [1, 8]
   });
 
   assert.deepEqual(config.role, { maxInjectChars: ROLE_INJECT_MAX_CHARS_DEFAULT });
@@ -251,7 +251,7 @@ test('socialV2 非对象 / null 子节与空工具表：spread 怪癖与深度�
   assert.deepEqual(parse({ socialV2: { tieba: 'x' } }).config.socialV2.tieba, { cookieFile: '' });
   assert.deepEqual(parse({ socialV2: { tieba: ['x'] } }).config.socialV2.tieba, { cookieFile: '' });
   assert.deepEqual(parse({ socialV2: { patrol: ['x'] } }).config.socialV2.patrol, {
-    enabled: true, dailyVisitCap: 12, maxPagesPerThread: 2, quietHours: [1, 8]
+    enabled: true, dailyVisitCap: 6, maxPagesPerThread: 2, quietHours: [1, 8]
   });
   // sticker.collect 的两次合并：外层 spread 不会把 collect 默认值清掉。
   assert.deepEqual(
@@ -616,6 +616,12 @@ test('差分：旧 loadConfig 的 cfg 与 log 顺序和 parseRuntimeConfig 完�
     if (legacy.error || current.error) {
       assert.equal(current.error, legacy.error, `${name}：抛错文案不一致`);
       continue;
+    }
+    // 仅默认自主访问上限有意从旧实现的 12 调整为 6；显式配置仍按旧语义保留。
+    const patrol = file?.socialV2?.patrol;
+    if (!(patrol && typeof patrol === 'object' && !Array.isArray(patrol)
+      && Object.prototype.hasOwnProperty.call(patrol, 'dailyVisitCap'))) {
+      legacy.config.socialV2.patrol.dailyVisitCap = 6;
     }
     assert.deepEqual(current.config, legacy.config, `${name}：config 不一致`);
     assert.deepEqual(current.messages, legacy.messages, `${name}：诊断/日志顺序不一致`);

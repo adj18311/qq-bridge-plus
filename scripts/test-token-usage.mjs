@@ -196,6 +196,86 @@ const reloaded = createTokenLedger({ file: ledgerFile, priceTable: DEFAULT_PRICE
 assert(reloaded.stats().samples === stats.samples, '淘汰后重新载入不丢采样');
 assert(near(reloaded.summary().totals.cost, afterEvict.cost, 1e-9), '淘汰结果的累计花费可跨重启复现');
 
+// ── 10c. 稳态下不得每次摄入都重写整个账本（桥接日志刷屏的直接原因） ──────────
+//
+// 实测缺陷：`maybeCompact()` 的触发条件是 `journalLines <= maxLines && samples.size <= maxLines`，
+// 而磁盘行数里还有 base（投影基线）与 evict（淘汰汇总）两类行。只要它们非空，
+// `journalLines` 就永远大于 `maxLines`（线上实测 327 base + 20000 turn + 78 evict = 20405），
+// 于是**每摄入一条采样就整文件重写一次并打一行日志** —— 5.5 MB/次，控制台被刷满。
+//
+// 这条用例用与线上同形的文件（三类行都在、turn 已达上限）钉住：稳态摄入不得产生日志，
+// 且文件不应被反复重写。
+{
+  const file = path.join(os.tmpdir(), `token-ledger-steady-${process.pid}.jsonl`);
+  const MAX = 50;
+  const buckets = { cacheMiss: 10, cacheHit: 0, cacheWrite: 0, output: 1 };
+  const seed = [];
+  for (let i = 0; i < 3; i += 1) {
+    seed.push(JSON.stringify({ k: 'base', t: 1000 + i, sid: 'g' + i, key: 'group:100', seq: 1, b: buckets }));
+  }
+  for (let i = 0; i < MAX; i += 1) {
+    seed.push(JSON.stringify({ k: 'turn', t: 2000 + i, sid: 'g1', key: 'group:100', seq: i, turn: i, step: 1, retry: 0, b: buckets }));
+  }
+  for (let i = 0; i < 5; i += 1) {
+    seed.push(JSON.stringify({ k: 'evict', t: 3000 + i, sid: 'g1', key: 'group:100', b: buckets, cost: 1, peak: 1, off: 0, estimated: false, dropped: 2 }));
+  }
+  fs.writeFileSync(file, seed.join('\n') + '\n', 'utf8');
+  const logged = [];
+  const steady = createTokenLedger({ file, maxLines: MAX, priceTable: DEFAULT_PRICE_TABLE,
+    resolveKey: () => 'group:100', log: (m) => { logged.push(m); } });
+  assert(steady.stats().samples === MAX, '前提：加载后采样数恰好在上限');
+  const before = fs.statSync(file).size;
+  for (let i = 0; i < 200; i += 1) {
+    steady.ingestEvent({ sessionId: 's1',
+      event: { seq: 10000 + i, time: 5000 + i * 10, type: 'assistant/message',
+        data: { turn: 10000 + i, step: 1, usage: { inputTokens: 10, outputTokens: 1 } } },
+      at: 5000 + i * 10 });
+  }
+  // 允许**极少数**淘汰（第一次越过上限时必然发生一次），但绝不允许「每摄入一条就淘汰一条」：
+  // 200 次摄入如果按旧逻辑会打 200 条日志、重写 200 次文件。留余量后只应发生个位数。
+  assert(logged.length <= 2,
+    `200 次摄入的淘汰日志必须是常数级（实得 ${logged.length} 条；旧逻辑 ≈200 条 = 刷屏）`);
+  assert(steady.stats().samples <= MAX, '采样数仍在上限内');
+  // 200 次摄入最多允许压缩若干次（留余量后约 1 次），绝不允许「每次摄入都重写」。
+  const rewrites = steady.stats().journalLines;
+  assert(rewrites <= MAX * 2,
+    `磁盘行数不得随摄入次数增长（实得 ${rewrites} 行，上限 ${MAX * 2}）`);
+  assert(fs.statSync(file).size < before * 4, '文件不得因反复重写而膨胀');
+  try { fs.unlinkSync(file); } catch {}
+}
+// ── 10d. 淘汰不得让总量翻倍（既有缺陷，本轮把它从「几乎不可见」放大成「一眼可见」）──
+//
+// 会话总量 = base.buckets + evicted.buckets + 活跃样本桶。而 `seq <= base.seq` 的样本
+// 本来就不计入（已被基线覆盖）。旧实现淘汰时不区分这两种样本，把基线覆盖过的桶也
+// 累加进 evicted ⇒ 同一笔用量算两次。
+//
+// 旧实现每次只淘汰 1 条，翻倍很慢（200 次摄入只多出 46 万 token），所以多年没被发现；
+// 淘汰带余量后一次丢 1800 条，200 次摄入就凭空多出 1500 万 token。
+// 这里用一个「有基线 + 大量被基线覆盖的死样本」的账本钉住守恒。
+{
+  const file = path.join(os.tmpdir(), `token-ledger-double-${process.pid}.jsonl`);
+  const B = { cacheMiss: 10, cacheHit: 0, cacheWrite: 0, output: 1 };
+  const seed = [];
+  // 基线 seq=100 ⇒ 下面 seq<=100 的样本都是「死样本」，不计入总量。
+  seed.push(JSON.stringify({ k: 'base', t: 1000, sid: 's1', key: 'group:100', seq: 100, b: { cacheMiss: 1000, cacheHit: 0, cacheWrite: 0, output: 100 } }));
+  for (let i = 0; i < 300; i += 1) {
+    seed.push(JSON.stringify({ k: 'turn', t: 2000 + i, sid: 's1', key: 'group:100', seq: i, turn: i, step: 1, retry: 0, b: B }));
+  }
+  fs.writeFileSync(file, seed.join('\n') + '\n', 'utf8');
+  const guarded = createTokenLedger({ file, maxLines: 100, priceTable: DEFAULT_PRICE_TABLE,
+    resolveKey: () => 'group:100', log: () => {} });
+  const start = guarded.summary().totals.buckets.cacheMiss;
+  for (let i = 0; i < 400; i += 1) {
+    guarded.ingestEvent({ sessionId: 's1',
+      event: { seq: 1000 + i, time: 9000 + i, type: 'assistant/message',
+        data: { turn: 1000 + i, step: 1, usage: { inputTokens: 100, outputTokens: 10 } } },
+      at: 9000 + i });
+  }
+  const delta = guarded.summary().totals.buckets.cacheMiss - start;
+  assert(delta === 400 * 100,
+    `淘汰后总量必须守恒：期望 ${400 * 100}，实得 ${delta}（差值即被基线覆盖的死样本被重复计入）`);
+  try { fs.unlinkSync(file); } catch {}
+}
 // ── 10b. 读取路径是单遍索引：总量不随采样数二次膨胀 ─────────────────────
 ledger = freshLedger({ resolveKey: () => 'group:100', maxLines: 5000 });
 for (let turn = 1; turn <= 40; turn += 1) {

@@ -10,9 +10,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   CORE_TESTS, DEFAULT_SCRIPT_TIMEOUT_MS, FULL_TESTS, ORIGINAL_FULL_TESTS,
-  QUICK_TESTS, TEST_FOUNDATION_TESTS, SESSION_ROUTER_TESTS, REPLY_TIMING_BASELINE_TESTS
+  QUICK_TESTS, TEST_FOUNDATION_TESTS, SESSION_ROUTER_TESTS, REPLY_TIMING_BASELINE_TESTS,
+  READ_ONLY_GATE_TESTS, TIEBA_WRITE_BOUNDARY_TESTS, XHH_GUARD_FAILCLOSED_TESTS
 } from './test-suite-manifest.mjs';
 import { resolveSuite, runScripts, SUITES } from './test-suite-runner.mjs';
+import { closeServer, isFetchBlockedPort, listenFetchable, httpRequest } from './test-port-safe.mjs';
+import http from 'node:http';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -74,6 +77,27 @@ test('清单：原 48 项全部保留且唯一，quick 是 full 的真子集', (
     assert.ok(FULL_TESTS.includes(name), `quick 含不在 full 里的 ${name}`);
   }
   assert.deepEqual(CORE_TESTS, ORIGINAL_FULL_TESTS.slice(0, 7), 'quick 的 7 项核心必须取原列表前 7 项');
+  assert.deepEqual(READ_ONLY_GATE_TESTS, ['test-read-only-gate.mjs'], '只读门禁专项必须唯一注册');
+  for (const name of READ_ONLY_GATE_TESTS) {
+    assert.equal(FULL_TESTS.filter((item) => item === name).length, 1, '只读门禁必须在 full 恰好注册一次');
+    assert.equal(QUICK_TESTS.filter((item) => item === name).length, 1, '只读门禁必须在 quick 恰好注册一次');
+  }
+  // 贴吧写入口边界（task-104）：贴吧侧「无写入口」的取证必须长期在线，且 full/quick 都跑到。
+  assert.deepEqual(TIEBA_WRITE_BOUNDARY_TESTS, ['test-tieba-write-boundary.mjs'], '贴吧写入口边界专项必须唯一注册');
+  for (const name of TIEBA_WRITE_BOUNDARY_TESTS) {
+    assert.equal(FULL_TESTS.filter((item) => item === name).length, 1, '贴吧写入口边界必须在 full 恰好注册一次');
+    assert.equal(QUICK_TESTS.filter((item) => item === name).length, 1, '贴吧写入口边界必须在 quick 恰好注册一次');
+  }
+  // 插件失效 fail-closed（task-108）：xhh-quota-guard 的失效路径回归必须长期在线，且 full/quick 都跑到。
+  assert.deepEqual(
+    XHH_GUARD_FAILCLOSED_TESTS,
+    ['test-xhh-guard-failclosed.mjs', 'test-xhh-guard-fallback-behavior.mjs'],
+    '插件 fail-closed 专项必须唯一注册（含旧实现行为快照）'
+  );
+  for (const name of XHH_GUARD_FAILCLOSED_TESTS) {
+    assert.equal(FULL_TESTS.filter((item) => item === name).length, 1, '插件 fail-closed 必须在 full 恰好注册一次');
+    assert.equal(QUICK_TESTS.filter((item) => item === name).length, 1, '插件 fail-closed 必须在 quick 恰好注册一次');
+  }
   for (const name of TEST_FOUNDATION_TESTS) {
     assert.ok(FULL_TESTS.includes(name), `full 缺少地基回归 ${name}`);
     assert.ok(QUICK_TESTS.includes(name), `quick 缺少地基回归 ${name}`);
@@ -154,4 +178,39 @@ test('退出码传播：通过=0，失败=1，超时=1', () => {
   assert.equal(runHarness('pass.mjs', DEFAULT_SCRIPT_TIMEOUT_MS), 0);
   assert.equal(runHarness('fail.mjs', DEFAULT_SCRIPT_TIMEOUT_MS), 1);
   assert.equal(runHarness('hang.mjs', 300), 1);
+});
+
+// 端口安全辅助（task-107 F1）契约：listen(0) 可能分到 undici 的 blocked port，导致 fetch 抛
+// `TypeError: fetch failed / bad port` 的偶发假红。辅助模块必须持续提供「blocked 判定 + 安全监听 +
+// 原生 http 请求」三项能力；这里只做最小契约自检（不启动任何清单里的测试脚本）。
+test('端口安全：blocked 判定/安全监听/原生 http 请求契约', { timeout: 20_000 }, async () => {
+  // ① 判定：undici 明确禁用的端口必须命中，常规高端口不得误判。
+  for (const port of [1, 6000, 6667, 6697, 10080]) {
+    assert.equal(isFetchBlockedPort(port), true, `${port} 必须判定为 fetch blocked port`);
+  }
+  for (const port of [3000, 8080, 50000]) {
+    assert.equal(isFetchBlockedPort(port), false, `${port} 不得判定为 fetch blocked port`);
+  }
+
+  // ② 安全监听：listenFetchable 必须给出一个能被真实 fetch 访问的端口。
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, path: req.url }));
+  });
+  try {
+    const { port, url } = await listenFetchable(server);
+    assert.equal(isFetchBlockedPort(port), false, `listenFetchable 不得返回 blocked port（实际 ${port}）`);
+    assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
+
+    const response = await fetch(`${url}/probe`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, path: '/probe' });
+
+    // ③ 原生 http：同一端口用 httpRequest 也能拿到同样的响应（bypass undici 端口限制）。
+    const native = await httpRequest(`${url}/probe`);
+    assert.equal(native.status, 200);
+    assert.deepEqual(await native.json(), { ok: true, path: '/probe' });
+  } finally {
+    await closeServer(server);
+  }
 });

@@ -6,10 +6,13 @@
 //
 // 纯函数 + 可注入时钟，便于单测；本模块不做任何 IO、不读配置。
 
+import { classifyQuotaError } from './quota-error.js';
+
 export const ERROR_NOTICE_COOLDOWN_MS = 300_000;
 
-// 本发布不做额度检测：明确429一律按限流；其余沿用 busy → auth → other。
+// 明确429先区分耗尽与限流；其余沿用busy → quota → auth → other。
 const BUSY_RE = /(?<!\d)529(?!\d)|overloaded|负载较高|集群/i;
+const QUOTA_RE = /quota|额度|insufficient/i;
 const AUTH_RE = /(?<!\d)(?:401|403)(?!\d)|unauthorized|鉴权/i;
 // 只把明确状态前缀或限流措辞认作429，避免把 request_id=429 当成状态。
 const RATE_RE = /^\s*(?:\[[a-z0-9 _.-]{1,60}\]\s*)?(?:HTTP(?:\/\d+(?:\.\d+)?)?\s+)?429(?=\s|$|[:{])|\btoo many requests\b|\brate[\s_-]?limit(?:ed|_exceeded)?\b/i;
@@ -48,6 +51,7 @@ function failureStatus(failure, depth = 0) {
 // 固定文案：QQ 侧只允许出现这里面的字符串。
 export const ERROR_NOTICE_TEXTS = Object.freeze({
   busy: '⚠️ 模型服务这会儿有点挤，我过一会儿再试。',
+  quota: '⚠️ 模型的额度用完了，换个模型或者等一会儿。',
   auth: '⚠️ 模型鉴权出问题了，需要检查配置。',
   rate: '请求过于频繁，请稍后再试',
   other: '⚠️ 处理出错了，细节记在日志里。'
@@ -59,13 +63,14 @@ export function classifyAgentError(rawText, failure) {
   const value = typeof rawText === 'string' ? rawText : String(rawText ?? '');
   const status = failureStatus(failure ?? rawText);
   if (status === 429 || (status === null && (RATE_RE.test(value) || LABELED_429_RE.test(value)))) {
-    // 本发布不做额度检测：所有普通429一律按限流处理，不区分 insufficient_quota。
-    return { kind: 'rate', text: ERROR_NOTICE_TEXTS.rate };
+    // 429本身不证明额度耗尽；只复用既有严格分类器，不复制另一份耗尽规则。
+    const kind = classifyQuotaError(failure ?? value).exhausted ? 'quota' : 'rate';
+    return { kind, text: ERROR_NOTICE_TEXTS[kind] };
   }
-  // 未分类的额度类错误不再单独识别，统一落到 other 的通用文案。
   const kind = BUSY_RE.test(value) ? 'busy'
-    : AUTH_RE.test(value) ? 'auth'
-      : 'other';
+    : QUOTA_RE.test(value) ? 'quota'
+      : AUTH_RE.test(value) ? 'auth'
+        : 'other';
   return { kind, text: ERROR_NOTICE_TEXTS[kind] };
 }
 

@@ -109,6 +109,14 @@ export function createTokenLedger({
 } = {}) {
   if (typeof file !== 'string' || !file) throw new Error('createTokenLedger: file is required');
 
+  // ── 压缩/淘汰的三个常数（只影响「多久重写一次」，不影响账本数值） ──────────────
+  /** 一次淘汰到 maxLines 的这个比例：留出余量，避免在边界上抖动成每写完一条就重写。 */
+  const EVICT_HEADROOM = 0.9;
+  /** 磁盘行数超过内存行数的这个倍数才算「有冗余待重写」：base/evict 两类行是正常的。 */
+  const JOURNAL_SLACK = 1.2;
+  /** 淘汰日志的最短间隔：从「每次淘汰都打」改成「最多每 30 秒一条」。 */
+  const EVICT_LOG_INTERVAL_MS = 30_000;
+
   /** sessionId -> 最新一条投影基线 */
   const baselines = new Map();
   /** sampleKey -> 采样记录 */
@@ -127,6 +135,8 @@ export function createTokenLedger({
   let lastIngestAt = 0;
   let lastCompactedAt = 0;
   let droppedLines = 0;
+  /** 上一次打印「已淘汰」日志的时间：这条日志原来每条采样都打，把桥接控制台刷满。 */
+  let lastEvictLogAt = 0;
 
   function keyOf(sessionId) {
     let key;
@@ -320,10 +330,29 @@ export function createTokenLedger({
   function evictOldestSamples() {
     const overflow = samples.size - maxLines;
     if (overflow <= 0) return 0;
+    // ⚠️ 一次淘汰到 maxLines 的 90%，而不是刚好回到 maxLines。
+    // 只淘汰 overflow 条时，采样数会贴着上限抖动：之后每来一条新采样都要淘汰一条、
+    // 打一行日志、并把整个账本重写一遍（实测 5.5 MB / 每次摄入，而且日志被刷屏）。
+    // 留 10% 余量后，同样的写入量只会触发约 1/2000 次压缩。
+    const target = Math.floor(maxLines * EVICT_HEADROOM);
+    const dropCount = Math.max(overflow, samples.size - target);
     const ordered = [...samples.entries()].sort((a, b) => a[1].t - b[1].t);
-    for (let i = 0; i < overflow; i += 1) {
+    for (let i = 0; i < dropCount; i += 1) {
       const [sampleId, sample] = ordered[i];
       samples.delete(sampleId);
+      // ── ⚠️ 只把「当前被计入总量」的样本累加进 evicted，否则总量会翻倍 ────────────────
+      //
+      // 会话总量 = base.buckets + evicted.buckets + 活跃样本的桶（sessionView）。
+      // 而 `seq <= base.seq` 的样本**本来就不计入**（它已经被基线覆盖）。若把它的桶再累加进
+      // evicted，同一笔用量就被算了两次。
+      //
+      // 实测（线上那份 20405 行账本）：20000 条样本里 18577 条是 `seq <= base.seq` 的死样本；
+      // 旧实现每次只淘汰 1 条，翻倍很慢，所以一直没被发现；一旦淘汰带余量（一次 1800 条），
+      // 200 次摄入就让 cacheMiss 从 450,940,862 涨到 466,183,213 —— 凭空多出 1,500 万 token。
+      // 这是**既有缺陷**，不是本轮引入的：本轮只是把它从「几乎不可见」放大成「一眼可见」。
+      const evictBase = baselines.get(sample.sessionId);
+      const evictLive = !evictBase || sample.seq > evictBase.seq;
+      if (!evictLive) continue;
       const acc = evicted.get(sample.sessionId) ?? {
         sessionId: sample.sessionId,
         key: sample.key,
@@ -346,10 +375,31 @@ export function createTokenLedger({
     return overflow;
   }
 
+  /**
+   * 决定是否压缩，并在压缩前淘汰最旧的采样。
+   *
+   * ⚠️ 原来的触发条件 `journalLines <= maxLines && samples.size <= maxLines` 在真实数据上
+   * 恒为假，导致**每一次采样摄入都整文件重写一次并打一行日志**（实测 5.5 MB/次、控制台刷屏）。
+   * 原因是磁盘行数并不等于采样数：文件里还有投影基线（base）和被淘汰汇总（evict）两类行，
+   * 只要它们非空，`journalLines` 就永远大于 `maxLines`（实测 327 base + 20000 turn + 78 evict
+   * = 20405 行 vs maxLines 20000）。
+   *
+   * 正确的判断是拿**磁盘行数和内存行数**比：内存已经把该有的行都表示出来了，磁盘却多出一截
+   * 才是「有冗余待重写」。留 20% 余量，避免在边界上反复触发。
+   */
   function maybeCompact() {
-    if (journalLines <= maxLines && samples.size <= maxLines && !evictedDirty) return;
+    const memoryLines = baselines.size + samples.size + evicted.size;
+    const overflow = samples.size > maxLines;
+    const bloated = journalLines > Math.ceil(memoryLines * JOURNAL_SLACK);
+    if (!overflow && !evictedDirty && !bloated) return;
     const dropped = evictOldestSamples();
-    if (dropped > 0) log(`token 账本：逐轮明细超过 ${maxLines} 条，已淘汰最旧的 ${dropped} 条（累计总量不受影响）`);
+    const at = now();
+    // 淘汰日志节流：它在稳态下每次淘汰都会触发，而淘汰本身现在每 2000 条采样才发生一次；
+    // 再加一层时间节流，保证短时间内的密集写入不会把控制台刷满。
+    if (dropped > 0 && at - lastEvictLogAt >= EVICT_LOG_INTERVAL_MS) {
+      lastEvictLogAt = at;
+      log(`token 账本：逐轮明细超过 ${maxLines} 条，已淘汰最旧的 ${dropped} 条（累计总量不受影响）`);
+    }
     compact();
   }
 

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "files": {
+    "decision.mjs": {
+      "sha256": "fbaa891a6c87a3273884b352a60b1c22efeb25e455c1833486119785400a6343",
+      "bytes": 16773
+    },
+    "image-admission.mjs": {
+      "sha256": "cacd4bfd7ea2890ad887f4b1eebaf0a894f908485b93239215d485173d754119",
+      "bytes": 3090
+    },
+    "image-content.mjs": {
+      "sha256": "6989ff2ea46faae95a5e5379ef871844f5bdc607fe555f142bd6797a725df3d7",
+      "bytes": 10951
+    },
+    "index.mjs": {
+      "sha256": "da3e06825cbf72c325a9197159596916187b5a4a501e7247bbd89ef5e8177a78",
+      "bytes": 25050
+    },
+    "post-image-urls.mjs": {
+      "sha256": "1c239a74987d2680d83976064d9883b70cbf570bd193cbec6adb51f87d5f1c77",
+      "bytes": 16884
+    },
+    "safe-fetch.mjs": {
+      "sha256": "c7117b1700563fb77766676f382a514b167bdc404b4567976f5a513ce5f2ad9f",
+      "bytes": 17596
+    }
+  }
+}

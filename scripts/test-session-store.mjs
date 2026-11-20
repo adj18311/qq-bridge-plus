@@ -116,7 +116,9 @@ test('文件不存在：返回空映射、仍可写、不打印，首次 save �
 
 test('UTF-8 BOM 在解析前剥掉', () => withTempDir((dir) => {
   const file = path.join(dir, 'sessions.json');
-  const expected = { sessions: { 'group:bom': 'sess-bom' }, sessionPolicies: {} };
+  // task-58 起 sessions 键名受白名单约束（group:/private:/patrol:background），本用例只验证 BOM 剥除，
+  // 故使用合法键名，避免与「非法键剔除」语义互相干扰（覆盖见 test-session-identity-mode.mjs）。
+  const expected = { sessions: { 'group:9001': 'sess-bom' }, sessionPolicies: {} };
   fs.writeFileSync(file, `\uFEFF${JSON.stringify({ sessions: expected.sessions })}`, 'utf8');
 
   const { store, logs } = makeStore(file);

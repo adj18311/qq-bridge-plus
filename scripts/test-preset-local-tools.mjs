@@ -77,7 +77,15 @@ const LOCAL_EXECUTION_TOOLS = [
   'subagent_codex', 'subagent_claude_code',
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'plugin_manager',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  'schedule_create', 'schedule_list', 'schedule_edit', 'schedule_view',
+  // 0.2.1 新增对账：本地执行/文件工具改由 dsh-ops bundle 以 `ops_*` 注册
+  // （旧名 pwsh/bash/read/grep/glob/edit 仍在上面，作回归网）。
+  // 实测依据：qq preset 会话 schema 里出现 ops_bash（verify-qq-tools 的 unexpected）。
+  // 对应关系：ops_bash←bash/pwsh、ops_inspect_local_file←read、ops_grep←grep、
+  //           ops_glob←glob、ops_replace←edit/str_replace_editor。
+  // 注：这些名字由 dsh-ops 动态生成，静态抽取器看不到 ⇒ 守卫把它们登记在
+  // OPTIONAL_RESTRICTED_TOOL_NAMES，本测试的"拼错假名"断言才不会被误伤。
+  'ops_bash', 'ops_inspect_local_file', 'ops_grep', 'ops_glob', 'ops_replace',
 ];
 
 /**

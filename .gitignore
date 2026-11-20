@@ -92,7 +92,7 @@ docs/guides/REVIEW_OUT_OF_TEAM_2026-10-04.md
 audio/
 
 # ── 备份包 / 压缩包不进仓库（2026-10-05 加固）────────────────────────────────
-# 本机全量备份包（如 D:\BigFish Clone.zip）含 config.json、state/console-token、
+# 本机全量备份包（如 D:\backup.zip）含 config.json、state/console-token、
 # state/social-v2.json、SnowLuma 数据等敏感内容，绝不能进仓库、更不能随发布外流。
 # 现状：仓库内没有任何被跟踪的压缩包（git ls-files 实测 0 个），故直接拒绝新增；
 # 将来若确需入库某个压缩包，用 git add -f 显式破例。
@@ -103,4 +103,44 @@ audio/
 *.tgz
 
 # 生成的交付物（由 state/techdoc/build-docx.py 产出，不入版本）
-/QQ bridge.docx
+/qq-bridge.docx
+
+# 发布副本：仓库外维护，不纳入版本控制
+/release/
+
+# ── 个人日记（2026-10-25 用户要求：隐私内容，绝不进 git / 发布包）────────────
+# 两个 txt 位于工作区内（用户放置），已加入后台 Agent 日记工具白名单；
+# 内容属于隐私，禁止 commit；打包/备份脚本也必须显式排除本目录。
+/Fish Diary/
+
+# 本地临时调试产物（2026-11-01 提交前清理）
+.dsh-dotnet-home/
+tmp-dbg/
+tmp-task69/
+/nul
+
+# 第三方 bundle（139 MB，含本机账号配置与日志）
+snowluma2.3.4/
+QQZone/
+# 本地临时输出
+prestep-out.txt
+test-out.txt
+test-out-t3.txt
+# 工作区根目录的个人文档（不属于项目）
+*.docx
+
+# ── 本轮清理（2026-11-19）─────────────────────────────────────────────────────────────
+# qzone 设计与验证归档：344 个 markdown/json 产物，每次 git status 都淹没有效信息。
+# 已入库的 5 份正式文档仍在版本控制里；这里只忽略后续产生的归档副本。
+/.qzone-channel-lab/*
+/.qzone-channel-lab/evidence*/
+# 隔离验证产物（566 个文件，均为一次性快照，正式测试在 scripts/ 下）
+/tests/
+# 误落的字面量目录（某个脚本把 %SystemDrive% 当路径用了，内容与本项目无关）
+/%SystemDrive%/
+# 临时补丁与交接草稿
+/.tmp-*.patch
+/.tmp-*
+/HANDOFF-*.md
+# 误产生的重定向文件（1.8 MB 的 bridge.js 副本，17735 行，与本项目无关）
+/.txt

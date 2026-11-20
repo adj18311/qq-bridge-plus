@@ -51,11 +51,11 @@ test('busy：中文「集群 / 负载较高」同样归为拥挤', () => {
   assert.equal(notice.text, '⚠️ 模型服务这会儿有点挤，我过一会儿再试。');
 });
 
-test('rate：429 携带明确耗尽码也统一按限流处理', () => {
+test('quota：429 携带明确耗尽码时保留额度分类', () => {
   const failure = { status: 429, code: 'insufficient_quota', message: '429 quota exhausted' };
   const notice = classifyAgentError(failure.message, failure);
-  assert.equal(notice.kind, 'rate');
-  assert.equal(notice.text, ERROR_NOTICE_TEXTS.rate);
+  assert.equal(notice.kind, 'quota');
+  assert.equal(notice.text, ERROR_NOTICE_TEXTS.quota);
   assertNoticeSafe(notice);
 });
 
@@ -98,11 +98,9 @@ test('rate：明确429前缀与带前缀JSON不能回落旧额度文案', () => 
   }
 });
 
-test('rate：带前缀JSON中的明确429状态统一按限流处理', () => {
+test('quota：带前缀JSON中的明确耗尽码仍保留额度分类', () => {
   const message = 'APIError: ' + JSON.stringify({ error: { status: 429, code: 'credit_balance_too_low' } });
-  const notice = classifyAgentError(message, { code: 'SERVER', message });
-  assert.equal(notice.kind, 'rate');
-  assert.equal(notice.text, ERROR_NOTICE_TEXTS.rate);
+  assert.equal(classifyAgentError(message, { code: 'SERVER', message }).kind, 'quota');
 });
 
 test('rate：状态提取不读取request/body里的伪造429', () => {
@@ -110,9 +108,9 @@ test('rate：状态提取不读取request/body里的伪造429', () => {
   assert.equal(classifyAgentError(message, { message }).kind, 'other');
 });
 
-test('other：额度类文本不再单独识别，统一落兜底文案', () => {
-  assert.equal(classifyAgentError('当前额度已用完').kind, 'other');
-  assert.equal(classifyAgentError('insufficient balance').kind, 'other');
+test('quota：中文「额度」与 insufficient 都命中', () => {
+  assert.equal(classifyAgentError('当前额度已用完').kind, 'quota');
+  assert.equal(classifyAgentError('insufficient balance').kind, 'quota');
 });
 
 test('auth：401 unauthorized 归为鉴权问题', () => {

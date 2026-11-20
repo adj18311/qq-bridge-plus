@@ -821,8 +821,13 @@ export function parseThreadPage(html, { maxPosts = MAX_POSTS } = {}) {
 //   · 认不出就返回空数组、**永不抛**；去重、协议相对地址补 `https:`、`http:` 一律升到 `https:`；
 //     占位形态的地址（URL 特征）**不交出去**，但**如实计数**（见 `extractImageUrls`）。
 
-/** 贴吧图床白名单后缀：只有这些域名下的图片才允许被提取（详见上面那段注释）。 */
-const TIEBA_IMAGE_HOST_SUFFIXES = ['baidu.com', 'bdstatic.com', 'bdimg.com', 'bcebos.com'];
+/** 图床白名单后缀：只有这些域名下的图片才允许被提取/发送（详见上面那段注释）。
+ *  2026-10-24 追加小黑盒（Xiaoheihe）图片 CDN 的三个精确主机：只放行图片子域，
+ *  不放行 `max-c.com` 整域（视频/接口域名不在发图面；仿冒域由精确后缀匹配挡住）。 */
+const TIEBA_IMAGE_HOST_SUFFIXES = [
+  'baidu.com', 'bdstatic.com', 'bdimg.com', 'bcebos.com',
+  'imgheybox.max-c.com', 'imgheybox1.max-c.com', 'cdn.max-c.com',
+];
 
 /** 主机名是不是贴吧自家图床（后缀匹配，子域也算）。 */
 export function isTiebaImageHost(hostname) {
@@ -1419,6 +1424,19 @@ function tiebaRequestOptions({ cookieFile, readFile } = {}) {
   return { headers: { cookie: cookie.cookie, 'user-agent': TIEBA_MOBILE_UA } };
 }
 
+// 可选请求前钩子。异常可能包含凭据，因此只返回固定的失败提示。
+async function runBeforeTiebaRequestHook(hook) {
+  try {
+    const decision = await hook();
+    if (decision === false || (decision && typeof decision === 'object' && decision.ok === false)) {
+      return { ok: false, error: '贴吧请求前检查失败，本次未发出请求' };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: '贴吧请求前检查失败，本次未发出请求' };
+  }
+}
+
 /**
  * 抓取 + 解析 + 格式化（吧页）。
  *
@@ -1438,7 +1456,7 @@ function tiebaRequestOptions({ cookieFile, readFile } = {}) {
  *     —— `error` 变成「冷却说明 + 搜索结果」，端点仍回 429，但模型读到的 error 里有可用结果。
  * 不抛异常（调用方要把它变成工具错误文案）。
  */
-export async function fetchBarPage(bar, page = 1, { fetchText, searchFetch, cookieFile, readFile, maxChars = 200000, limiter = tiebaBarLimiter, now = Date.now() } = {}) {
+export async function fetchBarPage(bar, page = 1, { fetchText, searchFetch, cookieFile, readFile, onBeforeTiebaRequest, maxChars = 200000, limiter = tiebaBarLimiter, now = Date.now() } = {}) {
   // 吧页**需要登录态**（2026-10-08 实测后，从「永远匿名」改成「和帖页一样带 cookie」）。
   //
   // 为什么改（本机同一 IP、**同一个 URL 形态** `/mo/q/m?kw=<吧名>&lp=5028`、两次请求相隔 3 秒的 A/B）：
@@ -1475,6 +1493,10 @@ export async function fetchBarPage(bar, page = 1, { fetchText, searchFetch, cook
   const url = buildBarUrl(name.value, page);
   // 登录态只影响请求头：与帖页同一条路径（`tiebaRequestOptions`），解析与格式化完全不变。
   const requestOptions = tiebaRequestOptions({ cookieFile, readFile });
+  if (typeof onBeforeTiebaRequest === 'function') {
+    const before = await runBeforeTiebaRequestHook(onBeforeTiebaRequest);
+    if (!before.ok) return before;
+  }
   let html;
   try {
     const res = await (fetchText ?? safeFetch)(url, maxChars, requestOptions);
@@ -1510,7 +1532,7 @@ export async function fetchBarPage(bar, page = 1, { fetchText, searchFetch, cook
  * 给 200000 只剩不到 10% 余量，一被截断就会把最后一层切成残块（解析器只能用「有 content 容器才算
  * 一层」来兜底）。这里放宽到 300000，宁可整页拿全再靠格式化压长度。
  */
-export async function fetchThreadPage(tid, page = 1, { fetchText, searchFetch, cookieFile, readFile, maxChars = 300000, limiter = tiebaThreadLimiter, now = Date.now() } = {}) {
+export async function fetchThreadPage(tid, page = 1, { fetchText, searchFetch, cookieFile, readFile, onBeforeTiebaRequest, maxChars = 300000, limiter = tiebaThreadLimiter, now = Date.now() } = {}) {
   const id = normalizeTid(tid);
   if (!id.ok) return { ok: false, error: id.error };
   const query = threadSearchQuery(id.value);
@@ -1534,6 +1556,10 @@ export async function fetchThreadPage(tid, page = 1, { fetchText, searchFetch, c
   const url = buildThreadUrl(id.value, page);
   // 同吧页：登录态只影响请求头，解析与格式化完全不变。
   const requestOptions = tiebaRequestOptions({ cookieFile, readFile });
+  if (typeof onBeforeTiebaRequest === 'function') {
+    const before = await runBeforeTiebaRequestHook(onBeforeTiebaRequest);
+    if (!before.ok) return before;
+  }
   let html;
   try {
     const res = await (fetchText ?? safeFetch)(url, maxChars, requestOptions);
@@ -1724,6 +1750,7 @@ export async function fetchThreadPages(tid, {
   searchFetch,
   cookieFile,
   readFile,
+  onBeforeTiebaRequest,
   maxChars = 300000,
   maxCharsTotal = THREAD_PAGES_TEXT_MAX,
   limiter = tiebaThreadLimiter,
@@ -1754,6 +1781,10 @@ export async function fetchThreadPages(tid, {
     };
   }
   const requestOptions = tiebaRequestOptions({ cookieFile, readFile });
+  if (typeof onBeforeTiebaRequest === 'function') {
+    const before = await runBeforeTiebaRequestHook(onBeforeTiebaRequest);
+    if (!before.ok) return before;
+  }
   const entries = [];
   const urls = [];
   const failures = [];
@@ -1955,7 +1986,7 @@ export const PATROL_REASON_USER = 'user';
  */
 export const PATROL_DEFAULTS = Object.freeze({
   enabled: true,          // 总开关：false ⇒ 巡逻访问一律拒绝（用户指定仍可用）
-  dailyVisitCap: 12,      // 每日自主访问上限（按自然日重置）
+  dailyVisitCap: 6,       // 每日自主访问上限，可配置 0..99（按自然日重置；0 = 自主访问一律拒绝）
   maxPagesPerThread: 2,   // 巡逻单次读帖最多前几页（第 1…N 页）
   quietHours: [1, 8]      // 静默时段 [起, 止)：01:00–08:00 内巡逻不主动发起
 });
@@ -1994,14 +2025,18 @@ function normalizeQuietHours(raw) {
 /**
  * 巡逻配置归一：缺字段吃默认值，非法值回默认值。**永不抛**（配置是用户可编辑的，坏值不该让工具崩）。
  * `dailyVisitCap=0` 是合法值（= 自主访问一律拒绝，只留用户指定这条路）。
+ * 上限允许 0..99：超过 99 按 99 截断（避免手滑写成 1000 后事实上无上限）；非有限数/负数回默认 6。
  */
 export function normalizePatrolConfig(raw) {
   const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
   const cap = Number(src.dailyVisitCap);
   const maxPages = Number(src.maxPagesPerThread);
+  const capValue = Number.isFinite(cap) && cap >= 0
+    ? Math.min(99, Math.floor(cap))
+    : PATROL_DEFAULTS.dailyVisitCap;
   return {
     enabled: src.enabled !== false,
-    dailyVisitCap: Number.isFinite(cap) && cap >= 0 ? Math.floor(cap) : PATROL_DEFAULTS.dailyVisitCap,
+    dailyVisitCap: capValue,
     maxPagesPerThread: Number.isFinite(maxPages) && maxPages >= 1 ? Math.floor(maxPages) : PATROL_DEFAULTS.maxPagesPerThread,
     quietHours: normalizeQuietHours(src.quietHours)
   };

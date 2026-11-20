@@ -17,11 +17,14 @@
 // 作用：
 //  1) 用 tools.restrict 把本地执行/文件类工具与开发工具从**工具清单**里隐藏（注册期）；
 //  2) 用 tools.guard 白名单兜底：任何不在允许范围内的工具，执行时一律拒绝。
+//  3) 小黑盒 MCP 只放行 12 个精确工具名（namespace xiaoheihe），不开放任意 MCP 前缀。
 //
 // ⚠️ 第 1 条是铁律 L7 的落点，不是"附注"：仿真会话的 preset 永不包含本地工具。
 //    `tools.guard` 只能拒绝**执行**，工具名仍会出现在模型的 schema 里——
 //    那既不满足"仿真会话不得拥有本地执行能力"的注册期要求，也会诱导模型去调它。
 //    所以本地工具必须同时出现在下面的 restrict 名单里。
+import { guardXiaoheiheArguments } from './qq-xiaoheihe-guard.mjs'
+
 export const name = 'qq-tool-restrict'
 
 export const inject = ['tools']
@@ -91,7 +94,7 @@ export const inject = ['tools']
  *   ③ 等于把插件装载权交出去 ⇒ 任意代码执行：
  *      · `plugin_manager`（安装/卸载/启停插件，内部会 spawn pnpm）
  *   ④ 无人值守的自我调度（`dsh-schedule`，0.2.0 起是可选 bundle）：
- *      · `schedule_create` / `schedule_list` / `schedule_update` / `schedule_delete`
+ *      · `schedule_create` / `schedule_list` / `schedule_edit` / `schedule_view`
  */
 const LOCAL_EXECUTION_TOOLS = [
   // shell / 进程
@@ -124,7 +127,10 @@ const LOCAL_EXECUTION_TOOLS = [
   //   ③ 插件装载权（= 任意代码执行）
   'plugin_manager',
   //   ④ 无人值守的自我调度
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  //   ④ 无人值守的自我调度（`dsh-schedule`，0.2.0 起是可选 bundle）
+  // 名字以本机 DSH 0.2.2-rc.1 的实测 schema 为准：只有 create/list/edit/view，
+  // 0.2.0 时代的 schedule_update / schedule_delete 已被改名，写旧名等于漏挡。
+  'schedule_create', 'schedule_list', 'schedule_edit', 'schedule_view',
   // DSH 0.2.1: persistent terminals, workspace/worktree access and session history.
   'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list',
   'working_directory', 'create_worktree', 'wait_agent', 'plugin_market',
@@ -138,6 +144,18 @@ const LOCAL_EXECUTION_TOOLS = [
   'ssh_exec', 'ssh_download', 'ssh_upload', 'ssh_tunnel', 'ssh_cluster', 'ssh_list',
   // 已装但当前未进 bundles 的插件（一旦加回就是新口子）
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
+  // ⑤ DSH 0.2.1 对账：本地执行/文件工具改由 **dsh-ops bundle** 以 `ops_*` 名字注册
+  //    （旧名 bash/pwsh/read/grep/glob/edit 保留在上面，不删——回归网不拆）。
+  //    与旧名的对应关系：
+  //      · ops_bash                ← bash / pwsh（dsh-ops/shell 的 publishBashTool；本 profile 实开）
+  //      · ops_inspect_local_file  ← read（文本/hex 视图 = 本地文件读取权）
+  //      · ops_grep                ← grep（文件内容检索）
+  //      · ops_glob                ← glob（路径枚举）
+  //      · ops_replace             ← edit / str_replace_editor（批量替换 = 写文件）
+  //    实测泄漏依据：0.2.1 的 qq-chat / qq-chat-v2 会话 schema 里出现了 `ops_bash`
+  //    （verify-qq-tools.mjs 的 unexpected=["ops_bash"]），旧名单只认 0.2.0 名字就会漏。
+  //    注：dsh-ops/background 的 ops_job_* 在本 profile 是 disabled，暂不列入；启用时补。
+  'ops_bash', 'ops_inspect_local_file', 'ops_grep', 'ops_glob', 'ops_replace',
 ]
 
 const KNOWN_DANGEROUS_GLOBAL_TOOLS = [
@@ -171,8 +189,31 @@ export const RESTRICTED_TOOL_NAMES = Object.freeze([...KNOWN_DANGEROUS_GLOBAL_TO
 
 // Older/optional bundles are not shipped in every desktop build. Keep their
 // restrictions for existing installs, but don't label absence as a spelling error.
+//
+// 2026-10-23：`ops_*` 五个名字也在这里登记为 optional。原因不是"可能不存在"，
+// 而是 dsh-ops 用**动态字符串**注册它们（`FILE_TOOLS.map(name => \`ops_${name}\`)`、
+// shell 的 publishBashTool），scripts/dsh-tool-names.mjs 的静态抽取（defineTool /
+// toolName / patch toolName）看不到这些名字——若不放这里，
+// test-preset-local-tools.mjs 的"拼错假名"断言会把真实存在的探针误报成假名。
+// dsh-ops 本身是第三方可选 bundle（profile package.json 的 link/依赖），符合本名单语义。
 export const OPTIONAL_RESTRICTED_TOOL_NAMES = Object.freeze([
   'dsh_snapshot', 'dsh_rollback', 'incident_resolved', 'subagent_codex', 'subagent_claude_code',
+  'ops_bash', 'ops_inspect_local_file', 'ops_grep', 'ops_glob', 'ops_replace',
+  // 2026-11-18 对账：`spawn_teammate` 进 optional，**不是删掉**。判断依据（都不是猜的）：
+  //   · 它确实**不是任何已安装包里注册的工具** —— 在 app.asar（209 MB）里搜全部四种声明形状
+  //     （`name: \`spawn_teammate\`` / `name:` 单双引号 / `toolName:` / `defineTool({name:`）
+  //     命中数全是 0；`@deepseek-ai/dsh-tool-agent-team` 只注册 team_task_create/get/list/update
+  //     四个（其源码自己写着 “create teammates with a subagent tool”，功能已并到 subagent）。
+  //   · 但它**不是拼错的假名**：同一次搜索里它在 asar 中出现 16 次，且形态是**真工具才会有的**
+  //     UI 契约 —— `dsh-client-ui-tool` 的 `tool.title.spawnTeammate` 标题映射、
+  //     `tool.call.toolview` 的 DetailsRow 渲染器（还会解析 `json.member` 输出），
+  //     `AGENT_TOOLS` 图标集合；第三方插件 dsh-purge 的红队 preset 也把它当 Agent Teams 的真名对待。
+  //     UI 层不会给一个从未存在过的名字写标题和输出解析器。
+  //   · git 历史：它只在本仓 e43186a（v0.2.0 对账）一次性引入，作为「回归网」名字，
+  //     从未被观察到真实注册 —— 所以既不能断言它存在，也不该断言它是错字。
+  // 结论：走 optional。别的 DSH 构建 / 别的 Agent Teams 插件一旦注册它，这条限制**照常生效**；
+  // 当前构建里它缺席时，不再被误报成「拼错假名」。删掉才是错的：那会拆掉真名出现时的回归网。
+  'spawn_teammate',
 ])
 
 // 执行期白名单：不在这些范围内的工具一律拒绝。
@@ -182,6 +223,29 @@ const SAFE_PREFIXES = [
   'mcp__snowluma-host__',
   'mcp__web-search-safe__',
 ]
+
+// ── 小黑盒（Xiaoheihe）MCP：namespace 固定 xiaoheihe，白名单精确到 12 个工具名 ──────
+//
+// 为什么是**逐名精确白名单**，而不是再加一个 MCP 前缀（与上面三个 snowluma 前缀不同）：
+//   1) 需求是「12 个工具」，不是「小黑盒命名空间下的一切」；前缀放行等于把该服务以后
+//      新增/改名出来的任何能力（账号、上传、删除……）自动塞进仿真会话的 schema，
+//      而没有人再复核一次。
+//   2) namespace 由 profile 的 mcp-xiaoheihe 行（@deepseek-ai/dsh-mcp-client）固定为
+//      xiaoheihe，模型 schema 里的工具名 = mcp__xiaoheihe__<上游工具名>；这里逐个列名，
+//      未知同前缀名字（例如 mcp__xiaoheihe__delete_post）在注册期被隐藏、执行期被拒绝。
+//   3) 本守卫不依赖 MCP 是否安装：名单只是「允许集合」；MCP 未安装时这些名字不存在，
+//      restrict 也不会拿它们去 deny，因此不会出现「未安装 MCP 就报工具不存在」的启动噪音。
+// 2026-10-23 与已部署服务（XiaoheiheMcpServer.Http v2.0.0，本地 127.0.0.1:19489 根 URL）
+// 的 tools/list 对齐；上游新增/改名时必须同时改这里与 scripts/test-xiaoheihe-preset.mjs。
+export const XIAOHEIHE_TOOL_NAMES = Object.freeze([
+  'check_login_status', 'interactive_login', 'get_login_qr_code', 'get_user_profile',
+  'get_home_content', 'search_content', 'get_post_detail',
+  'publish_content', 'publish_article', 'publish_video',
+  'post_comment', 'reply_comment',
+])
+
+/** 命名空间 + 原工具名：模型工具清单里的完整工具名（固定前缀，不接受裸名/其它前缀）。 */
+const XIAOHEIHE_EXACT = new Set(XIAOHEIHE_TOOL_NAMES.map((tool) => `mcp__xiaoheihe__${tool}`))
 
 // 无害模型侧工具：ask_user_question 用于把问题转给管理员/用户，
 // todo_write 仅维护任务列表。若后续 preset 不再挂载这些工具，保留无害。
@@ -200,12 +264,108 @@ const SAFE_PREFIXES = [
 // 仿真会话本来就该能用；真正的边界在另一端——图床白名单（只允许贴吧图床）、单张 ≤4MiB、
 // 目标会话白名单与发送频率上限，全部由桥接在执行时把关。把它加进 restrict 名单会让
 // 「模型会发图」这件事的守卫与实现自相矛盾（同 ask_user_question / todo_write 的口径）。
+//
+// 2026-10-25 再追加 Fish Diary 的 4 个日记工具：qq_diary_read / qq_diary_edit /
+// qq_diary_write / qq_diary_delete（桥接侧 /api/socialV2/diary/*，MCP 注册在
+// snowluma-safe，schema 名 `mcp__snowluma__qq_diary_*`，**本来就被 SAFE_PREFIXES
+// 的 'mcp__snowluma__' 覆盖**）。这里仍按逻辑名显式列一份，理由同上：一眼看全
+// 「放行了哪些 QQ 工具」，且万一它们改由 preset 注册成裸名也不会被误拒。
+// 为什么是执行期放行名单（SAFE_EXACT）而不是 restrict/隐藏名单：写日记是仿真会话
+// 本来就该有的正常动作；真正的边界在桥接与存储层——每文件每北京自然日 10 次写、
+// 单次 1MB / 单文件 10MB、覆盖/编辑/删除前自动备份（保留最近 10 份）。
+// 隐私侧已知风险（群聊里 read 会让该群上下文看到私密日记）由预设提示词自律，
+// 用户已裁定不加硬闸；本条注释只是记录口径，不改变白名单语义（仍 fail-closed）。
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
   'qq_tieba_list',
   'qq_tieba_read',
   'qq_send_image',
+  'qq_diary_read',
+  'qq_diary_edit',
+  'qq_diary_write',
+  'qq_diary_delete',
+])
+
+// ── 桌面操作（dsh-click 0.3.27）：9 个工具名逐条放行 ────────────────────────────
+//
+// 为什么是逐名而不是加前缀：dsh-click 注册的是**裸名全局工具**
+// （screen_shot / screen_read / screen_find / click / type / scroll / key /
+// app_list / app_launch），没有 namespace 前缀可用，只能按名放行。
+//
+// 与 SAFE_EXACT 分开、不并进去，是因为这 9 个是**能改机器状态**的工具
+// （click/type/scroll/key/app_launch 都会真正动鼠标键盘、拉进程），
+// 和 ask_user_question / todo_write 这种纯模型侧工具不是一个风险档。
+// 单独成集便于整体关掉（把下面这个 Set 清空即可），也便于 console/审计
+// 一眼看出「这台机器上的 QQ 会话现在有没有手的权限」。
+//
+// 授权口径：DSH 侧 dsh-click 的 requireApproval 已在 profile 的
+// cordis.patch.yml 里关掉（QQ 会话没有审批 UI，开着会挂住等一个永远
+// 不会有人点的弹窗），但 staleCheckPixels / staleCheckTree /
+// maxObservationAgeMs 全部保留 —— 动手前仍要比对观察快照是否过期，
+// 不许拿十秒前的截图点现在的位置。
+const DESKTOP_EXACT = new Set([
+  'screen_shot',
+  'screen_read',
+  'screen_find',
+  'click',
+  'type',
+  'scroll',
+  'key',
+  'app_list',
+  'app_launch',
+])
+
+// ── QQ 空间（qzone-safe 插件）：**只放行 3 个只读工具** ──────────────────────────
+//
+// 为什么需要这一集：qzone-safe 的来源账本只接受 origin 'qq-inbound'
+// （qzone-origin-ledger-offline.mjs:83 的闭集），即「这条工具调用必须来自一条
+// 真实到达的 QQ 消息」。而 QQ 会话的 preset 走本文件的硬边界，不给任何未列名工具。
+// 两者叠加的结果是：唯一合法的来源场景，恰好被挡在工具清单之外 —— 功能无法使用。
+//
+// 为什么只放读、不放写：
+//   · 写工具（qzone_publish / qzone_comment / qzone_reply / qzone_like）即使放进
+//     QQ 会话也发不出去：bridge 的 POST /api/qzone/onebot 对写动作一律 403
+//     （write-channel-not-wired），且 cfg.qzone.writeAdmit.enabled 是 false。
+//     但「发不出去」不等于「可以放进来」——放进来只会让模型反复尝试、浪费回合。
+//   · 读工具是只读取数，风险与 qq_tieba_read 同档。
+//
+// qzone_diagnose 也在内：只读诊断（不访问平台、不写存储），出问题时 QQ 会话
+// 能自己说清插件处于什么状态。
+//
+// 单独成集便于整体关掉（清空即可），也便于一眼看出「这台机器的 QQ 会话
+// 现在能不能读空间」。
+// ⚠️ `qzone_read_comments` WAS ABSENT AND IS BACK (t44). It had been removed because the gate
+// demanded `exceptionReads.fetchCommentPage` — an adapter no host injects — so every call ended at
+// `tool-not-wired` and the model wasted a turn. Advertising a tool that can only answer "not
+// implemented" is worse than not advertising it.
+//
+// What changed: `plain-comments` (36bb523) reads a post's comments through the ORDINARY bound
+// transport, deriving its scope from the trusted binding instead of from a host adapter, and
+// t43 wired the `get_qzone_msg_detail` method that read needs. It is verified end-to-end against
+// the live platform (4 comments returned for a real tid), so the tool can answer again.
+//
+// The REPLY-EVIDENCE path (`own-new-comment`) is unaffected: it still needs `fetchCommentPage` and
+// still refuses inside the reader when the host has none. That is a scope-level fact, not a
+// tool-level one — which is why the tool stays listed.
+const QZONE_READ_ONLY_EXACT = new Set([
+  'qzone_read_posts',
+  'qzone_read_comments',
+  'qzone_diagnose',
+])
+
+// ── QQ 空间写工具：用户裁定「给他完全的写权限和读权限」 ──────────────────────────
+//
+// 之前在只读集里明确排除写工具，理由是「放进来也发不出去，只会让模型反复尝试」。
+// 那条理由现在不成立了：端点已放行写动作（每次都要一枚一次性许可），写链的
+// 每日额度 / 最小间隔（发说说 2h、评论 3min）/ 同帖点赞去重 全部在位。
+//
+// 单独成集，便于需要时整体回收写权限而不用碰只读那一份。
+const QZONE_WRITE_EXACT = new Set([
+  'qzone_publish',
+  'qzone_comment',
+  'qzone_reply',
+  'qzone_like',
 ])
 
 export function apply(ctx) {
@@ -219,7 +379,13 @@ export function apply(ctx) {
   // 是**各 preset 行自己注册的 scoped 工具**，在 QQ preset 里根本没挂载，
   // 因此本名单主要防的是"别的 composition 把它们注册进全局层"这种回归，
   // 以及 MCP 之外的宿主工具（plugin-guard / cordis 检查工具等）。
-  const allowed = (name) => SAFE_EXACT.has(name) || SAFE_PREFIXES.some((prefix) => name.startsWith(prefix));
+  // 小黑盒只按 12 个精确工具名放行：绝不能退化成对 mcp__xiaoheihe__ 的前缀放行。
+  const allowed = (name) => SAFE_EXACT.has(name)
+    || DESKTOP_EXACT.has(name)
+    || XIAOHEIHE_EXACT.has(name)
+    || QZONE_READ_ONLY_EXACT.has(name)
+    || QZONE_WRITE_EXACT.has(name)
+    || SAFE_PREFIXES.some((prefix) => name.startsWith(prefix));
   if (typeof ctx.tools.view === 'function' && typeof ctx.on === 'function') {
     // 0.2.1 loads some global tools after the shared preset tree starts. A
     // failed "unknown name" restriction does not cover a later registration.
@@ -255,7 +421,12 @@ export function apply(ctx) {
   ctx.tools.guard((exec) => {
     const name = exec?.name
     if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
-    if (allowed(name)) return
-    return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ MCP 工具与无害模型侧工具）`
+    if (!allowed(name)) return `工具 "${name}" 不在 QQ 桥接白名单内，已拒绝（仅允许 QQ/小黑盒 MCP 工具与无害模型侧工具）`
+    // 3) 小黑盒专项：名字白名单只决定「能不能用这个工具」；带本地媒体路径的 4 个
+    //    工具还要在执行期校验参数——上游服务会替模型读取本机文件（File.Exists +
+    //    SetFilesAsync），所以「只用专用素材目录」不能只写在提示词里。
+    //    未知名字仍由上面的精确白名单拒绝；其它工具不经过该守卫。
+    if (name.startsWith('mcp__xiaoheihe__')) return guardXiaoheiheArguments(exec)
+    return undefined
   })
 }

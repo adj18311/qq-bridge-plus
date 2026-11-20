@@ -1,0 +1,13 @@
+# TEMPLATE ONLY. Not installed into any DSH profile; do not copy into a profile
+# without owner approval.
+#
+# The entry `id` MUST equal the settings namespace the plugin registers
+# (here: qzone-safe). The `name` is the plugin's display/package name and is
+# a different concern. This mirrors plugins/qq-mode-console/cordis.patch.yml:
+# there `id: qq-mode` differs from `name: qq-mode-console`; a mismatched id makes
+# DSH settings.write() fail with `No configurable plugin entry "<ns>"`.
+- insert:
+    - id: qzone-safe
+      name: qzone-safe
+      config:
+        enabled: false

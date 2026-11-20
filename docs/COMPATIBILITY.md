@@ -2,19 +2,19 @@
 
 这份文档说明：哪些环境**真的验证过**，哪些只是"没测"，以及跑在别的平台上要注意什么。发布任何版本前都应该更新这里。
 
-最后更新：2026-10-22（1.1.0）
+最后更新：2026-10-20（对应提交 `43140fd`）
 
 ## 已验证的环境
 
 | 项 | 版本 / 说明 |
 |---|---|
-| 操作系统 | Windows 11 x64（实机验证） |
+| 操作系统 | Windows 11 x64（本机实测） |
 | DSH | **Desktop 0.2.1-rc.2**（实机探测三轮：`qq-chat-v2` / `qq-chat` / `standard`，各 17 项通过） |
 | Node.js | **>= 22.13.0**（`package.json` 的 `engines` 声明） |
-| QQ 网关 | SnowLuma（OneBot v11，WebSocket）。实机验证版本 1.14.x |
+| QQ 网关 | SnowLuma（OneBot v11，WebSocket）。本机实测版本 1.14.x |
 | 真实 QQ 收发 | 私聊、群聊、@ / 昵称 / 关键词 / 指定发言人唤醒、图片接收、语音与表情发送，均已在真实账号上验证 |
 
-自动化门禁（实机验证）：
+自动化门禁（本机实测）：
 
 ```text
 node scripts/test-dsh-cli-resolve.mjs         14/14
@@ -46,7 +46,7 @@ DSH Desktop 0.2.1 起可能用 `--port 0`，监听端口每次重启都变。桥
 
 - 版本读取依赖 `DSH_INSTALL_ASAR` 环境变量，或在 Windows 上从运行中的 DSH 进程找到安装包；
 - **非 Windows 或读不到版本时会跳过这一步**（跳过是有意的：绝不给老版本装 0.2.1 专用适配）；
-- 跳过时，QQ 预设会获得 DSH 0.2.1 原生的 Team 工具。需要隔离的话，手工把 `plugins/qq-agent-presets/compat/dsh-021-team.patch.yml` 的片段合并进 profile 的补丁文件并重启 DSH（本发布包不附带该操作的分步指南）；
+- 跳过时，QQ 预设会获得 DSH 0.2.1 原生的 Team 工具。需要隔离的话，按 `docs/guides/DSH_021_ADAPTATION.md` 的「Local deployment outside Git」手工把片段合并进 profile 并重启 DSH；
 - 可用 `QQ_FORCE_021_TEAM_PATCH=1` 强制部署、`QQ_SKIP_021_TEAM_PATCH=1` 强制跳过。
 
 **3. `dsh` CLI 会自动定位，不在 PATH 里也可以装**
@@ -73,9 +73,7 @@ setup 会把**当前机器**的 Node 路径、仓库路径写进 profile 的 `co
 | 贴吧浏览 / 读帖 / 自主巡逻 | 自己的贴吧小号 cookie，写进文件后只在配置里填路径（`socialV2.tieba.cookieFile`） | 工具会如实报"未配置登录态"，不会假装成功 |
 | 语音发送 | 包根 `audio/` 目录里放音频文件 | 语音工具报"库是空的" |
 | 发图到 QQ | 无（白名单图床 + 体积上限内） | —— |
-| 模型切换 | MiniMax 或 DeepSeek 的订阅 Key（放在 `~/.dsh/.credentials.yaml`） | 只影响模型切换，不影响收发 |
-
-模型额度耗尽的提醒与请求保护功能**本发布不包含**（该功能已冻结）：额度类错误不会单独识别，普通 429 一律按限流处理。
+| 模型切换 / 额度查询 | MiniMax 或 DeepSeek 的订阅 Key（放在 `~/.dsh/.credentials.yaml`） | 只影响额度查询与切换，不影响收发 |
 
 ## 已知限制
 
@@ -89,5 +87,3 @@ setup 会把**当前机器**的 Node 路径、仓库路径写进 profile 的 `co
 - 本机绝对路径与用户名不得出现在被跟踪文件里（`npm run privacy-scan` 必须通过）；
 - 历史提交里若曾出现真实路径，删文件不足以清除——要么重写历史，要么从干净的树新建仓库；
 - 文档里不得把"本机验证通过"写成"所有环境兼容"，差异以本文档为准。
-
-包里还带了三个 0.20 的排查脚本（`verify:adaptation:020`、`probe:protocol`、`probe:settings`），是用来对照旧版本行为的，不代表 0.20 受支持。

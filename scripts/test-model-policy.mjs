@@ -268,7 +268,7 @@ test('isPlainObject 只接受非数组对象（与桥接既有宽松判定一致
 });
 
 test('CONV_KEY_RE 只接受 private/group 加正整数，且无 g 标志不漂移', () => {
-  for (const key of ['private:1', 'group:42', 'private:10001']) {
+  for (const key of ['private:1', 'group:42', 'private:1234567890']) {
     assert.equal(CONV_KEY_RE.test(key), true, key);
   }
   for (const key of ['private:0', 'group:0', 'private:01', 'group:1.5', 'private:-1',

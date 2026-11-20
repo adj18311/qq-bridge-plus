@@ -210,7 +210,7 @@ await withBridge(async ({ h, server, logs, modelCalls, temp, configFile }) => {
     const onDisk = JSON.parse(fs.readFileSync(configFile, 'utf8'));
     assert.equal(onDisk.dsh.model, 'MiniMax-M3');
     assert.equal(onDisk.dsh.provider, 'minimax-cn', '未提供的字段必须保持不变');
-    assert.equal(onDisk.socialV2?.modelOverrides?.['private:10001'], undefined, '不该凭空造 overrides');
+    assert.equal(onDisk.socialV2?.modelOverrides?.['private:1234567890'], undefined, '不该凭空造 overrides');
     // 备份：命名 + 内容 == 写前字节
     const list = backups(temp);
     assert.equal(list.length, beforeBackups + 1, '应新增一个 config.json.bak-model-* 备份');

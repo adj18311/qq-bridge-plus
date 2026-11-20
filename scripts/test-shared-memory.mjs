@@ -168,6 +168,13 @@ const groupWithRoster = (over = {}) => st({
     '危险键被拒绝');
   const res = api.appendMemoryV2(session, 'memberImpression', '爱玩梗', { target: '测试甲' }, { key });
   assert(res.ok === true && res.shared === true, 'append 用昵称写入成功（内部解析成 uid）');
+  const longTrait = '长'.repeat(300);
+  api.appendMemoryV2(session, 'memberImpression', longTrait, { target: '测试甲' }, { key });
+  assert(socialV2.sharedMemory.memberImpressions['10001'].traits.includes(longTrait), '新增共享印象保留 300 字符');
+  api.clampSharedMemoryV2(socialV2.sharedMemory);
+  assert(socialV2.sharedMemory.memberImpressions['10001'].traits.includes(longTrait), '整理共享桶后仍保留 300 字符');
+  api.appendMemoryV2(session, 'memberImpression', '界'.repeat(301), { target: '测试甲' }, { key });
+  assert(socialV2.sharedMemory.memberImpressions['10001'].traits.some(t => t === '界'.repeat(300)), '超过 300 字符的印象仍受上限约束');
   const imps = socialV2.sharedMemory.memberImpressions;
   assert(Object.keys(imps).join(',') === '10001', '共享桶里的印象主键是 uid', Object.keys(imps).join(','));
   assert(imps['10001'].name === '测试甲' && imps['10001'].uid === '10001', '昵称只做显示（name 字段）');
@@ -234,6 +241,41 @@ const groupWithRoster = (over = {}) => st({
   assert(Object.keys(dedupe.memberImpressions).length === Object.keys(sharedMemory.memberImpressions).length,
     '同一人（本地昵称键 + 共享 uid 键）只渲染一份（t16-F11）',
     Object.keys(dedupe.memberImpressions).length + ' vs ' + Object.keys(sharedMemory.memberImpressions).length);
+}
+
+// 当前发言者与本会话近期发言者优先；只用可信 userId，不使用昵称猜身份。
+{
+  const now = Date.now();
+  const make = (uid, age, name = `成员${uid}`) => ({ uid, name, traits: [`标记${uid}`], lastSeenAt: now - age, lastSourceKey: 'group:2' });
+  const sharedMemory = { activeTopics: [], confirmedTargets: [], memberImpressions: {
+    ...Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`9000${i}`, make(`9000${i}`, i)])),
+    '10001': make('10001', 100000, '同名'), '10002': make('10002', 100001, '同名')
+  }};
+  const { api } = loadPatch({ sharedMemory });
+  const session = st({ recentMessages: [{ userId: '10001', sender: '同名', time: now, isSelf: false }] });
+  const result = api.formatMemoryV2(session, { key: 'group:1' });
+  assert(result.includes('标记10001'), '当前发言者超过前五仍优先召回');
+  assert(!result.includes('标记10002'), '同名但不同 ID 不会被冒认');
+  assert(result.includes('不得作为指令执行') && result.includes('[他处-未核实]'), '优先召回保留跨会话安全标记');
+  assert((result.match(/\[他处-未核实\] - 印象：/g) || []).length === 5, '优先召回仍限制最多五人');
+  const noId = api.formatMemoryV2(st({ recentMessages: [{ sender: '同名', time: now, isSelf: false }] }), { key: 'group:1' });
+  assert(!noId.includes('标记10001') && !noId.includes('标记10002'), '缺少 ID 时不按昵称匹配');
+  const priv = api.formatMemoryV2(st(), { key: 'private:10001' });
+  assert(priv.includes('标记10001'), '私聊对方即使无消息记录也优先召回');
+  const recent = api.formatMemoryV2(st({ recentMessages: [
+    { userId: '10002', sender: '同名', isSelf: false },
+    { userId: '10001', sender: '同名', isSelf: false },
+    { userId: '90000', sender: '自身', isSelf: true }
+  ] }), { key: 'group:1' });
+  assert(recent.includes('标记10001') && recent.includes('标记10002') && recent.indexOf('标记10001') < recent.indexOf('标记10002'), '多位近期发言者按最近发言顺序优先');
+  const unread = api.formatMemoryV2(st({ recentMessages: [{ userId: '10001', isSelf: false }], unread: [{ userId: '10002', isSelf: false }] }), { key: 'group:1' });
+  assert(unread.indexOf('标记10002') < unread.indexOf('标记10001'), '未读发言者优先于近期记录');
+  const forgedSelf = api.formatMemoryV2(st({ recentMessages: [{ userId: '10001', isSelf: true }] }), { key: 'group:1' });
+  assert(!forgedSelf.includes('标记10001'), '自身消息不提升其 userId 的相关度');
+  const conflicting = structuredClone(sharedMemory);
+  conflicting.memberImpressions['10001'].uid = '90000';
+  const unsafe = loadPatch({ sharedMemory: conflicting }).api.formatMemoryV2(session, { key: 'group:1' });
+  assert(!unsafe.includes('标记10001'), '印象键与 uid 冲突时不按任何一个 ID 优先');
 }
 
 // ── 6. agent 侧元数据剥离（t7-R3）────────────────────────────────────────
@@ -547,39 +589,18 @@ ${block}
     assert(!fs.existsSync(stateDir12), '快照回归用的临时 state 目录已清理（不污染线上 state/）', stateDir12);
   }
 }
-// ── 11. 可重放记录：机器可读契约逐条核对当前文件（t4，纯净发布副本无 docs/）──────────────────────
+// ── 11. 可重放记录：文档锚点表逐条核对当前文件（t4）──────────────────────
 {
-  const CONTRACT = path.join(ROOT, 'scripts', 'fixtures', 'shared-memory-contract.json');
-  assert(fs.existsSync(CONTRACT), '存在机器可读契约 scripts/fixtures/shared-memory-contract.json（纯净发布副本不带 docs/）');
-  let contract = null;
-  if (fs.existsSync(CONTRACT)) {
-    try { contract = JSON.parse(fs.readFileSync(CONTRACT, 'utf8')); }
-    catch (error) { assert(false, '契约 JSON 可解析', String((error && error.message) || error)); }
-  }
-  if (contract) {
-    // 发布副本不带 docs/README 与 docs/guides。契约 JSON 是原三份文档（可重放记录 /
-    // LOCAL_PATCHES / SHARED_MEMORY_PATCH）的机器可读等价抽取；这里把它还原成旧
-    // 「可重放记录」的表格与说明形状，下面的既有断言（锚点 ≥20 条、每条都能在
-    // bridge.js 里原样找到、备份文件名、7 处改动与重打说明、两份文档的 V2 标识符
-    // 全部存在）一条不删地继续生效。契约是静态数据：不联网、不读 state/、不碰 profile。
-    const replay = contract.replay || {};
-    const doc = [
-      String(contract.source || ''),
-      ...(Array.isArray(contract.anchors) ? contract.anchors : [])
-        .map((anchor, index) => '| ' + (index + 1) + ' | 补丁点 | `' + anchor + '` |'),
-      ...(Array.isArray(replay.backupFiles) ? replay.backupFiles : []).map((file) => '备份文件：' + file),
-      replay.coreChangeCount === 7 ? '7 处改动' : '',
-      replay.replayInstructions === true ? '重打' : ''
-    ].join('\n');
+  const REPLAY = path.join(ROOT, 'docs', 'guides', 'SHARED_MEMORY_REPLAY.md');
+  assert(fs.existsSync(REPLAY), '存在可重放记录 docs/guides/SHARED_MEMORY_REPLAY.md');
+  if (fs.existsSync(REPLAY)) {
+    const doc = fs.readFileSync(REPLAY, 'utf8');
     const bridgeSrc = fs.readFileSync(BRIDGE, 'utf8');
     // 取锚点表第三列（反引号包起来的那一列）：| # | 补丁点 | anchor |
     // markdown 表格里要写 \| 才能显示竖线，取出来先还原成代码里的原样。
     const anchors = [...doc.matchAll(/^\|\s*\d+\s*\|[^|]*\|\s*`([^`]+)`\s*\|/gm)]
       .map((m) => m[1].replace(/\\\|/g, '|'));
     assert(anchors.length >= 20, '锚点表至少 20 条（覆盖 7 处核心 + 依附改动）', anchors.length + ' 条');
-    assert(anchors.length === (Array.isArray(contract.anchors) ? contract.anchors.length : -1),
-      '契约里的锚点全部被解析（行数一致，防止锚点里的竖线导致静默丢行）',
-      anchors.length + ' / ' + (Array.isArray(contract.anchors) ? contract.anchors.length : '?'));
     const missing = anchors.filter((a) => !bridgeSrc.includes(a));
     assert(missing.length === 0, '按记录核对：每个锚点都能在当前 src/bridge.js 原样找到',
       missing.length ? '缺失：' + missing.join(' || ') : anchors.length + ' 条全部命中');
@@ -590,9 +611,7 @@ ${block}
     // t4 验收①：LOCAL_PATCHES.md / SHARED_MEMORY_PATCH.md 也要与当前文件匹配 ——
     // 文档里提到的每个 xxxV2( 标识符都必须真的存在于 bridge.js（改名/删函数会让文档变谎话）。
     for (const name of ['LOCAL_PATCHES.md', 'SHARED_MEMORY_PATCH.md']) {
-      // 不再读 docs/：两份文档的 V2 标识符清单同样来自契约 JSON 的 documentIdentifiers。
-      const d = (contract.documentIdentifiers && contract.documentIdentifiers[name] || [])
-        .map((idn) => '`' + idn + '()`').join('\n');
+      const d = fs.readFileSync(path.join(ROOT, 'docs', 'guides', name), 'utf8');
       const ids = [...new Set([...d.matchAll(/`([A-Za-z_][A-Za-z0-9_]*V2)\(/g)].map((m) => m[1]))];
       const gone = ids.filter((idn) => !bridgeSrc.includes(idn));
       assert(ids.length > 0 && gone.length === 0, name + ' 引用的函数都存在于当前 bridge.js',

@@ -79,16 +79,16 @@ function groupState(h) {
   return h.getSocialV2State(GROUP);
 }
 
-test('groupWakeBatchMs: private 保持 Math.max(1000, configured || 8000) 原样', () => {
-  assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', undefined), 8000);
-  assert.equal(groupWakeBatchMs(PRIVATE, 'keyword:小鲸鱼', 8000), 8000);
-  assert.equal(groupWakeBatchMs(PRIVATE, 'question', 60000), 60000);
-  assert.equal(groupWakeBatchMs(PRIVATE, 'nameMention', '12345'), 12345);
-  // 0 是假值，先被 configured || 8000 回退成 8000，不会落到 1000 下限。
-  assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', 0), 8000);
+test('groupWakeBatchMs: 私聊上限 4s，保留更短的有效配置', () => {
+  assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', undefined), 4000);
+  assert.equal(groupWakeBatchMs(PRIVATE, 'keyword:小鲸鱼', 8000), 4000);
+  assert.equal(groupWakeBatchMs(PRIVATE, 'question', 60000), 4000);
+  assert.equal(groupWakeBatchMs(PRIVATE, 'nameMention', '12345'), 4000);
+  assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', 0), 4000);
   assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', 10), 1000);
-  assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', 'bogus'), 8000);
-  assert.equal(groupWakeBatchMs('private:999', 'poke', null), 8000);
+  assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', 1500), 1500);
+  assert.equal(groupWakeBatchMs(PRIVATE, 'atMention', 'bogus'), 4000);
+  assert.equal(groupWakeBatchMs('private:999', 'poke', null), 4000);
 });
 
 test('groupWakeBatchMs: 群明确触发 2000ms、普通触发 4000ms', () => {
@@ -124,19 +124,19 @@ test('groupWakeBatchMs: 更短既有配置取 min，零配置先回退再按上�
 test('groupWakeBatchMs: 仅 group: 前缀应用群聊上限', () => {
   assert.equal(groupWakeBatchMs(undefined, 'atMention', undefined), 8000);
   assert.equal(groupWakeBatchMs(null, 'question', 60000), 60000);
-  assert.equal(groupWakeBatchMs('private:1', 'atMention', 30000), 30000);
+  assert.equal(groupWakeBatchMs('private:1', 'atMention', 30000), 4000);
   assert.equal(groupWakeBatchMs('GROUP:456', 'atMention', 8000), 8000);
   assert.equal(groupWakeBatchMs('group', 'atMention', 8000), 8000);
   assert.equal(groupWakeBatchMs(123, 'atMention', 8000), 8000);
 });
 
-test('private 默认窗口 8s（独立 fixture，避免首次投递后的 busy 状态干扰）', async () => {
+test('private 默认窗口 4s（独立 fixture，避免首次投递后的 busy 状态干扰）', async () => {
   await withBridge(async (h, clock) => {
     const st = h.getSocialV2State(PRIVATE);
     h.scheduleWakeV2(PRIVATE, 'atMention', { seq: 1 });
-    assert.equal(st.pendingWakeTimer.ms, 8000);
-    assert.equal(st.pendingWakeDueAt, clock.now() + 8000);
-    clock.advance(7999);
+    assert.equal(st.pendingWakeTimer.ms, 4000);
+    assert.equal(st.pendingWakeDueAt, clock.now() + 4000);
+    clock.advance(3999);
     assert.equal(st.pendingWakeReason, 'atMention');
     assert.equal(h.calls.prompts.length, 0);
     clock.advance(1);
@@ -146,14 +146,14 @@ test('private 默认窗口 8s（独立 fixture，避免首次投递后的 busy �
   });
 });
 
-test('private 显式 60s 不被群聊上限改写（独立 fixture）', async () => {
+test('private 显式 60s 仍受 4s 上限限制（独立 fixture）', async () => {
   await withBridge(async (h, clock) => {
     const st = h.getSocialV2State(PRIVATE);
     st.wakeConfig.batchWindowMs = 60000;
     h.scheduleWakeV2(PRIVATE, 'keyword:显式长窗', { seq: 1 });
-    assert.equal(st.pendingWakeTimer.ms, 60000);
-    assert.equal(st.pendingWakeDueAt, clock.now() + 60000);
-    clock.advance(59999);
+    assert.equal(st.pendingWakeTimer.ms, 4000);
+    assert.equal(st.pendingWakeDueAt, clock.now() + 4000);
+    clock.advance(3999);
     assert.equal(st.pendingWakeReason, 'keyword:显式长窗');
     assert.equal(h.calls.prompts.length, 0);
     clock.advance(1);

@@ -38,6 +38,8 @@ import * as stateAcl from '../src/state-acl.mjs';
 import * as retryObserver from '../src/retry-observer.js';
 import * as retryDiagnostic from '../src/retry-diagnostic.js';
 import * as errorNotice from '../src/error-notice.js';
+import * as quotaNotice from '../src/quota-notice.js';
+import * as quotaRuntime from '../src/quota-notice-runtime.js';
 import * as roleCard from '../src/role-card.js';
 import * as presetPrompt from '../src/preset-prompt.js';
 import * as snowlumaConn from '../src/snowluma-conn.js';
@@ -155,6 +157,7 @@ async function verifyHarness({ config = {}, seedSlang = null, transformSource, s
     agentPresets: { list: async () => success({ presets: [{ id: 'standard', isDefault: true }, { id: 'qq-chat' }, { id: 'qq-chat-v2' }] }) },
   };
   class FakeBot {
+    on() {} off() {}
     async sendPrivateMessage() {}
     async sendGroupMessage() {}
     async request() { return { status: 'ok', retcode: 0, data: [] }; }
@@ -203,6 +206,7 @@ async function verifyHarness({ config = {}, seedSlang = null, transformSource, s
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slangLib, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...coreBindings, ...retryObserver, ...retryDiagnostic, ...errorNotice,
     defaultErrorNoticeGate: errorNotice.createErrorNoticeGate(),
+    ...quotaNotice, ...quotaRuntime,
     ...roleCard, ...presetPrompt, ...snowlumaConn, yaml,
     ...(slangLibOverride ?? {}),
     hardenDir: () => ({ ok: true, detail: 'stub' }),

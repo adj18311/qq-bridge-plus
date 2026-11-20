@@ -1720,6 +1720,26 @@ button:active:not(:disabled) {
   }
 }
 
+/* ================= 小黑盒降级与受控恢复 ================= */
+#columnDegradePanel { margin-top:18px; padding-top:14px; border-top:1px solid var(--card-border) }
+#columnDegradeHead { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px }
+#columnDegradeHead .meta { margin-top:0 }
+#columnDegradeLevel { font-size:20px; font-weight:600; letter-spacing:-.4px; color:var(--muted) }
+#columnDegradeLevel.is-normal { color:var(--ok) }
+#columnDegradeLevel.is-read-only { color:var(--warn-fg-strong) }
+#columnDegradeLevel.is-paused { color:var(--err) }
+#columnDegradeGrid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px 16px; margin-top:12px }
+#columnDegradeGrid > div { min-width:0 }
+#columnDegradeGrid span { display:block; font-size:12px; color:var(--label) }
+#columnDegradeGrid strong { display:block; font-size:14px; font-weight:600; color:var(--text-strong); word-break:break-word }
+#columnDegradeConditions { display:flex; flex-direction:column; gap:6px; margin-top:6px }
+.column-degrade-cond { display:flex; gap:8px; font-size:13px; line-height:1.65; color:var(--muted) }
+.column-degrade-cond b { flex:0 0 auto; font-weight:600 }
+.column-degrade-cond.pass b { color:var(--ok) }
+.column-degrade-cond.fail b { color:var(--err) }
+.column-degrade-cond span { min-width:0; word-break:break-word }
+@media(max-width:820px) { #columnDegradeGrid { grid-template-columns:repeat(2,minmax(0,1fr)) } }
+
 /* ================= 令牌与花费 ================= */
 #section-usage .usage-h3 { font-size:13px; font-weight:600; color:var(--text); margin:20px 0 8px }
 #section-usage .usage-h3:first-of-type { margin-top:16px }
@@ -1770,7 +1790,10 @@ button:active:not(:disabled) {
       <div class="nav-label">聊天行为</div>
       <button data-view="social-v2" class="nav-item"><span class="nav-icon" aria-hidden="true">◈</span>二代仿真<span class="nav-note">V2</span></button>
       <button data-view="social-v1" class="nav-item"><span class="nav-icon" aria-hidden="true">◇</span>一代仿真<span class="nav-note">V1</span></button>
+      <button data-view="xiaoheihe" class="nav-item"><span class="nav-icon" aria-hidden="true">◆</span>小黑盒<span class="nav-note">密码</span></button>
+      <button data-view="qzone" class="nav-item"><span class="nav-icon" aria-hidden="true">◉</span>QQ 空间<span class="nav-note">独立</span></button>
       <button data-view="slang" class="nav-item"><span class="nav-icon" aria-hidden="true">▤</span>黑话词库</button>
+      <button data-view="diary" class="nav-item"><span class="nav-icon" aria-hidden="true">✎</span>鱼缸日记<span class="nav-note">隐私</span></button>
       <div class="nav-label">管理</div>
       <button data-view="usage" class="nav-item"><span class="nav-icon" aria-hidden="true">◧</span>令牌与花费</button>
       <button data-view="access" class="nav-item"><span class="nav-icon" aria-hidden="true">⊙</span>访问与安全</button>
@@ -2053,7 +2076,7 @@ button:active:not(:disabled) {
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="sendVoice"> <span><b>qq_send_voice / qq_list_voices</b><span class="meta">发送语音条（只能发语音库里的音频；偶然而为的强表达）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="tiebaList"> <span><b>qq_tieba_list</b><span class="meta">查看某个百度贴吧吧的帖子列表（只读）</span></span></label>
         <label class="v2-tool-item"><input type="checkbox" data-v2-tool="tiebaRead"> <span><b>qq_tieba_read</b><span class="meta">读取某个贴吧帖子的正文楼层（只读）</span></span></label>
-        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="patrol"> <span><b>自主逛贴吧（巡逻）</b><span class="meta">允许 AI 聊到相关话题时自己去看一眼（单次最多前两页；每日上限 12 次、01:00–08:00 不主动逛）。关闭后只有用户明确要求时才能看</span></span></label>
+        <label class="v2-tool-item"><input type="checkbox" data-v2-tool="patrol"> <span><b>自主逛贴吧（巡逻）</b><span class="meta">允许 AI 在回合里自己想看就去看；后台机会按北京时间 07:00–23:00 调度（单次最多前两页；每日上限以当前生效配置为准，静默时段 23:00–07:00 不主动逛）。关闭后只有用户明确要求时才能看</span></span></label>
       </div>
       <div class="meta" style="margin-top:6px">二代黑话学习：AI 可用 <code>qq_slang_submit</code> 提交陌生词，也可由桥接自动提取；管理员在「黑话词库」页面筛选确认后，词条会自动写入黑话提示词并注入 <code>qq_get_prompt</code> 与后续唤醒。</div>
 
@@ -2547,6 +2570,280 @@ button:active:not(:disabled) {
         <span class="meta" id="aiNotifyMsg"></span>
       </div>
     </section>
+<section id="section-xiaoheihe" data-page="xiaoheihe" class="card span-all">
+      <h2>小黑盒专栏</h2>
+      <div class="meta">进入小黑盒专栏需要独立于控制台令牌的专栏密码：它是敏感权限，用来阻止智能体自行修改敏感设置。</div>
+      <div class="meta" id="columnAgentPausedNote">正在读取暂停状态…</div>
+      <div id="columnUnset" hidden>
+        <div class="err">属于敏感权限，请设置密码</div>
+        <div class="row" style="margin-top:10px">
+          <label style="flex:0 0 120px">设置密码</label>
+          <input type="password" id="columnSetPassword" placeholder="至少 10 个字符" autocomplete="current-password" style="flex:1">
+        </div>
+        <div class="row">
+          <label style="flex:0 0 120px">确认密码</label>
+          <input type="password" id="columnSetConfirm" placeholder="再次输入密码" autocomplete="current-password" style="flex:1">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="columnSetSubmit" class="small">设置</button>
+          <span class="meta" id="columnSetMsg"></span>
+        </div>
+        <div class="meta" id="columnSetPausedTip" hidden>设置密码前请先暂停：到「二代仿真」页点击「暂停二代 AI」。</div>
+      </div>
+      <div id="columnVerify" hidden>
+        <div class="err">属于敏感权限，请验证密码</div>
+        <div class="row" style="margin-top:10px">
+          <label style="flex:0 0 120px">专栏密码</label>
+          <input type="password" id="columnVerifyPassword" placeholder="输入专栏密码" autocomplete="current-password" style="flex:1">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="columnVerifySubmit" class="small">验证</button>
+          <button id="columnForgotOpen" class="small">忘记密码</button>
+          <span class="meta" id="columnVerifyMsg"></span>
+        </div>
+        <div class="meta" id="columnLockedTip" hidden>密码已锁定，剩余 <b id="columnLockedSeconds">0</b> 秒后可重试。</div>
+        <div class="err" id="columnUntrustedWarn" hidden>密码状态不可信（本地密码文件已损坏或无法解析）。请直接使用下面的「忘记密码」重新设置。</div>
+      </div>
+      <div id="columnForgot" hidden>
+        <div class="err" id="columnForgotWarn">重置密码前，请到「二代仿真」页点击「暂停二代 AI」，再重新设置密码</div>
+        <div class="row" style="margin-top:8px">
+          <label style="flex:0 0 120px">新密码</label>
+          <input type="password" id="columnResetPassword" placeholder="至少 10 个字符" autocomplete="current-password" style="flex:1">
+        </div>
+        <div class="row">
+          <label style="flex:0 0 120px">确认新密码</label>
+          <input type="password" id="columnResetConfirm" placeholder="再次输入新密码" autocomplete="current-password" style="flex:1">
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="columnResetSubmit" class="small">重设</button>
+          <span class="meta" id="columnResetMsg"></span>
+        </div>
+        <div class="meta" id="columnResetPausedTip" hidden>请先到「二代仿真」页点击「暂停二代 AI」</div>
+      </div>
+      <div id="columnVerified" hidden>
+        <div class="ok" id="columnVerifiedTip">已通过验证（剩余 15 分钟）</div>
+        <div class="row" style="margin-top:8px">
+          <button id="columnLogout" class="small">保存并退出</button>
+          <span class="meta" id="columnLogoutMsg"></span>
+        </div>
+        <div class="meta">配置面板已接入本页下方；降级状态与受控恢复在「降级与受控恢复」区块。</div>
+      </div>
+      <div class="meta" id="columnDegradeHint" hidden>验证专栏密码后，这里会显示小黑盒降级级别、恢复前置条件与两个受控操作。</div>
+      <div id="columnDegradePanel" hidden>
+        <h3>降级与受控恢复</h3>
+        <div class="meta">只读数据来自 <code>GET /api/degrade/status</code>（专栏会话门禁）。进入本页拉取一次，之后每 5 秒轮询；离开本页或页面切到后台即停表。三个恢复前置条件全部由服务端现算，页面只显示、不参与判定。</div>
+        <div id="columnDegradeHead">
+          <strong id="columnDegradeLevel">—</strong>
+          <span class="meta" id="columnDegradeUpdated">读取中…</span>
+        </div>
+        <div id="columnDegradeGrid">
+          <div><span>触发原因</span><strong id="columnDegradeTrigger">—</strong></div>
+          <div><span>进入降级时间</span><strong id="columnDegradeSince">—</strong></div>
+          <div><span>降级通知</span><strong id="columnDegradeNotify">—</strong></div>
+          <div><span>身份模式</span><strong id="columnDegradeIdentity">—</strong></div>
+        </div>
+        <div class="err" id="columnDegradeGuardWarn" hidden></div>
+        <div class="meta" id="columnDegradeConditionsTitle">恢复前置条件（✓ 满足 / ✗ 未满足）</div>
+        <div id="columnDegradeConditions"></div>
+        <div class="row" style="margin-top:12px">
+          <button id="columnDegradeResend" class="small">重发降级通知</button>
+          <button id="columnDegradeRecover" class="small">受控恢复</button>
+          <span id="columnDegradeMsg"></span>
+        </div>
+        <div class="meta" id="columnDegradeRecoverBlocked" hidden></div>
+      </div>
+      <div id="columnGuardPanel" hidden style="margin-top:18px;padding-top:14px;border-top:1px solid var(--card-border)">
+        <h3>身份守卫</h3>
+        <div class="meta">身份守卫与上面的「降级级别」是两套独立机制：守卫把小黑盒<strong>全部</strong>操作按停（返回 <code>identity-guard-all-paused</code>）时，只能用这里的按钮解除；上面的「受控恢复」只处理降级层，对守卫无效。三个前置条件（身份可判定 / QQ 通信 / 补报回执）全部由服务端现算，本页只显示与提交。</div>
+        <div id="columnGuardHead">
+          <strong id="columnGuardState">—</strong>
+          <span class="meta" id="columnGuardUpdated">未读取</span>
+        </div>
+        <div id="columnGuardGrid">
+          <div><span>异常编号</span><strong id="columnGuardAnomaly">—</strong></div>
+          <div><span>起始时间</span><strong id="columnGuardSince">—</strong></div>
+          <div><span>补报回执</span><strong id="columnGuardNotify">—</strong></div>
+          <div><span>身份可判定</span><strong id="columnGuardIdentity">—</strong></div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button id="columnGuardRecover" class="small">解除身份守卫</button>
+          <span id="columnGuardMsg"></span>
+        </div>
+        <div class="err" id="columnGuardFailed" hidden></div>
+      </div>
+      <div class="meta" id="columnSettingsHint" hidden>验证专栏密码后可编辑配置；保存后立即生效（服务端判定，不依赖提示词）。</div>
+      <div id="columnSettingsPanel" hidden>
+        <h3>能力开关（对所有来源生效）</h3>
+        <div class="meta">这些开关由服务端判定：关掉「浏览」后，连 <code>search_content</code> 在内的读工具也会被拒；「只读模式」打开时只允许浏览/搜索，禁止发帖、评论、回复。登录类工具不在此列（它们不改内容，只改本机登录态）。</div>
+        <div id="columnSettingsCaps" class="row" style="flex-wrap:wrap;gap:16px"></div>
+        <div class="row" style="margin-top:6px">
+          <label><input type="checkbox" id="columnReadOnly"> 只读模式（禁止一切写操作）</label>
+        </div>
+        <h3>后台巡逻</h3>
+        <div class="row">
+          <label><input type="checkbox" id="columnPatrolEnabled"> 允许后台巡逻</label>
+        </div>
+        <div class="row">
+          <label style="flex:0 0 auto">巡逻时段</label>
+          <input type="time" id="columnPatrolStart" style="width:120px">
+          <span class="meta">至</span>
+          <input type="time" id="columnPatrolEnd" style="width:120px">
+          <span class="meta">默认 07:00–23:00；起止相同表示全天；支持跨午夜（如 22:00–06:00）。</span>
+        </div>
+        <h3>每日额度（自主操作上限）</h3>
+        <div class="row" style="gap:18px;flex-wrap:wrap">
+          <label>浏览 <input type="number" min="0" max="99" id="columnQuotaBrowse" style="width:80px"></label>
+          <label>发帖 <input type="number" min="0" max="99" id="columnQuotaPost" style="width:80px"></label>
+          <label>评论 <input type="number" min="0" max="99" id="columnQuotaComment" style="width:80px"></label>
+        </div>
+        <div class="meta">0 表示禁止该类自主操作；调低上限不会清零已用次数；北京时间每天 00:00 重置。当前上限由服务端下发给额度账本（不是页面自报）。</div>
+        <div class="meta" id="columnQuotaLive">已用/上限：读取中…</div>
+        <h3>保存时额外执行</h3>
+        <div class="meta">勾选后按固定顺序执行：保存配置 → 下发额度 → 重置额度 → 恢复。一步失败立即停止，不回滚，已完成的步骤会逐步列出。</div>
+        <div id="columnSettingsActions" class="row" style="flex-wrap:wrap;gap:16px"></div>
+        <div class="row" style="margin-top:10px">
+          <button id="columnSettingsReload" class="small">放弃修改并重新读取</button>
+          <span id="columnSaveMsg"></span>
+        </div>
+        <div id="columnSaveSteps" hidden></div>
+        <h3>审计（当日）</h3>
+        <div class="row">
+          <button id="columnAuditRefresh" class="small">刷新审计</button>
+          <span class="meta" id="columnAuditMsg">未读取</span>
+        </div>
+        <div id="columnAuditTable" class="meta">—</div>
+        <div class="err" style="margin-top:12px">密码是为了不让智能体自行修改</div>
+      </div>
+      <div class="meta" id="columnDraftNote">上方配置有未保存的修改：离开本页或关闭标签页会先询问。</div>
+      <div class="err" style="margin-top:12px">密码是为了不让智能体自行修改</div>
+      <div class="meta">此密码不防本机同用户代码读取本地文件，也不替代真实写入授权。</div>
+    </section>
+<section id="section-qzone" data-page="qzone" class="card span-all">
+  <h2>QQ 空间专栏</h2>
+  <p class="meta">独立密码与独立会话 Cookie；不复用控制台令牌、小黑盒密码或其会话。配置与审计存在 <code>state/qzone-plugin-state.sqlite</code>（插件库，本页只经插件接口读写它）；<code>state/qzone-console-state.sqlite</code> 只存控制台内部簿记（审计清理记录 + 专栏密码审计），两者不混用。所有操作以服务端回执为准。</p>
+  <div id="qzoneAuthStatus" class="meta" role="status">正在检查专栏密码状态…</div>
+  <div id="qzoneSetup" hidden>
+    <div class="row"><label for="qzoneSetupPassword">设置独立密码</label><input id="qzoneSetupPassword" type="password" autocomplete="new-password"><button id="qzoneSetupSubmit" class="small">设置密码</button></div>
+    <div id="qzoneSetupMessage" class="meta" role="status"></div>
+  </div>
+  <div id="qzoneVerify" hidden>
+    <div class="row"><label for="qzoneVerifyPassword">QQ 空间专栏密码</label><input id="qzoneVerifyPassword" type="password" autocomplete="current-password"><button id="qzoneVerifySubmit" class="small">验证</button></div>
+    <div class="row"><button id="qzoneForgotOpen" class="small">忘记密码 / 重新设置</button></div>
+    <div id="qzoneVerifyMessage" class="meta" role="status"></div>
+  </div>
+  <div id="qzoneForgot" hidden>
+    <div class="meta">重设操作必须由服务端确认暂停状态；如果服务端拒绝，本页不会显示完成。</div>
+    <div class="row"><label for="qzoneForgotPassword">新专栏密码</label><input id="qzoneForgotPassword" type="password" autocomplete="new-password"><button id="qzoneForgotSubmit" class="small">提交重设</button><button id="qzoneForgotCancel" class="small">返回验证</button></div>
+    <div id="qzoneForgotMessage" class="meta" role="status"></div>
+  </div>
+  <div id="qzoneAuthStateMessage" class="err" role="status" hidden></div>
+  <div id="qzonePanel" hidden>
+    <div class="row"><span id="qzoneSessionMessage" class="meta">专栏会话状态未知</span><button id="qzoneLogout" class="small">退出专栏</button></div>
+    <div class="err" id="qzoneDispatchStatus" role="alert" hidden></div>
+    <div class="meta" id="qzoneConnection" role="status">配置接口未连接。</div>
+    <div id="qzoneStateNotice" class="err" role="alert" hidden></div>
+    <div id="qzoneRetryRow" class="row" hidden><button id="qzoneRetryRead" class="small">重新读取</button><span class="meta">插件库被占用时不会自动重试，请稍后手动点击。</span></div>
+    <button id="qzoneReload" class="small">重新读取状态和配置</button>
+    <h3>空间总开关</h3>
+    <label><input id="qzoneEnabled" type="checkbox"> 启用 QQ 空间工具</label>
+    <h3>读写与工具权限</h3>
+    <div class="row"><label><input id="qzoneReadAllowed" type="checkbox"> 允许读取</label><label><input id="qzoneWriteAllowed" type="checkbox"> 允许写入</label></div>
+    <div id="qzonePermissions" class="row" style="flex-wrap:wrap;gap:14px"></div>
+    <h3>每日额度</h3>
+    <div id="qzoneQuotas" class="row" style="flex-wrap:wrap;gap:14px"></div>
+    <div class="row"><label for="qzoneInterval">主动机会间隔（分钟，最少 15 分钟）</label><input id="qzoneInterval" type="number" min="15" value="100"></div>
+    <div class="row"><label for="qzoneStart">主动活动时段（北京时间）</label><input id="qzoneStart" type="time" value="07:00"><span>至</span><input id="qzoneEnd" type="time" value="23:00"></div>
+    <div class="meta">自主行为尚未接线，当前不生效：上面两项可以编辑并保存到插件库，但当前运行时不按它们调度。</div>
+    <div class="row"><button id="qzoneSave" class="small" disabled>保存配置</button><span id="qzoneSaveMessage" class="meta" role="status"></span></div>
+    <div class="meta">本页可写字段：总开关、允许读取/写入、6 个工具权限、3 个每日额度、主动机会间隔、活动时段。保存会写进 <code>state/qzone-plugin-state.sqlite</code>。</div>
+    <h3>额度重置与暂停恢复</h3>
+    <div id="qzoneQuotaReset" class="row" style="flex-wrap:wrap;gap:10px"></div>
+    <div id="qzonePauseStatus" class="meta">读写暂停状态未连接。</div>
+    <div class="row"><button id="qzoneRecoverRead" class="small" disabled>恢复读取</button><button id="qzoneRecoverWrite" class="small" disabled>恢复写入</button><button id="qzoneRecoverAll" class="small danger" disabled>一键恢复全部</button><span id="qzoneRecoverMessage" class="meta" role="status"></span></div>
+    <h3>空间审计</h3>
+    <div class="row"><button id="qzoneAuditRefresh" class="small">刷新审计</button><span id="qzoneAuditStatus" class="meta" role="status">审计接口未连接。</span></div>
+    <div class="meta">「类型」列区分 <code>intent</code>（读/写意图）与 <code>settle</code>（写结算）。</div>
+    <div id="qzoneAudit" class="meta">尚未读取。</div>
+  </div>
+</section>
+<section id="section-diary" data-page="diary" class="card span-all">
+      <h2 data-note="控制台看不到日记内容">鱼缸日记</h2>
+      <div class="meta"><b>隐私红线：</b>这个页面只显示元数据（字节数 / 行数 / sha256 / 时间 / 今日写入次数 / 备份份数），<b>永远不显示日记正文</b>。日记全文只有用户本人在 QQ 里问 AI 时才可能看到，控制台、审计与日志都不含内容。设置写在 <code id="diaryConfigPath">state/diary-config.json</code>，保存后<b>立即生效</b>（不需要重启桥接）；已注册给 DSH 的工具 schema 保留了开关位，彻底从工具清单里消失要等下次重启 DSH。</div>
+
+      <div class="row" style="margin-top:10px">
+        <label style="flex:1">启用鱼缸日记</label><input type="checkbox" id="diaryEnabled" style="width:auto">
+        <span class="meta" style="flex:2">关闭后 AI 调任何日记工具都会被拒绝（diary-disabled），不写盘、不改计数。</span>
+      </div>
+
+      <details class="settings-group" open><summary>工具开关（关闭即刻对该工具返回 diary-disabled）</summary><div class="settings-content">
+        <div class="v2-tool-list">
+          <label class="v2-tool-item"><input type="checkbox" id="diaryToolRead"> <span><b>qq_diary_read</b><span class="meta">读取日记正文（只在用户本人要求时由 AI 复述）</span></span></label>
+          <label class="v2-tool-item"><input type="checkbox" id="diaryToolWrite"> <span><b>qq_diary_write</b><span class="meta">写入日记（全文替换 / 追加）</span></span></label>
+          <label class="v2-tool-item"><input type="checkbox" id="diaryToolEdit"> <span><b>qq_diary_edit</b><span class="meta">按行号或文本片段修改日记</span></span></label>
+          <label class="v2-tool-item"><input type="checkbox" id="diaryToolDelete"> <span><b>qq_diary_delete</b><span class="meta">删除日记（保留备份，可恢复）</span></span></label>
+        </div>
+      </div></details>
+
+      <details class="settings-group" open><summary>限额（保存后热生效；余额按北京时间每天 0 点重置）</summary><div class="settings-content">
+        <div class="row" style="margin-top:6px">
+          <label style="flex:1">单文件上限（字节）</label><input type="number" id="diaryMaxFileBytes" min="1024" step="1024" style="max-width:180px">
+          <span class="meta" style="flex:2">默认 10485760 = 10 MB</span>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label style="flex:1">单次写入上限（字节）</label><input type="number" id="diaryMaxPayloadBytes" min="1" max="1000000" step="1" style="max-width:180px">
+          <span class="meta" style="flex:2" id="diaryPayloadHint">默认 1000000 字节（= 桥接 HTTP 请求体硬上限，且这是<b>包含 JSON 外壳在内</b>的整个请求体；外壳里的 key/which 也占地方，所以正文实际可用<b>约 999950 字节</b>——具体少几十字节，不是精确契约值。配得更大不会生效）</span>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label style="flex:1">每日写入次数</label><input type="number" id="diaryDailyWrites" min="1" max="1000" style="max-width:180px">
+          <span class="meta" style="flex:2">默认 10 次 / 文件 / 天</span>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label style="flex:1">备份保留份数</label><input type="number" id="diaryBackupKeep" min="1" max="200" style="max-width:180px">
+          <span class="meta" style="flex:2">默认 10 份 / 文件</span>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="diaryConfigSave">保存设置</button>
+          <button id="diaryConfigReload" class="small">重新读取</button>
+          <span class="meta" id="diaryConfigMsg"></span>
+        </div>
+      </div></details>
+
+      <h3 class="usage-h3">当前状态（元数据）</h3>
+      <div class="overview-summary" id="diaryStatusCards">
+        <div class="metric"><span>笔记本</span><strong id="diaryNotebookBytes">—</strong><small id="diaryNotebookHint">读取中…</small></div>
+        <div class="metric"><span>私密日记</span><strong id="diaryPrivyBytes">—</strong><small id="diaryPrivyHint">读取中…</small></div>
+      </div>
+      <div class="tool-log-table" id="diaryStatusTable">加载中…</div>
+
+      <h3 class="usage-h3">备份</h3>
+      <div class="meta">恢复会把备份写回原文件，<b>算一次写入</b>（占用今日额度），且<b>恢复前会先备份当前版本</b>（当前日记本来就是空的时候没有内容可备份，这一步会跳过），所以恢复通常也可以反悔。</div>
+      <div class="row" style="margin-top:8px">
+        <button id="diaryBackupsRefresh" class="small">刷新备份列表</button>
+        <button id="diaryCleanup" class="small">清理旧备份（按保留份数）</button>
+        <span class="meta" id="diaryBackupMsg"></span>
+      </div>
+      <div class="tool-log-table" id="diaryBackupsTable">加载中…</div>
+
+      <h3 class="usage-h3">今日写入计数</h3>
+      <div class="row">
+        <button id="diaryResetUsage" class="small danger">重置今日计数</button>
+        <span class="meta" id="diaryResetMsg">重置会记一条审计（时间 / 操作 / 结果），但不会改动日记内容。</span>
+      </div>
+
+      <h3 class="usage-h3">最近审计</h3>
+      <div class="meta">只有时间、文件、操作、结果、字节数、sha256、备份 id —— 没有任何正文。</div>
+      <div class="row" style="margin-top:8px">
+        <label class="sr-only" for="diaryAuditLimit">审计条数</label>
+        <select id="diaryAuditLimit" style="width:120px">
+          <option value="20">最近 20 条</option>
+          <option value="50" selected>最近 50 条</option>
+          <option value="200">最近 200 条</option>
+        </select>
+        <button id="diaryAuditRefresh" class="small">刷新审计</button>
+        <span class="meta" id="diaryAuditMsg"></span>
+      </div>
+      <div class="tool-log-table" id="diaryAuditTable">加载中…</div>
+    </section>
 <section id="section-usage" data-page="usage" class="card span-all">
       <h2 data-note="每 3 秒自动同步">令牌与花费</h2>
       <div class="meta">数据来源是 DSH 会话事件里的 provider usage。<b>累计总量</b>取 <code>tokenUsage</code> 投影（整条会话日志的权威累计，含桥接启动前的历史）；<b>逐轮明细</b>由 <code>assistant/message</code> 的 usage 折叠而来，能追溯到多深取决于会话开场快照带回的历史条数。金额按 DeepSeek 官方价目表折算，区分高峰 / 空闲时段（高峰单价为空闲的 2 倍）。</div>
@@ -2641,13 +2938,104 @@ button:active:not(:disabled) {
   }
 })();
 
-async function api(path, method, body, _retried = 0) {
+// 专栏页（小黑盒）的模块级状态。**必须声明在脚本最前面**：`setConsolePage()` 在本文件
+// 靠后的顶层语句里会被调用一次（启动时按 location.hash 选中页面），它会走
+// `stopColumnTick()` / `refreshColumnStatus()` 分支。`let` 声明有 TDZ——声明写在调用点之后
+// 会抛 `ReferenceError: Cannot access 'columnTickTimer' before initialization`，而顶层异常
+// 会让整段脚本中止：所有面板永远停在 HTML 里的「加载中…」。函数声明会被提升、`let` 不会，
+// 所以这里把状态变量提前，函数体留在原处。
+let columnStatus = null;
+let columnVerifiedAt = 0;
+let columnLastActivityAt = 0;
+let columnLockedUntil = 0;
+let columnForgotOpen = false;
+let columnTickTimer = null;
+// 暂停状态会从「二代仿真」页改（另一个 view），本页不轮询就会一直显示旧状态、
+// 「设置」按钮也一直禁用 —— 用户反馈「暂停了还是不行」正是这个。5 秒轮询 + 回到前台立即刷新。
+let columnStatusTimer = null;
+const COLUMN_STATUS_POLL_MS = 5000;
+// 阶段二：小黑盒降级面板（降级级别 / 三个恢复前置条件 / 重发通知 / 受控恢复）。
+// 与上面同一原因，这些常量也必须提前声明：URL 直接带 #xiaoheihe 时，顶层 setConsolePage()
+// 会立刻调用 refreshColumnDegrade()，而 async 函数在第一个 await 之前是**同步执行**的——
+// 那时若 const 路径还声明在后面，就是 TDZ（ReferenceError），整段脚本会中止。
+const COLUMN_DEGRADE_STATUS_PATH = '/api/degrade/status';
+const COLUMN_DEGRADE_RESEND_PATH = '/api/degrade/resend-notify';
+const COLUMN_DEGRADE_RECOVER_PATH = '/api/degrade/recover';
+// 身份守卫的恢复端点是独立的一个（task-64），与降级层无关。
+const COLUMN_GUARD_RECOVER_PATH = '/api/identity-guard/recover';
+const COLUMN_GUARD_STATUS_PATH = '/api/status';
+const COLUMN_DEGRADE_POLL_MS = 5000;
+// 三个恢复前置条件：键序即服务端 conditions 的键序，failed[i] ↔ messages[i] 一一对应。
+const COLUMN_DEGRADE_CONDITIONS = [
+  ['identity', '身份可判定（守卫可用、状态文件未损坏、身份模式为 mapper）'],
+  ['qq-comms', 'QQ 通信已恢复'],
+  ['report-receipt', '降级通知已收到发送接口成功回执'],
+];
+const COLUMN_DEGRADE_LEVEL_TEXT = { normal: '正常', 'read-only': '降级只读', paused: '全部暂停' };
+const COLUMN_DEGRADE_TRIGGER_TEXT = {
+  'identity-guard-unavailable': '身份守卫不可用',
+  'identity-guard-load-failed': '身份守卫状态文件加载失败',
+  'identity-mode-legacy': '身份模式退化为 legacy',
+  'notify-failed': '降级通知发送失败',
+  'notify-unknown': '降级通知结果未知',
+  manual: '人工触发',
+};
+const COLUMN_DEGRADE_NOTIFY_TEXT = { delivered: '已送达', failed: '发送失败', unknown: '结果未知' };
+// 阶段一留下的 TDZ 隐患（本次一并修掉）：这些专栏端点常量原先声明在文件末尾（顶层 setConsolePage()
+// 之后），而 URL 直接带 #xiaoheihe 时顶层会同步调用 refreshColumnStatus() —— async 函数在第一个
+// await 之前的同步段就要读 COLUMN_STATUS_PATH，于是抛 ReferenceError（被 catch 吞成「读取失败」）。
+// 常量只是字面量，提前声明没有副作用，所以统一挪到本块；原位置只留指针注释。
+const COLUMN_STATUS_PATH = '/api/console/xiaoheihe-column/auth/status';
+const COLUMN_SETUP_PATH = '/api/console/xiaoheihe-column/auth/setup';
+const COLUMN_VERIFY_PATH = '/api/console/xiaoheihe-column/auth/verify';
+const COLUMN_LOGOUT_PATH = '/api/console/xiaoheihe-column/auth/logout';
+const COLUMN_FORGOT_PATH = '/api/console/xiaoheihe-column/auth/forgot-reset';
+const COLUMN_ABS_MS = 2 * 60 * 60 * 1000;
+const COLUMN_IDLE_MS = 15 * 60 * 1000;
+const COLUMN_MIN_PASSWORD = 10;
+let columnDegradeStatus = null;
+let columnGuardStatus = null;
+let columnGuardBusy = false;
+let columnDegradeTimer = null;
+let columnDegradeBusy = false;
+let columnDegradeFetching = false;
+
+// QQ 空间状态和端点常量必须先于启动时的首次 setConsolePage() 调用，
+// 因为初始 URL 可能直接是 #qzone，并会立即触发认证状态读取。
+const QZONE_COLUMN_BASE = '/api/console/qqspace-column';
+const qzoneToolNames = [
+  ['read_posts', '读取说说'], ['read_comments', '读取评论'], ['publish', '发说说'],
+  ['comment', '评论'], ['reply', '回复'], ['like', '点赞'],
+];
+const qzoneQuotaNames = [['post', '发说说'], ['comment', '评论/回复'], ['like', '点赞']];
+let qzoneVerified = false;
+let qzoneSettings = null;
+// 控制台网关**刻意**不接任何派发注入点，`dispatchAvailable` 恒为 false（`src/core/qzone-console-gateway.mjs`
+// 里的结构性金丝雀盯着这一点）。保留这个名字只是为了让「能力是否可用」全文件可搜索，不再据此分支。
+const qzoneDispatchAvailable = false;
+let qzonePasswordConfigured = false;
+let qzoneConfigValid = false;
+let qzoneStatusValid = false;
+let qzoneDraftDirty = false;
+let qzoneDirtyFields = new Set();
+let qzoneDraftVersion = 0;
+let qzoneConfigRequestId = 0;
+let qzoneStatusRequestId = 0;
+
+async function api(path, method, body, _retried = 0, opts = null) {
   const headers = body ? {'content-type':'application/json'} : {};
   const token = localStorage.getItem('consoleToken');
   if (token) headers['x-console-token'] = token;
   // 管理端正向标记（t7-R4）：桥接只认这个头才给 owner 权限（清全局共享桶、跨来源改删等）。
   headers['x-console-admin'] = '1';
-  const res = await fetch(path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+  // task-87 CSRF 纵深头：专栏认证端点缺了它服务端直接 400（不是鉴权，但缺了就完全读不到状态，
+  // 页面会一直显示「二代仿真 运行中」、按钮永远禁用 —— 用户实测踩过）。只对专栏路径加，避免污染其它接口。
+  if (typeof path === 'string' && path.startsWith('/api/console/xiaoheihe-column/')) headers['x-column-request'] = '1';
+  // task-88：可选请求选项。只有专栏入口传 opts（显式 credentials:'same-origin'，保证 Path=/api/
+  // 的专栏会话 Cookie 随请求发送）；其它调用不传 opts，行为与加参数前完全一致。
+  const fetchOptions = { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined };
+  if (opts && typeof opts === 'object' && opts.credentials) fetchOptions.credentials = opts.credentials;
+  const res = await fetch(path, fetchOptions);
   if (res.status === 401) {
     if (_retried >= 2) {
       localStorage.removeItem('consoleToken');
@@ -2656,7 +3044,7 @@ async function api(path, method, body, _retried = 0) {
     const t = prompt('请输入控制台访问令牌：');
     if (t) {
       localStorage.setItem('consoleToken', t.trim());
-      return api(path, method, body, _retried + 1);
+      return api(path, method, body, _retried + 1, opts);
     }
     localStorage.removeItem('consoleToken');
     throw new Error('未授权');
@@ -4449,7 +4837,10 @@ const consolePages = {
   persona: ['人格与角色', '给你的伙伴，一点独特个性。', '选择已有角色，或用自己的语言写下新的性格与表达方式。'],
   'social-v2': ['二代仿真', '自主参与，恰到好处。', '管理 AI 的工具、唤醒与发言节奏。展开需要调整的分组，修改后保存参数。'],
   'social-v1': ['一代仿真', '为自然对话，设定合适的节奏。', '调整参与概率、活跃周期和分条发送；所有配置项完整保留。'],
+  xiaoheihe: ['小黑盒专栏', '独立密码，才动得了。', '通过专栏密码进入小黑盒管理功能；密码独立于控制台令牌，每 15 分钟无操作或 2 小时后需要重新验证。'],
+  qzone: ['QQ 空间专栏', 'QQ 空间，独立受控。', '独立密码会话、空间权限、额度与审计。'],
   slang: ['黑话词库', '读懂群聊里的，言外之意。', '从候选到确认，让 AI 逐渐熟悉大家的表达习惯。'],
+  diary: ['鱼缸日记', '只属于你的那一页。', '日记内容只有你本人能看到：控制台只显示元数据、限额、备份与审计，绝不渲染正文。'],
   usage: ['令牌与花费', '每一次思考，都算得清楚。', '实时查看 AI 的 token 消耗与花费，可下钻到每个群、每个好友、每一轮对话。'],
   access: ['访问与安全', '明确边界，安心连接。', '管理允许对话的对象、管理员权限与控制台访问凭证。'],
   operations: ['调试与运维', '让桥接，始终井然有序。', '测试消息、引导 AI，或维护桥接进程与会话工作区。'],
@@ -4481,7 +4872,23 @@ function setConsolePage(page, { updateHash = true, focus = false, target = '' } 
   if (updateHash && location.hash !== '#' + page) history.pushState({}, '', '#' + page);
   closeConsoleSearch();
   // 语音库按需加载：进入二代仿真页时才探测（避免每次开控制台都压网关）。
+  // task-88：进入专栏页必须重新拉 status（不缓存会话有效性）；离开时停掉每秒刷新的计时器。
+  if (page !== 'xiaoheihe' && typeof stopColumnTick === 'function') stopColumnTick();
+  if (page === 'xiaoheihe' && typeof refreshColumnStatus === 'function') { refreshColumnStatus(); startColumnTick(); startColumnStatusPoll(); }
+  if (page === 'qzone' && typeof qzoneCheckAuth === 'function') qzoneCheckAuth();
+  if (page !== 'xiaoheihe' && typeof stopColumnStatusPoll === 'function') stopColumnStatusPoll();
+  // 阶段二：降级面板只在专栏页且页面可见时轮询（5 秒）；离开本页即停表。
+  // 任务卡：有未保存修改时离开本页必须先询问（取消则停在原页，不改 hash）。
+  if (page !== 'xiaoheihe' && currentConsolePage === 'xiaoheihe'
+    && typeof columnSettingsHasUnsaved === 'function' && columnSettingsHasUnsaved()
+    && !confirm('修改未保存，确定退出吗？')) {
+    return;
+  }
+  if (page !== 'xiaoheihe' && typeof stopColumnDegradePoll === 'function') stopColumnDegradePoll();
+  if (page === 'xiaoheihe' && typeof refreshColumnDegrade === 'function') { refreshColumnDegrade(); startColumnDegradePoll(); }
   if (page === 'social-v2' && typeof loadVoiceLibrary === 'function') loadVoiceLibrary();
+  // 鱼缸日记：只拉元数据（零正文），进入本页才请求，离开不轮询。
+  if (page === 'diary' && typeof loadDiaryPanel === 'function') loadDiaryPanel();
   if (focus) {
     document.getElementById('mainContent').focus({ preventScroll: true });
     document.getElementById(target || 'mainContent')?.scrollIntoView({ block: 'start', behavior: 'instant' });
@@ -5065,6 +5472,307 @@ document.getElementById('usageClear').addEventListener('click', async () => {
   refreshUsageRecent();
 });
 
+// ── 鱼缸日记（方案 C）：只读元数据，绝不渲染正文 ─────────────────────────
+// 隐私红线（任务卡 §8）：本面板只渲染 status/backups/audit 里的白名单字段；
+// 前端不做任何「取正文」的请求，也不缓存任何日记内容。
+let diaryConfigCache = null;
+function diaryFmtBytes(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return '—';
+  if (v < 1024) return v + ' B';
+  if (v < 1024 * 1024) return (v / 1024).toFixed(1) + ' KB';
+  return (v / (1024 * 1024)).toFixed(2) + ' MB';
+}
+function diaryFmtTime(ms) {
+  const v = Number(ms);
+  if (!Number.isFinite(v) || v <= 0) return '—';
+  try { return new Date(v).toLocaleString('zh-CN', { hour12: false }); } catch (error) { return '—'; }
+}
+function diaryMsg(id, text, kind) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'meta' + (kind ? ' ' + kind : '');
+}
+function diaryWhichLabel(which) {
+  return which === 'privy' ? '私密日记' : '笔记本';
+}
+function renderDiaryStatusTable(files) {
+  const box = document.getElementById('diaryStatusTable');
+  if (!box) return;
+  let html = '<table><tr><th>文件</th><th>是否存在</th><th>字节数</th><th>行数</th><th>今日已写</th><th>剩余</th><th>备份</th><th>最后修改</th><th>sha256</th></tr>';
+  for (const which of ['notebook', 'privy']) {
+    const f = files && files[which];
+    if (!f) { html += `<tr><td>${esc(diaryWhichLabel(which))}</td><td colspan="8" class="meta">读取失败</td></tr>`; continue; }
+    const used = Number(f.usedToday ?? 0);
+    const cap = Number(f.dailyWrites ?? 0);
+    const left = Number(f.remaining ?? 0);
+    const sha = typeof f.sha256 === 'string' ? f.sha256 : '';
+    html += '<tr>'
+      + `<td>${esc(diaryWhichLabel(which))}</td>`
+      + `<td>${f.exists ? '有' : '空'}</td>`
+      + `<td>${esc(diaryFmtBytes(f.bytes))}</td>`
+      + `<td>${esc(String(f.lineCount ?? 0))}</td>`
+      + `<td>${esc(used + ' / ' + cap)}${f.usageCorrupt ? ' <span class="pill r">计数损坏</span>' : ''}</td>`
+      + `<td>${esc(String(left))}</td>`
+      + `<td>${esc(String(f.backupCount ?? 0) + ' / ' + String(f.backupKeep ?? 0))}</td>`
+      + `<td>${esc(diaryFmtTime(f.mtimeMs))}</td>`
+      + `<td><code title="${esc(sha)}">${esc(sha ? sha.slice(0, 12) : '—')}</code></td>`
+      + '</tr>';
+  }
+  html += '</table>';
+  box.innerHTML = html;
+}
+function renderDiaryStatus(res) {
+  const files = res && res.files ? res.files : {};
+  const notebook = files.notebook || {};
+  const privy = files.privy || {};
+  const nb = document.getElementById('diaryNotebookBytes');
+  const nh = document.getElementById('diaryNotebookHint');
+  if (nb) nb.textContent = diaryFmtBytes(notebook.bytes);
+  if (nh) nh.textContent = `${notebook.lineCount ?? 0} 行 ｜ 今日 ${notebook.usedToday ?? 0}/${notebook.dailyWrites ?? 0} ｜ 备份 ${notebook.backupCount ?? 0} 份`;
+  const pb = document.getElementById('diaryPrivyBytes');
+  const ph = document.getElementById('diaryPrivyHint');
+  if (pb) pb.textContent = diaryFmtBytes(privy.bytes);
+  if (ph) ph.textContent = `${privy.lineCount ?? 0} 行 ｜ 今日 ${privy.usedToday ?? 0}/${privy.dailyWrites ?? 0} ｜ 备份 ${privy.backupCount ?? 0} 份`;
+  renderDiaryStatusTable(files);
+}
+function applyDiaryConfigForm(res) {
+  diaryConfigCache = res;
+  const enabled = document.getElementById('diaryEnabled');
+  if (enabled) enabled.checked = res.enabled !== false;
+  const tools = res.tools || {};
+  const map = { read: 'diaryToolRead', write: 'diaryToolWrite', edit: 'diaryToolEdit', delete: 'diaryToolDelete' };
+  for (const [name, id] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (el) el.checked = tools[name] !== false;
+  }
+  const limits = res.limits || {};
+  const fields = { diaryMaxFileBytes: 'maxFileBytes', diaryMaxPayloadBytes: 'maxPayloadBytes', diaryDailyWrites: 'dailyWrites', diaryBackupKeep: 'backupKeep' };
+  for (const [id, key] of Object.entries(fields)) {
+    const el = document.getElementById(id);
+    if (el && Number.isFinite(Number(limits[key]))) el.value = String(Number(limits[key]));
+  }
+  // 单次写入上限的「配置值 vs 实际生效值」：桥接 HTTP 请求体有硬上限，配得更大只会在
+  // 读 body 阶段先 413。输入框显示的是**实际生效值**，提示行负责说清文件里原本写的是什么，
+  // 这样用户既不会以为「我配的 5MB 生效了」，也不会以为「我的设置被偷偷改了」。
+  const eff = res.effectiveLimits || null;
+  const hint = document.getElementById('diaryPayloadHint');
+  if (hint && eff && Number.isFinite(Number(eff.httpMaxBodyBytes))) {
+    const httpMax = Number(eff.httpMaxBodyBytes);
+    const configured = Number(eff.configuredMaxPayloadBytes);
+    if (eff.capped && Number.isFinite(configured)) {
+      hint.textContent = `配置文件里写的是 ${configured} 字节，超过桥接 HTTP 请求体硬上限 ${httpMax} 字节，实际按 ${httpMax} 生效；点「保存设置」会把配置改成实际生效值`;
+      hint.className = 'meta err';
+    } else {
+      // P3-10：这个上限卡的是**整个 JSON body**，不是正文长度。外壳（key/which/text 的 JSON 结构）
+      // 自己占几十字节，所以正文可写量必然略小于声明值。这里只说「约」，不写死 999953 之类的
+      // 精确数字：外壳长度随 key/which 取值变化，写死就会变成新的假承诺。
+      hint.textContent = `默认 ${httpMax} 字节（= 桥接 HTTP 请求体硬上限，包含 JSON 外壳在内的整个请求体）；正文实际可用约 ${Math.max(0, httpMax - 50)} 字节，具体少几十字节，不是精确契约值。配得更大不会生效`;
+      hint.className = 'meta';
+    }
+  }
+  if (res.configNotice) diaryMsg('diaryConfigMsg', '⚠️ ' + String(res.configNotice), 'err');
+  const pathEl = document.getElementById('diaryConfigPath');
+  if (pathEl && res.configPath) pathEl.textContent = String(res.configPath);
+  if (res.configCorrupt) diaryMsg('diaryConfigMsg', '⚠️ 配置文件损坏，当前按默认值运行：' + String(res.configError || ''), 'err');
+}
+async function refreshDiaryStatus() {
+  try {
+    const res = await api('/api/diary/status');
+    if (!res || res.ok !== true) throw new Error((res && (res.error || res.code)) || 'status 失败');
+    applyDiaryConfigForm(res);
+    renderDiaryStatus(res);
+    return res;
+  } catch (error) {
+    const box = document.getElementById('diaryStatusTable');
+    if (box) box.innerHTML = `<span class="meta err">读取失败：${esc(error?.message || '未知错误')}</span>`;
+    return null;
+  }
+}
+function renderDiaryBackups(res) {
+  const box = document.getElementById('diaryBackupsTable');
+  if (!box) return;
+  const groups = res && res.backups && !Array.isArray(res.backups)
+    ? res.backups
+    : (res && Array.isArray(res.backups) ? { [res.which || 'notebook']: res.backups } : {});
+  const rows = [];
+  for (const which of ['notebook', 'privy']) {
+    for (const item of (groups[which] || [])) rows.push({ which, item });
+  }
+  rows.sort((a, b) => Number(b.item.at ?? 0) - Number(a.item.at ?? 0));
+  if (rows.length === 0) { box.innerHTML = '<span class="meta">（没有备份）</span>'; return; }
+  let html = '<table><tr><th>文件</th><th>时间</th><th>大小</th><th>类型</th><th>备份 id</th><th>操作</th></tr>';
+  for (const { which, item } of rows) {
+    const id = String(item.id ?? '');
+    html += '<tr>'
+      + `<td>${esc(diaryWhichLabel(which))}</td>`
+      + `<td>${esc(diaryFmtTime(item.at))}</td>`
+      + `<td>${esc(diaryFmtBytes(item.bytes))}</td>`
+      + `<td>${esc(String(item.kind ?? '—'))}</td>`
+      + `<td><code>${esc(id)}</code></td>`
+      + `<td><button class="small" data-diary-restore="${esc(id)}" data-diary-which="${esc(which)}">恢复</button></td>`
+      + '</tr>';
+  }
+  html += '</table>';
+  box.innerHTML = html;
+  box.querySelectorAll('[data-diary-restore]').forEach((button) => {
+    button.addEventListener('click', () => restoreDiaryBackup(button.dataset.diaryWhich, button.dataset.diaryRestore));
+  });
+}
+async function refreshDiaryBackups() {
+  try {
+    const res = await api('/api/diary/backups');
+    if (!res || res.ok !== true) throw new Error((res && (res.error || res.code)) || '读取失败');
+    renderDiaryBackups(res);
+    diaryMsg('diaryBackupMsg', `✅ 已同步于 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`, 'ok');
+  } catch (error) {
+    const box = document.getElementById('diaryBackupsTable');
+    if (box) box.innerHTML = `<span class="meta err">读取失败：${esc(error?.message || '未知错误')}</span>`;
+    diaryMsg('diaryBackupMsg', '❌ ' + (error?.message || '读取失败'), 'err');
+  }
+}
+async function restoreDiaryBackup(which, backupId) {
+  if (!confirm(`确定把 ${diaryWhichLabel(which)} 恢复到备份 ${backupId}？\n\n这会算一次写入（占用今日额度），恢复前会先备份当前版本（当前是空的话没有内容可备份），所以通常还能再恢复回来。`)) return;
+  try {
+    const res = await api('/api/diary/restore', 'POST', { which, backupId });
+    if (res && res.ok === true) {
+      diaryMsg('diaryBackupMsg', `✅ 已恢复：${res.lineCount ?? 0} 行 / ${diaryFmtBytes(res.bytes)}（占用一次写入额度）`, 'ok');
+      showConsoleToast('日记已从备份恢复');
+    } else {
+      diaryMsg('diaryBackupMsg', '❌ ' + String((res && (res.error || res.code)) || '恢复失败'), 'err');
+    }
+  } catch (error) {
+    diaryMsg('diaryBackupMsg', '❌ ' + (error?.message || '恢复失败'), 'err');
+  }
+  await refreshDiaryStatus();
+  await refreshDiaryBackups();
+  await refreshDiaryAudit();
+}
+async function refreshDiaryAudit() {
+  const limitEl = document.getElementById('diaryAuditLimit');
+  const limit = Number(limitEl ? limitEl.value : 50) || 50;
+  const box = document.getElementById('diaryAuditTable');
+  try {
+    const res = await api('/api/diary/audit?limit=' + encodeURIComponent(String(limit)));
+    if (!res || res.ok !== true) throw new Error((res && (res.error || res.code)) || '读取失败');
+    const entries = Array.isArray(res.entries) ? res.entries : [];
+    if (entries.length === 0) { if (box) box.innerHTML = '<span class="meta">（暂无审计）</span>'; diaryMsg('diaryAuditMsg', '', ''); return; }
+    let html = '<table><tr><th>时间</th><th>文件</th><th>操作</th><th>结果</th><th>字节数</th><th>sha256</th><th>备份 id</th></tr>';
+    for (const e of entries) {
+      const sha = typeof e.sha256 === 'string' ? e.sha256 : '';
+      html += '<tr>'
+        + `<td>${esc(diaryFmtTime(e.at))}</td>`
+        + `<td>${esc(e.file === 'both' ? '两个文件' : diaryWhichLabel(e.file))}</td>`
+        + `<td>${esc(String(e.op ?? '—'))}${e.mode ? '（' + esc(String(e.mode)) + '）' : ''}</td>`
+        + `<td>${e.ok ? '<span class="pill ok">成功</span>' : '<span class="pill r">失败</span>'}</td>`
+        + `<td>${e.bytes === null || e.bytes === undefined ? '—' : esc(diaryFmtBytes(e.bytes))}</td>`
+        + `<td><code title="${esc(sha)}">${esc(sha ? sha.slice(0, 12) : '—')}</code></td>`
+        + `<td><code>${esc(e.backup ? String(e.backup) : '—')}</code></td>`
+        + '</tr>';
+    }
+    html += '</table>';
+    if (box) box.innerHTML = html;
+    diaryMsg('diaryAuditMsg', `共 ${entries.length} 条`, '');
+  } catch (error) {
+    if (box) box.innerHTML = `<span class="meta err">读取失败：${esc(error?.message || '未知错误')}</span>`;
+  }
+}
+async function saveDiaryConfig() {
+  const readNum = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const v = Number(el.value);
+    return Number.isFinite(v) ? Math.trunc(v) : null;
+  };
+  const body = {
+    enabled: !!(document.getElementById('diaryEnabled') || {}).checked,
+    tools: {
+      read: !!(document.getElementById('diaryToolRead') || {}).checked,
+      write: !!(document.getElementById('diaryToolWrite') || {}).checked,
+      edit: !!(document.getElementById('diaryToolEdit') || {}).checked,
+      delete: !!(document.getElementById('diaryToolDelete') || {}).checked
+    },
+    limits: {
+      maxFileBytes: readNum('diaryMaxFileBytes'),
+      maxPayloadBytes: readNum('diaryMaxPayloadBytes'),
+      dailyWrites: readNum('diaryDailyWrites'),
+      backupKeep: readNum('diaryBackupKeep')
+    }
+  };
+  for (const [key, value] of Object.entries(body.limits)) {
+    if (value === null) { delete body.limits[key]; }
+  }
+  try {
+    const res = await api('/api/diary/config', 'POST', body);
+    if (res && res.ok === true) {
+      applyDiaryConfigForm(res);
+      diaryMsg('diaryConfigMsg', '✅ 已保存并立即生效（无需重启桥接）', 'ok');
+      showConsoleToast('日记设置已保存');
+      await refreshDiaryStatus();
+    } else {
+      diaryMsg('diaryConfigMsg', '❌ ' + String((res && (res.error || res.code)) || '保存失败'), 'err');
+    }
+  } catch (error) {
+    diaryMsg('diaryConfigMsg', '❌ ' + (error?.message || '保存失败'), 'err');
+  }
+}
+(function bindDiaryPanel() {
+  const save = document.getElementById('diaryConfigSave');
+  if (save) save.addEventListener('click', saveDiaryConfig);
+  const reload = document.getElementById('diaryConfigReload');
+  if (reload) reload.addEventListener('click', async () => {
+    await refreshDiaryStatus();
+    diaryMsg('diaryConfigMsg', '已重新读取服务端配置', '');
+  });
+  const backups = document.getElementById('diaryBackupsRefresh');
+  if (backups) backups.addEventListener('click', () => { refreshDiaryBackups(); });
+  const cleanup = document.getElementById('diaryCleanup');
+  if (cleanup) cleanup.addEventListener('click', async () => {
+    const keep = Number((document.getElementById('diaryBackupKeep') || {}).value) || (diaryConfigCache?.limits?.backupKeep ?? 10);
+    if (!confirm(`确定清理旧备份，只保留最近 ${keep} 份？超出份数的备份会被永久删除。`)) return;
+    try {
+      const res = await api('/api/diary/cleanup', 'POST', { keep });
+      if (res && res.ok === true) {
+        diaryMsg('diaryBackupMsg', `✅ 已清理 ${res.total ?? 0} 份（每个文件保留最近 ${res.keep ?? keep} 份）`, 'ok');
+        showConsoleToast('旧备份已清理');
+      } else {
+        diaryMsg('diaryBackupMsg', '❌ ' + String((res && (res.error || res.code)) || '清理失败'), 'err');
+      }
+    } catch (error) {
+      diaryMsg('diaryBackupMsg', '❌ ' + (error?.message || '清理失败'), 'err');
+    }
+    await refreshDiaryBackups();
+    await refreshDiaryAudit();
+  });
+  const resetUsage = document.getElementById('diaryResetUsage');
+  if (resetUsage) resetUsage.addEventListener('click', async () => {
+    if (!confirm('确定把今天的写入计数清零？日记内容不受影响，这次重置会记一条审计。')) return;
+    try {
+      const res = await api('/api/diary/reset-usage', 'POST', {});
+      if (res && res.ok === true) {
+        diaryMsg('diaryResetMsg', `✅ 已重置（${res.day || ''}）；日记内容未改动`, 'ok');
+        showConsoleToast('今日计数已重置');
+      } else {
+        diaryMsg('diaryResetMsg', '❌ ' + String((res && (res.error || res.code)) || '重置失败'), 'err');
+      }
+    } catch (error) {
+      diaryMsg('diaryResetMsg', '❌ ' + (error?.message || '重置失败'), 'err');
+    }
+    await refreshDiaryStatus();
+    await refreshDiaryAudit();
+  });
+  const auditRefresh = document.getElementById('diaryAuditRefresh');
+  if (auditRefresh) auditRefresh.addEventListener('click', () => { refreshDiaryAudit(); });
+  const auditLimit = document.getElementById('diaryAuditLimit');
+  if (auditLimit) auditLimit.addEventListener('change', () => { refreshDiaryAudit(); });
+})();
+async function loadDiaryPanel() {
+  await refreshDiaryStatus();
+  await refreshDiaryBackups();
+  await refreshDiaryAudit();
+}
+
 setConsolePage(location.hash.slice(1), { updateHash:false });
 
 refresh(); refreshRoles(); refreshWhitelist(); refreshSessions(); refreshPending(); refreshPresets(); loadSocialForm(); loadV2Config(); refreshV2Activity(); loadV2ToolLog(); loadV2SessionOptions(); refreshSocialStatus(); refreshSlang(); loadSlangConfig(); loadSecurity(); refreshSimPrompt(); refreshDshModel(); refreshUsage(); refreshUsageChart(); refreshUsageRecent();
@@ -5095,7 +5803,1454 @@ setInterval(() => { if (currentConsolePage !== 'usage') return; refreshUsage(); 
   media.addEventListener('change', function (event) {
     if (!stored()) apply(event.matches ? 'dark' : 'light', false);
   });
+})();// ── 小黑盒专栏密码入口（task-88）─────────────────────────────────────────────
+// 独立于控制台令牌的敏感权限密码。本阶段只做入口：首次设密 / 每次验证 / 忘记重设 / 退出；
+// 「配置与恢复功能」在后续阶段接入。
+// 会话有效性一律以服务端 status 为准（切到本页重新拉取，不缓存）。服务端自 task-89 起
+// 在 status.session.expiresAt 给出到期时刻（绝对 2h 与续期后空闲 15min 取小）；页面仍然只用
+// 本地「验证成功时刻」做**按秒刷新的**剩余分钟估算，并以服务端 403 column-session-required
+// 兜底回验证态——因为本地估算只影响显示，不决定是否放行，任何偏差都由下一次 status/403 纠正。
+// 专栏端点常量已提前到文件早期声明块（见上方「阶段一留下的 TDZ 隐患」注释）；
+// 原位置若保留 const 会重复声明报 SyntaxError，所以这里只保留说明。
+function columnEl(id) { return document.getElementById(id); }
+function columnShow(id, visible) { const el = columnEl(id); if (el) el.hidden = !visible; }
+function columnMsg(id, message, kind) {
+  const el = columnEl(id);
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = kind === 'err' ? 'err' : (kind === 'ok' ? 'ok' : 'meta');
+}
+async function columnApi(path, method, body) {
+  // 同源请求默认带 Cookie；这里显式写死 credentials:'same-origin'，防止将来有人改成 omit
+  // 把 Path=/api/ 的专栏会话 Cookie 丢掉（三个恢复端点会永久 403，见 task-87 报告）。
+  const data = await api(path, method, body, 0, { credentials: 'same-origin' });
+  // task-88 / task-87 契约：恢复类端点在专栏会话失效时返回 403 {error:'column-session-required'}。
+  // 本阶段页面还不调用这些端点；这里统一兜底——将来接入时无需再「记得」处理，直接回到验证态。
+  // 这也回应「expiresAt 不可信」：会话有效性只认服务器 status 与这类 403 回执，不靠本地倒计时。
+  if (data && data.error === 'column-session-required') {
+    columnSessionLost();
+  }
+  return data;
+}
+function columnEstimateRemainingMs() {
+  if (columnVerifiedAt === 0) return 0;
+  const now = Date.now();
+  const absoluteLeft = COLUMN_ABS_MS - (now - columnVerifiedAt);
+  const idleLeft = COLUMN_IDLE_MS - (now - (columnLastActivityAt || columnVerifiedAt));
+  return Math.max(0, Math.min(absoluteLeft, idleLeft));
+}
+function columnSessionIsVerified() {
+  return columnVerifiedAt !== 0 && columnEstimateRemainingMs() > 0;
+}
+function columnUpdateLiveText() {
+  if (columnSessionIsVerified()) {
+    const minutes = Math.max(1, Math.ceil(columnEstimateRemainingMs() / 60000));
+    const tip = columnEl('columnVerifiedTip');
+    if (tip) tip.textContent = '已通过验证（剩余 ' + minutes + ' 分钟）';
+  }
+  if (columnLockedUntil > Date.now()) {
+    const secondsEl = columnEl('columnLockedSeconds');
+    if (secondsEl) secondsEl.textContent = String(Math.max(0, Math.ceil((columnLockedUntil - Date.now()) / 1000)));
+  } else if (columnLockedUntil !== 0) {
+    columnLockedUntil = 0;
+    refreshColumnStatus();
+  }
+}
+function startColumnStatusPoll() {
+  stopColumnStatusPoll();
+  columnStatusTimer = setInterval(() => {
+    if (currentConsolePage !== 'xiaoheihe' || document.hidden) return;
+    refreshColumnStatus();
+  }, COLUMN_STATUS_POLL_MS);
+}
+function stopColumnStatusPoll() {
+  if (columnStatusTimer !== null) { clearInterval(columnStatusTimer); columnStatusTimer = null; }
+}
+function startColumnTick() {
+  stopColumnTick();
+  columnTickTimer = setInterval(columnUpdateLiveText, 1000);
+}
+function stopColumnTick() {
+  if (columnTickTimer !== null) { clearInterval(columnTickTimer); columnTickTimer = null; }
+}
+function renderColumnView() {
+  const status = columnStatus || { state: 'unset', agentPaused: {}, session: { valid: false } };
+  const state = status.state || 'unset';
+  const agentPaused = status.agentPaused || {};
+  const verified = columnSessionIsVerified();
+  if (state === 'untrusted') columnForgotOpen = true;
+  const showForgot = !verified && state !== 'unset' && columnForgotOpen === true;
+  columnShow('columnUnset', !verified && state === 'unset');
+  columnShow('columnVerify', !verified && state !== 'unset');
+  columnShow('columnVerified', verified);
+  columnShow('columnForgot', showForgot);
+  columnShow('columnUntrustedWarn', !verified && state === 'untrusted');
+  const locked = !verified && (state === 'locked' || columnLockedUntil > Date.now());
+  columnShow('columnLockedTip', locked);
+  // 2026-10-29 用户口径（m30623）：门槛只认「二代仿真」页的「暂停二代 AI」。
+  // 后台巡逻的暂停要改 config + 重启桥接，不能当交互式门槛，故不参与禁用判断，只如实显示。
+  const pausedSocial = agentPaused.socialV2 === true;
+  const setupButton = columnEl('columnSetSubmit');
+  if (setupButton) setupButton.disabled = !pausedSocial;
+  columnShow('columnSetPausedTip', !pausedSocial);
+  const resetButton = columnEl('columnResetSubmit');
+  if (resetButton) resetButton.disabled = !pausedSocial;
+  columnShow('columnResetPausedTip', !pausedSocial);
+  const verifyButton = columnEl('columnVerifySubmit');
+  if (verifyButton) verifyButton.disabled = locked || state === 'untrusted';
+  const pauseNote = columnEl('columnAgentPausedNote');
+  if (pauseNote) {
+    pauseNote.textContent = '当前暂停状态：二代仿真' + (pausedSocial ? '已暂停' : '运行中') + '；后台巡逻' + (agentPaused.backgroundPatrol === true ? '已暂停' : '运行中') + '（后台巡逻的暂停需改 config 并重启桥接，不参与本页门槛）。';
+  }
+  columnUpdateLiveText();
+  // 阶段二：/api/degrade/* 三端点的门禁都是「专栏会话」，未通过验证时拉了也是 403，
+  // 所以降级面板只在会话有效时展示；隐藏时顺手停表，避免后台空轮询。
+  columnShow('columnDegradePanel', verified);
+  columnShow('columnGuardPanel', verified);
+  if (verified) refreshColumnGuard();
+  columnShow('columnDegradeHint', !verified);
+  columnShow('columnSettingsPanel', verified);
+  columnShow('columnSettingsHint', !verified);
+  // 首次拿到有效会话时补拉配置（进页时 status 还没回来，直接拉会 403）。
+  if (verified && columnSettingsLoadedOnce !== true && typeof refreshColumnSettings === 'function') {
+    columnSettingsLoadedOnce = true;
+    refreshColumnSettings();
+    refreshColumnAudit();
+  }
+  if (!verified) stopColumnDegradePoll();
+}
+async function refreshColumnStatus() {
+  try {
+    const status = await columnApi(COLUMN_STATUS_PATH);
+    columnStatus = status;
+    const sessionValid = Boolean(status && status.session && status.session.valid === true);
+    if (sessionValid) {
+      if (columnVerifiedAt === 0) { columnVerifiedAt = Date.now(); columnLastActivityAt = Date.now(); }
+      columnLastActivityAt = Date.now();
+    } else {
+      columnVerifiedAt = 0;
+      // 状态轮询只更新服务端状态；不得关闭用户正在填写的忘记密码表单。
+    }
+    const lockedSeconds = status && Number.isFinite(status.lockedSeconds) ? status.lockedSeconds : 0;
+    columnLockedUntil = lockedSeconds > 0 ? Date.now() + lockedSeconds * 1000 : 0;
+    renderColumnView();
+    // 阶段二：进页时 refreshColumnDegrade() 跑在 status 返回之前，那时会话还没确认，会直接 return；
+    // 这里在服务端确认会话有效后补拉一次，并（重新）建立 5 秒轮询。
+    if (currentConsolePage === 'xiaoheihe' && columnSessionIsVerified()) {
+      if (columnDegradeStatus === null) refreshColumnDegrade();
+      startColumnDegradePoll();
+    }
+  } catch (error) {
+    columnMsg('columnVerifyMsg', '读取专栏密码状态失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  }
+}
+// task-88：会话失效（含未来恢复端点返回的 403 column-session-required）统一回到验证态。
+function columnSessionLost() {
+  columnVerifiedAt = 0;
+  columnStatus = null;
+  columnLockedUntil = 0;
+  columnForgotOpen = false;
+  renderColumnView();
+  columnMsg('columnVerifyMsg', '会话已失效，请重新输入专栏密码。', 'err');
+}
+// ── 阶段二：小黑盒降级状态与受控恢复（task-90）─────────────────────────────────
+// 全部走真实接口，三个端点都用专栏会话 Cookie 门禁（复用 columnApi 的 credentials:'same-origin'）：
+//   GET  /api/degrade/status        只读快照 + 服务端现算的三个恢复前置条件
+//   POST /api/degrade/resend-notify 真实重发一次降级通知（回执照实显示，不是「把未知当成功」）
+//   POST /api/degrade/recover       受控恢复；服务端完全不读请求体，这里仍按契约传 {}
+// 拿到的字段一律当不可信输入：缺字段就显示「—」，不抛错、不让面板卡在「读取中…」。
+function columnDegradeEl(id) { return document.getElementById(id); }
+function columnDegradeMsg(message, kind) {
+  const el = columnDegradeEl('columnDegradeMsg');
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = kind === 'err' ? 'err' : (kind === 'ok' ? 'ok' : 'meta');
+}
+function columnDegradeTime(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '—';
+  const date = new Date(ms);
+  const time = date.toLocaleTimeString('zh-CN', { hour12: false });
+  const ago = fmtAgoMs(Date.now() - ms);
+  return time + '（' + ago + '前）';
+}
+function columnDegradeLevelText(level) {
+  if (typeof level !== 'string' || level === '') return '未知';
+  return COLUMN_DEGRADE_LEVEL_TEXT[level] || level;
+}
+function columnDegradeTriggerText(trigger) {
+  if (typeof trigger !== 'string' || trigger === '') return '—';
+  return COLUMN_DEGRADE_TRIGGER_TEXT[trigger] || trigger;
+}
+function columnDegradeNotifyText(notify) {
+  if (notify === null || typeof notify !== 'object' || Array.isArray(notify)) return '无记录';
+  const status = typeof notify.status === 'string' && notify.status !== ''
+    ? (COLUMN_DEGRADE_NOTIFY_TEXT[notify.status] || notify.status)
+    : '尚未发送';
+  const attempts = Number.isFinite(notify.attempts) ? notify.attempts : 0;
+  const lastCode = typeof notify.lastCode === 'string' && notify.lastCode !== '' ? notify.lastCode : '';
+  return status + ' · 尝试 ' + attempts + ' 次' + (lastCode === '' ? '' : ' · ' + lastCode);
+}
+// 条件列表：服务端 conditions 是 {键:boolean}，failed[] 是未满足的键，messages[] 与 failed 同序。
+// 页面按固定键序渲染，逐条给出 ✓/✗；messages 按下标或按 failed 里的键序对齐，两种都兜住。
+function renderColumnDegradeConditions(data) {
+  const box = columnDegradeEl('columnDegradeConditions');
+  if (!box) return;
+  const conditions = data && data.conditions !== null && typeof data.conditions === 'object' && !Array.isArray(data.conditions)
+    ? data.conditions
+    : {};
+  const failed = data && Array.isArray(data.failed) ? data.failed : [];
+  const messages = data && Array.isArray(data.messages) ? data.messages : [];
+  const messageOf = (key) => {
+    const byIndex = messages[failed.indexOf(key)];
+    if (typeof byIndex === 'string' && byIndex !== '') return byIndex;
+    const positional = messages[COLUMN_DEGRADE_CONDITIONS.findIndex(([name]) => name === key)];
+    return typeof positional === 'string' ? positional : '';
+  };
+  const rows = [];
+  for (const [key, label] of COLUMN_DEGRADE_CONDITIONS) {
+    const passed = conditions[key] === true;
+    const note = passed ? '' : messageOf(key);
+    rows.push('<div class="column-degrade-cond ' + (passed ? 'pass' : 'fail') + '">'
+      + '<b>' + (passed ? '✓' : '✗') + '</b>'
+      + '<span>' + esc(label) + (note === '' ? '' : '——' + esc(note)) + '</span></div>');
+  }
+  box.innerHTML = rows.join('');
+}
+function renderColumnDegrade() {
+  const panel = columnDegradeEl('columnDegradePanel');
+  if (!panel) return;
+  const data = columnDegradeStatus;
+  const levelEl = columnDegradeEl('columnDegradeLevel');
+  const updatedEl = columnDegradeEl('columnDegradeUpdated');
+  const available = data !== null && typeof data === 'object' && data.available === true;
+  const degrade = available && data.degrade !== null && typeof data.degrade === 'object' && !Array.isArray(data.degrade)
+    ? data.degrade
+    : null;
+  if (levelEl) {
+    const level = degrade === null ? null : degrade.level;
+    levelEl.textContent = level === null ? '无降级记录' : columnDegradeLevelText(level);
+    levelEl.className = degrade === null ? '' : 'is-' + (typeof level === 'string' ? level : '');
+  }
+  if (updatedEl) {
+    updatedEl.textContent = data === null
+      ? '读取中…'
+      : available ? '读取于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) : '降级层尚未初始化';
+  }
+  const triggerEl = columnDegradeEl('columnDegradeTrigger');
+  if (triggerEl) triggerEl.textContent = degrade === null ? '—' : columnDegradeTriggerText(degrade.trigger);
+  const sinceEl = columnDegradeEl('columnDegradeSince');
+  if (sinceEl) sinceEl.textContent = degrade === null ? '—' : columnDegradeTime(degrade.since);
+  const notifyEl = columnDegradeEl('columnDegradeNotify');
+  if (notifyEl) notifyEl.textContent = degrade === null ? '—' : columnDegradeNotifyText(degrade.notify);
+  // 身份模式：正常应是 mapper；null 表示守卫不可用，单独用红字说明原因（不吞掉错误）。
+  const identityEl = columnDegradeEl('columnDegradeIdentity');
+  if (identityEl) {
+    const mode = available && typeof data.identityMode === 'string' && data.identityMode !== '' ? data.identityMode : null;
+    identityEl.textContent = mode === null ? '不可用' : mode;
+    identityEl.className = mode === 'mapper' ? 'ok' : 'err';
+  }
+  const guardWarn = columnDegradeEl('columnDegradeGuardWarn');
+  if (guardWarn) {
+    const reason = available && typeof data.identityGuardUnavailable === 'string' && data.identityGuardUnavailable !== ''
+      ? data.identityGuardUnavailable
+      : '';
+    guardWarn.textContent = reason === '' ? '' : '身份守卫不可用：' + reason;
+    guardWarn.hidden = reason === '';
+  }
+  renderColumnDegradeConditions(available ? data : null);
+  // canRecover===false 时按钮禁用并显示原因；服务端仍会二次校验，这里只是省一次必然失败的点击。
+  const canRecover = available && data.canRecover === true;
+  const recoverBtn = columnDegradeEl('columnDegradeRecover');
+  if (recoverBtn) recoverBtn.disabled = columnDegradeBusy || !canRecover;
+  const blockedEl = columnDegradeEl('columnDegradeRecoverBlocked');
+  if (blockedEl) {
+    const failed = available && Array.isArray(data.failed) ? data.failed : [];
+    blockedEl.textContent = canRecover || !available
+      ? ''
+      : '暂不能受控恢复：还有 ' + failed.length + ' 项前置条件未满足（见上方 ✗ 项）。';
+    blockedEl.hidden = canRecover || !available;
+  }
+  const resendBtn = columnDegradeEl('columnDegradeResend');
+  if (resendBtn) resendBtn.disabled = columnDegradeBusy || !available;
+}
+async function refreshColumnDegrade() {
+  // 并发保护：5 秒轮询与「重发后立刻刷新」可能同时到达，重入只会让旧响应覆盖新结果。
+  if (columnDegradeFetching) return;
+  if (!columnSessionIsVerified()) return;
+  columnDegradeFetching = true;
+  try {
+    const data = await columnApi(COLUMN_DEGRADE_STATUS_PATH);
+    columnDegradeStatus = data !== null && typeof data === 'object' && !Array.isArray(data) ? data : null;
+    renderColumnDegrade();
+    // 守卫状态与降级层一起刷：两者都在这个面板里，分开刷会出现「降级正常但读不了」的割裂画面。
+    await refreshColumnGuard();
+  } catch (error) {
+    // 读失败不清空上一次快照（面板保留最后已知状态），只提示原因。
+    columnDegradeMsg('读取降级状态失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  } finally {
+    columnDegradeFetching = false;
+  }
+}
+function startColumnDegradePoll() {
+  stopColumnDegradePoll();
+  // 页面不可见时不建表：定时器停掉后返回本页会重新拉一次（setConsolePage 与 visibilitychange 都会触发）。
+  if (typeof document !== 'undefined' && document.hidden === true) return;
+  columnDegradeTimer = setInterval(refreshColumnDegrade, COLUMN_DEGRADE_POLL_MS);
+}
+function stopColumnDegradePoll() {
+  if (columnDegradeTimer !== null) { clearInterval(columnDegradeTimer); columnDegradeTimer = null; }
+}
+async function columnDegradeRunNotified(result, okMessage) {
+  // 恢复成功 / 失败都要把服务端的 reason/failed/messages 原样展示出来，不自己编结论。
+  // 契约有两套失败形状：400 precondition-failed 用 {reason,failed,messages}；
+  // 503（降级层未初始化）等用 {ok:false,error}——两者都要显示，否则用户只看到「操作失败」。
+  const reason = result && typeof result.reason === 'string' && result.reason !== ''
+    ? result.reason
+    : (result && typeof result.error === 'string' ? result.error : '');
+  const failed = result && Array.isArray(result.failed) ? result.failed : [];
+  const messages = result && Array.isArray(result.messages) ? result.messages : [];
+  const detail = [...messages, reason].filter((item) => typeof item === 'string' && item !== '').join('；');
+  if (result && result.ok === true) {
+    columnDegradeMsg(okMessage + (detail === '' ? '' : '（' + detail + '）'), 'ok');
+    return;
+  }
+  const head = reason === 'precondition-failed'
+    ? '前置条件未满足（' + failed.length + ' 项）'
+    : '操作失败';
+  columnDegradeMsg(head + (detail === '' ? '。' : '：' + detail), 'err');
+}
+async function columnDegradeResendNotify() {
+  if (columnDegradeBusy) return;
+  columnDegradeBusy = true;
+  columnDegradeMsg('正在重发降级通知…', 'meta');
+  renderColumnDegrade();
+  try {
+    const result = await columnApi(COLUMN_DEGRADE_RESEND_PATH, 'POST', {});
+    const status = result && typeof result.notifyStatus === 'string' ? result.notifyStatus : '';
+    if (result && result.ok === true) {
+      const readable = status === '' ? '未知' : (COLUMN_DEGRADE_NOTIFY_TEXT[status] || status);
+      columnDegradeMsg('已重发降级通知，发送接口回执：' + readable + '。', status === 'delivered' ? 'ok' : 'err');
+    } else {
+      columnDegradeMsg('重发失败：' + (result && result.error ? result.error : '未知原因'), 'err');
+    }
+    if (result && result.degrade !== null && typeof result.degrade === 'object' && columnDegradeStatus !== null) {
+      columnDegradeStatus = Object.assign({}, columnDegradeStatus, { degrade: result.degrade });
+    }
+    await refreshColumnDegrade();
+  } catch (error) {
+    columnDegradeMsg('重发失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  } finally {
+    columnDegradeBusy = false;
+    renderColumnDegrade();
+  }
+}
+async function columnDegradeRecover() {
+  if (columnDegradeBusy) return;
+  if (!columnDegradeStatus || columnDegradeStatus.canRecover !== true) {
+    columnDegradeMsg('前置条件未全部满足，不能发起受控恢复。', 'err');
+    return;
+  }
+  columnDegradeBusy = true;
+  columnDegradeMsg('正在执行受控恢复…', 'meta');
+  renderColumnDegrade();
+  try {
+    // 服务端完全不读请求体；这里按契约传 {}，不夹带任何本地判断结果。
+    const result = await columnApi(COLUMN_DEGRADE_RECOVER_PATH, 'POST', {});
+    await columnDegradeRunNotified(result, '受控恢复成功，当前级别 ' + columnDegradeLevelText(result && result.level));
+    await refreshColumnDegrade();
+  } catch (error) {
+    columnDegradeMsg('受控恢复失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  } finally {
+    columnDegradeBusy = false;
+    renderColumnDegrade();
+  }
+}
+// ── 身份守卫：读 /api/status 的 identityGuard 段（该字段一直是只读暴露的）──────────
+// 不在前端复算前置条件：服务端 POST 会返回 failed 列表与中文 messages，直接展示即可。
+// 用户口径（m49780）：不要重复加防护 —— 所以按钮只按「守卫是否已停」启用，不做别的拦截。
+function columnGuardStateText(state) {
+  if (state === 'all-paused') return '全部暂停（含读取）';
+  if (state === 'restricted') return '仅写入暂停';
+  if (state === 'normal') return '正常';
+  return state === null || state === undefined || state === '' ? '未知' : String(state);
+}
+function renderColumnGuard() {
+  const data = columnGuardStatus;
+  const stateEl = columnDegradeEl('columnGuardState');
+  const updatedEl = columnDegradeEl('columnGuardUpdated');
+  const state = data !== null && typeof data === 'object' && typeof data.effectiveState === 'string'
+    ? data.effectiveState
+    : (data !== null && typeof data === 'object' && typeof data.state === 'string' ? data.state : null);
+  if (stateEl) {
+    stateEl.textContent = data === null ? '—' : columnGuardStateText(state);
+    stateEl.className = state === 'normal' ? 'ok' : (state === null ? '' : 'err');
+  }
+  if (updatedEl) {
+    updatedEl.textContent = data === null
+      ? '未读取'
+      : '读取于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  }
+  const anomalyEl = columnDegradeEl('columnGuardAnomaly');
+  if (anomalyEl) {
+    const id = data !== null && typeof data === 'object' && typeof data.anomalyId === 'string' ? data.anomalyId : '';
+    anomalyEl.textContent = id === '' ? '—' : id;
+  }
+  const sinceEl = columnDegradeEl('columnGuardSince');
+  if (sinceEl) {
+    const since = data !== null && typeof data === 'object' && Number.isFinite(data.since) ? data.since : null;
+    sinceEl.textContent = since === null ? '—' : new Date(since).toLocaleString('zh-CN', { hour12: false });
+  }
+  const notifyEl = columnDegradeEl('columnGuardNotify');
+  if (notifyEl) {
+    const notify = data !== null && typeof data === 'object' && data.notify !== null && typeof data.notify === 'object' ? data.notify : null;
+    const status = notify === null || typeof notify.status !== 'string' ? null : notify.status;
+    notifyEl.textContent = status === null
+      ? '—'
+      : (status === 'delivered' ? '已送达（真实回执）' : status === 'failed' ? '发送失败' : status);
+    notifyEl.className = status === 'delivered' ? 'ok' : (status === null ? '' : 'err');
+  }
+  const identityEl = columnDegradeEl('columnGuardIdentity');
+  if (identityEl) {
+    const ok = data !== null && typeof data === 'object' && data.identityOk === true;
+    identityEl.textContent = data === null ? '—' : (ok ? '是' : '否');
+    identityEl.className = data === null ? '' : (ok ? 'ok' : 'err');
+  }
+  const recoverBtn = columnDegradeEl('columnGuardRecover');
+  if (recoverBtn) {
+    // 只有守卫停在非 normal 时才需要这个按钮；其余情况禁用（不是安全判定，只是省一次必然无意义的点击）。
+    recoverBtn.disabled = columnGuardBusy || data === null || state === 'normal';
+  }
+}
+async function refreshColumnGuard() {
+  if (!columnSessionIsVerified()) return;
+  try {
+    const status = await api(COLUMN_GUARD_STATUS_PATH);
+    const guard = status !== null && typeof status === 'object' && status.identityGuard !== null && typeof status.identityGuard === 'object'
+      ? status.identityGuard
+      : null;
+    columnGuardStatus = guard;
+    renderColumnGuard();
+  } catch (error) {
+    // 守卫的错误必须写在守卫自己的消息位（#columnGuardMsg）。
+    // 旧写法走 columnDegradeMsg → #columnDegradeMsg：那是降级面板的位置，而守卫与降级是两套
+    // 独立机制，降级面板此时可能是隐藏的，用户根本看不到这条错误。
+    columnMsg('columnGuardMsg', '读取身份守卫状态失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  }
+}
+async function columnGuardRunRecover() {
+  if (columnGuardBusy) return;
+  columnGuardBusy = true;
+  const failedEl = columnDegradeEl('columnGuardFailed');
+  if (failedEl) { failedEl.hidden = true; failedEl.textContent = ''; }
+  columnMsg('columnGuardMsg', '正在请求解除身份守卫…', 'meta');
+  renderColumnGuard();
+  try {
+    // 服务端完全不读请求体；这里按契约传 {}，不夹带任何本地判断结果。
+    const result = await columnApi(COLUMN_GUARD_RECOVER_PATH, 'POST', {});
+    if (result && result.ok === true) {
+      const state = result.state === null || result.state === undefined ? 'normal' : String(result.state);
+      columnMsg('columnGuardMsg', '已解除，当前守卫状态：' + columnGuardStateText(state), 'ok');
+    } else {
+      const messages = result && Array.isArray(result.messages) ? result.messages : [];
+      const failed = result && Array.isArray(result.failed) ? result.failed : [];
+      const reason = result && typeof result.reason === 'string'
+        ? result.reason
+        : (result && typeof result.error === 'string' ? result.error : '未知原因');
+      columnMsg('columnGuardMsg', '解除被拒绝（' + reason + '）', 'err');
+      if (failedEl) {
+        // 缺哪一条就照服务端的话说哪一条，不自己编结论。
+        failedEl.textContent = messages.length > 0 ? messages.join('；') : ('未满足：' + failed.join('、'));
+        failedEl.hidden = messages.length === 0 && failed.length === 0;
+      }
+    }
+    await refreshColumnGuard();
+  } catch (error) {
+    columnMsg('columnGuardMsg', '解除失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  } finally {
+    columnGuardBusy = false;
+    renderColumnGuard();
+  }
+}
+// 页面隐藏即停表（后台标签页不该继续每 5 秒打接口）；回到前台且仍在本页时重新拉一次并重启。
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden === true) {
+    stopColumnDegradePoll();
+    stopColumnStatusPoll();
+    return;
+  }
+  // 回到前台：暂停状态可能是在别的标签页或「二代仿真」页改的，先刷状态再决定面板。
+  if (currentConsolePage === 'xiaoheihe') {
+    refreshColumnStatus();
+    startColumnStatusPoll();
+  }
+  if (currentConsolePage === 'xiaoheihe' && columnSessionIsVerified()) {
+    refreshColumnDegrade();
+    startColumnDegradePoll();
+  }
+});
+// 事件绑定由点击驱动，不在加载时发请求。
+(function bindColumnDegrade() {
+  const resend = columnDegradeEl('columnDegradeResend');
+  if (resend) resend.addEventListener('click', columnDegradeResendNotify);
+  const recover = columnDegradeEl('columnDegradeRecover');
+  if (recover) recover.addEventListener('click', columnDegradeRecover);
+  const guardRecover = columnDegradeEl('columnGuardRecover');
+  if (guardRecover) guardRecover.addEventListener('click', columnGuardRunRecover);
 })();
+// ── 阶段二：能力开关 / 只读 / 巡逻时段 / 每日额度 / 审计（任务卡 2026-10-27）────────
+// 三条端点（都过专栏会话门禁）：GET settings、POST settings/apply、GET audit。
+// 页面只负责收集与展示：合法性、顺序、失败即停、是否真的生效，全部以服务端回执为准。
+const COLUMN_SETTINGS_PATH = '/api/console/xiaoheihe-column/settings';
+const COLUMN_SETTINGS_APPLY_PATH = '/api/console/xiaoheihe-column/settings/apply';
+const COLUMN_AUDIT_PATH = '/api/console/xiaoheihe-column/audit';
+const COLUMN_CAPS = [['browse', '浏览（含搜索）'], ['post', '发帖'], ['comment', '评论'], ['reply', '回复']];
+const COLUMN_ACTIONS = [
+  ['reset-all', '重置额度：全部'],
+  ['reset-browse', '重置额度：浏览'],
+  ['reset-post', '重置额度：发帖'],
+  ['reset-comment', '重置额度：评论'],
+  ['recover-write', '恢复：解除写暂停'],
+  ['recover-access', '恢复：解除全部访问暂停'],
+];
+let columnSettingsSnapshot = null;
+let columnSettingsDirty = false;
+let columnSettingsBusy = false;
+let columnLogoutBusy = false;
+let columnSettingsDomReady = false;
+let columnSettingsLoadedOnce = false;
+function columnSettingsEl(id) { return document.getElementById(id); }
+function ensureColumnSettingsDom() {
+  if (columnSettingsDomReady) return;
+  const caps = columnSettingsEl('columnSettingsCaps');
+  if (caps) {
+    for (const item of COLUMN_CAPS) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.id = 'columnCap' + item[0].charAt(0).toUpperCase() + item[0].slice(1);
+      input.dataset.cap = item[0];
+      input.addEventListener('change', columnSettingsMarkDirty);
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(' ' + item[1]));
+      caps.appendChild(label);
+    }
+  }
+  const actions = columnSettingsEl('columnSettingsActions');
+  if (actions) {
+    for (const item of COLUMN_ACTIONS) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.id = 'columnAction' + item[0].replace(/-/g, '_');
+      input.dataset.action = item[0];
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(' ' + item[1]));
+      actions.appendChild(label);
+    }
+  }
+  const dirtyInputs = ['columnReadOnly', 'columnPatrolEnabled', 'columnPatrolStart', 'columnPatrolEnd', 'columnQuotaBrowse', 'columnQuotaPost', 'columnQuotaComment'];
+  for (const id of dirtyInputs) {
+    const el = columnSettingsEl(id);
+    if (el) {
+      el.addEventListener('input', columnSettingsMarkDirty);
+      el.addEventListener('change', columnSettingsMarkDirty);
+    }
+  }
+  const reload = columnSettingsEl('columnSettingsReload');
+  if (reload) reload.addEventListener('click', function () { reloadColumnSettings(); });
+  const auditRefresh = columnSettingsEl('columnAuditRefresh');
+  if (auditRefresh) auditRefresh.addEventListener('click', refreshColumnAudit);
+  columnSettingsDomReady = true;
+}
+function columnCapEl(cap) { return columnSettingsEl('columnCap' + cap.charAt(0).toUpperCase() + cap.slice(1)); }
+function columnSettingsCollect() {
+  const caps = {};
+  for (const item of COLUMN_CAPS) {
+    const el = columnCapEl(item[0]);
+    caps[item[0]] = Boolean(el && el.checked);
+  }
+  const num = function (id, fallback) {
+    const el = columnSettingsEl(id);
+    const value = el ? Number(el.value) : NaN;
+    return Number.isInteger(value) ? value : fallback;
+  };
+  const text = function (id, fallback) {
+    const el = columnSettingsEl(id);
+    const value = el ? String(el.value || '').trim() : '';
+    return /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+  };
+  return {
+    capabilities: caps,
+    readOnly: Boolean(columnSettingsEl('columnReadOnly') && columnSettingsEl('columnReadOnly').checked),
+    patrol: {
+      enabled: Boolean(columnSettingsEl('columnPatrolEnabled') && columnSettingsEl('columnPatrolEnabled').checked),
+      window: { start: text('columnPatrolStart', '07:00'), end: text('columnPatrolEnd', '23:00') },
+    },
+    quota: {
+      browse: num('columnQuotaBrowse', 14),
+      post: num('columnQuotaPost', 2),
+      comment: num('columnQuotaComment', 12),
+    },
+  };
+}
+function columnSettingsJson(settings) { try { return JSON.stringify(settings); } catch (error) { return ''; } }
+function columnSettingsDiff(settings) {
+  const before = columnSettingsSnapshot;
+  if (!before || !settings) return [];
+  const lines = [];
+  for (const item of COLUMN_CAPS) {
+    const b = before.capabilities && before.capabilities[item[0]] === true;
+    const a = settings.capabilities && settings.capabilities[item[0]] === true;
+    if (a !== b) lines.push(item[1] + '：' + (b ? '开' : '关') + ' → ' + (a ? '开' : '关'));
+  }
+  if (Boolean(before.readOnly) !== Boolean(settings.readOnly)) lines.push('只读模式：' + (before.readOnly ? '开' : '关') + ' → ' + (settings.readOnly ? '开' : '关'));
+  const bp = before.patrol || {};
+  const ap = settings.patrol || {};
+  if (Boolean(bp.enabled) !== Boolean(ap.enabled)) lines.push('后台巡逻：' + (bp.enabled ? '开' : '关') + ' → ' + (ap.enabled ? '开' : '关'));
+  const bw = bp.window || {};
+  const aw = ap.window || {};
+  if (bw.start !== aw.start || bw.end !== aw.end) lines.push('巡逻时段：' + (bw.start || '?') + '–' + (bw.end || '?') + ' → ' + (aw.start || '?') + '–' + (aw.end || '?'));
+  const bq = before.quota || {};
+  const aq = settings.quota || {};
+  const quotaNames = { browse: '浏览额度', post: '发帖额度', comment: '评论额度' };
+  for (const key of ['browse', 'post', 'comment']) {
+    if (bq[key] !== aq[key]) lines.push(quotaNames[key] + '：' + String(bq[key]) + ' → ' + String(aq[key]));
+  }
+  return lines;
+}
+function columnSettingsSelectedActions() {
+  const out = [];
+  for (const item of COLUMN_ACTIONS) {
+    const el = columnSettingsEl('columnAction' + item[0].replace(/-/g, '_'));
+    if (!el || !el.checked) continue;
+    if (item[0].indexOf('reset-') === 0) out.push({ type: 'reset', scope: item[0].slice('reset-'.length) });
+    else out.push({ type: 'recover', scope: item[0].slice('recover-'.length) });
+  }
+  return out;
+}
+function columnSettingsMsg(message, kind) {
+  const el = columnSettingsEl('columnSaveMsg');
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = kind === 'err' ? 'err' : (kind === 'ok' ? 'ok' : 'meta');
+}
+// P2-2：非法输入不能静默回退成默认值——先列出问题，保存时直接拒发。
+function columnSettingsProblems() {
+  const problems = [];
+  const timeRe = /^\d{2}:\d{2}$/;
+  const startEl = columnSettingsEl('columnPatrolStart');
+  const endEl = columnSettingsEl('columnPatrolEnd');
+  for (const item of [[startEl, '开始时间'], [endEl, '结束时间']]) {
+    const el = item[0];
+    const value = el ? String(el.value || '').trim() : '';
+    if (!timeRe.test(value)) problems.push(item[1] + '格式必须是 HH:MM');
+  }
+  for (const item of [
+    ['columnQuotaBrowse', '浏览额度'],
+    ['columnQuotaPost', '发帖额度'],
+    ['columnQuotaComment', '评论额度'],
+  ]) {
+    const el = columnSettingsEl(item[0]);
+    const raw = el ? String(el.value || '').trim() : '';
+    const value = Number(raw);
+    if (raw === '' || !Number.isInteger(value) || value < 0 || value > 99) problems.push(item[1] + '必须是 0–99 的整数');
+  }
+  return problems;
+}
+function columnSettingsActionSignature() {
+  return columnSettingsSelectedActions().map(function (action) { return action.type + ':' + action.scope; }).join(',');
+}
+function columnSettingsClearActions() {
+  for (const item of COLUMN_ACTIONS) {
+    const el = columnSettingsEl('columnAction' + item[0].replace(/-/g, '_'));
+    if (el && el.checked) el.checked = false;
+  }
+}
+function columnSettingsMarkDirty() {
+  if (!columnSettingsSnapshot) return;
+  const now = columnSettingsJson(columnSettingsCollect());
+  const before = columnSettingsJson(columnSettingsSnapshot);
+  const actionsNow = columnSettingsActionSignature();
+  columnSettingsDirty = now !== before || actionsNow !== '';
+  const note = columnSettingsEl('columnDraftNote');
+  if (note) note.hidden = !columnSettingsDirty;
+  const problems = columnSettingsProblems();
+  if (problems.length > 0) { columnSettingsMsg('输入无效：' + problems.join('；'), 'err'); return; }
+  columnSettingsMsg(columnSettingsDirty ? '有未保存的修改' : '', 'meta');
+}
+function columnSettingsQuotaLive(controller) {
+  const names = { read: '浏览', post: '发帖', comment: '评论' };
+  if (!controller || typeof controller !== 'object') return '已用/上限：读取中…';
+  const parts = [];
+  for (const key of ['read', 'post', 'comment']) {
+    const bucket = controller[key];
+    if (bucket && typeof bucket === 'object') parts.push(names[key] + ' ' + String(bucket.used) + '/' + String(bucket.limit));
+  }
+  if (controller.writePaused === true) parts.push('写暂停中');
+  if (controller.accessPaused === true) parts.push('访问暂停中');
+  return parts.length > 0 ? '已用/上限：' + parts.join('　') : '已用/上限：—';
+}
+function renderColumnSettings(data) {
+  ensureColumnSettingsDom();
+  const settings = data && data.settings ? data.settings : null;
+  if (!settings) { columnSettingsMsg('服务端未返回配置', 'err'); return; }
+  const caps = settings.capabilities || {};
+  for (const item of COLUMN_CAPS) {
+    const el = columnCapEl(item[0]);
+    if (el) el.checked = caps[item[0]] === true;
+  }
+  const readOnly = columnSettingsEl('columnReadOnly');
+  if (readOnly) readOnly.checked = settings.readOnly === true;
+  const patrol = settings.patrol || {};
+  const patrolEnabled = columnSettingsEl('columnPatrolEnabled');
+  if (patrolEnabled) patrolEnabled.checked = patrol.enabled === true;
+  const windowInfo = patrol.window || {};
+  const startEl = columnSettingsEl('columnPatrolStart');
+  if (startEl) startEl.value = typeof windowInfo.start === 'string' ? windowInfo.start : '07:00';
+  const endEl = columnSettingsEl('columnPatrolEnd');
+  if (endEl) endEl.value = typeof windowInfo.end === 'string' ? windowInfo.end : '23:00';
+  const quota = settings.quota || {};
+  const map = { columnQuotaBrowse: 'browse', columnQuotaPost: 'post', columnQuotaComment: 'comment' };
+  for (const id of Object.keys(map)) {
+    const el = columnSettingsEl(id);
+    const value = quota[map[id]];
+    if (el) el.value = String(Number.isInteger(value) ? value : 0);
+  }
+  columnSettingsSnapshot = columnSettingsCollect();
+  columnSettingsDirty = false;
+  const note = columnSettingsEl('columnDraftNote');
+  if (note) note.hidden = true;
+  const live = columnSettingsEl('columnQuotaLive');
+  if (live) live.textContent = columnSettingsQuotaLive(data ? data.controller : null);
+  columnSettingsMsg('', 'meta');
+  const steps = columnSettingsEl('columnSaveSteps');
+  if (steps) { steps.hidden = true; steps.textContent = ''; }
+}
+async function refreshColumnSettings() {
+  if (!columnSessionIsVerified()) return;
+  ensureColumnSettingsDom();
+  try {
+    const data = await columnApi(COLUMN_SETTINGS_PATH);
+    if (data && data.ok === true) {
+      renderColumnSettings(data);
+      columnSettingsLoadedOnce = true;
+    } else {
+      columnSettingsMsg('读取配置失败：' + ((data && (data.error || data.reason)) || '未知错误'), 'err');
+    }
+  } catch (error) {
+    columnSettingsMsg('读取配置失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  }
+}
+async function reloadColumnSettings() {
+  if (columnSettingsDirty && !confirm('放弃未保存的修改并重新读取服务端配置？')) return;
+  await refreshColumnSettings();
+}
+function columnSaveStepsRender(steps) {
+  const box = columnSettingsEl('columnSaveSteps');
+  if (!box) return;
+  box.hidden = false;
+  box.textContent = '';
+  const list = Array.isArray(steps) ? steps : [];
+  for (const step of list) {
+    const line = document.createElement('div');
+    const ok = step && step.ok === true;
+    line.className = ok ? 'ok' : 'err';
+    const names = { 'save-settings': '保存配置', 'apply-quota': '下发额度', reset: '重置额度', recover: '恢复' };
+    const label = names[step && step.type] || String((step && step.type) || '步骤');
+    const scope = step && typeof step.scope === 'string' ? '（' + step.scope + '）' : '';
+    line.textContent = (ok ? '✓ ' : '✗ ') + label + scope + (ok ? '' : '：' + String((step && step.reason) || '失败'));
+    box.appendChild(line);
+  }
+}
+// 保存配置（含勾选的额外动作）。返回 { ok, saved?, skipped?, cancelled?, busy?, reason? }：
+//   ok:true  → 可以继续（已保存，或本来就没有可保存的内容）
+//   ok:false → 不要继续（失败 / 用户取消 / 正在保存）
+// m35946：底部那个重复的「保存并退出」按钮已移除，保存与退出合并到页面顶部的同一个按钮。
+async function columnSaveSettings() {
+  if (columnSettingsBusy) return { ok: false, busy: true };
+  // 配置还没读到（GET 失败）时没有基线可比，强行保存会把页面默认值当用户意图写回服务端。
+  // 这时只允许退出、不保存——否则用户会被「保存失败」永久挡在页面上（旧版本就这样退不出去）。
+  if (!columnSettingsSnapshot) return { ok: true, skipped: true, reason: 'no-snapshot' };
+  const settings = columnSettingsCollect();
+  const actions = columnSettingsSelectedActions();
+  const problems = columnSettingsProblems();
+  if (problems.length > 0) { columnSettingsMsg('输入无效，未保存：' + problems.join('；'), 'err'); return { ok: false, invalid: true, reason: problems.join('；') }; }
+  const diff = columnSettingsDiff(settings);
+  if (diff.length === 0 && actions.length === 0) { columnSettingsMsg('没有需要保存的修改。', 'meta'); return { ok: true, skipped: true, reason: 'no-changes' }; }
+  const lines = [];
+  if (diff.length > 0) { lines.push('配置变更：'); for (const line of diff) lines.push('· ' + line); }
+  if (actions.length > 0) {
+    lines.push('额外执行：');
+    for (const action of actions) lines.push('· ' + (action.type === 'reset' ? '重置额度（' + action.scope + '）' : '恢复（' + action.scope + '）'));
+  }
+  lines.push('');
+  lines.push('执行顺序：保存配置 → 下发额度 → 重置额度 → 恢复；一步失败立即停止，不回滚。');
+  lines.push('确定保存并退出？');
+  if (!confirm(lines.join('\n'))) return { ok: false, cancelled: true };
+  columnSettingsBusy = true;
+  columnSettingsMsg('正在保存…', 'meta');
+  try {
+    const result = await columnApi(COLUMN_SETTINGS_APPLY_PATH, 'POST', { settings: settings, actions: actions });
+    columnSaveStepsRender(result ? result.steps : []);
+    if (result && result.ok === true) {
+      columnSettingsMsg('已保存并生效。', 'ok');
+      columnSettingsSnapshot = result.settings ? JSON.parse(JSON.stringify(result.settings)) : columnSettingsCollect();
+      columnSettingsDirty = false;
+      // P3-1：动作已经执行过，必须清空勾选，否则下次会重复重置/恢复。
+      columnSettingsClearActions();
+      const note = columnSettingsEl('columnDraftNote');
+      if (note) note.hidden = true;
+      const live = columnSettingsEl('columnQuotaLive');
+      if (live) live.textContent = columnSettingsQuotaLive(result.controller);
+      await refreshColumnAudit();
+      return { ok: true, saved: true };
+    }
+    const failed = result && result.failed ? String(result.failed) : ((result && (result.error || result.reason)) || '未知错误');
+    const savedOk = Array.isArray(result && result.steps) && result.steps.some(function (step) { return step && step.type === 'save-settings' && step.ok === true; });
+    const prefix = savedOk ? '配置已保存并生效，但' : '保存未完成：';
+    const tail = savedOk ? '；开关/只读/时段已按新值执行，额度与动作未完成（再点一次「保存并退出」只会重试未完成的部分）' : '（已完成的步骤见上；未完成的不会继续执行）';
+    columnSettingsMsg(prefix + failed + tail, 'err');
+    return { ok: false, reason: prefix + failed };
+  } catch (error) {
+    const message = '保存请求失败：' + (error && error.message ? error.message : '未知错误');
+    columnSettingsMsg(message, 'err');
+    return { ok: false, reason: message };
+  } finally {
+    columnSettingsBusy = false;
+  }
+}
+// 页面顶部唯一入口「保存并退出」：有改动就先保存，保存成功才退出。
+// 保存失败 / 输入无效时留在本页——「没保存上却把会话关掉」会让人误以为配置已生效。
+async function columnSaveAndExit() {
+  const result = await columnSaveSettings();
+  if (result.busy === true) return;
+  if (result.cancelled === true) { columnMsg('columnLogoutMsg', '已取消保存，未退出。', 'meta'); return; }
+  if (result.ok !== true) { columnMsg('columnLogoutMsg', '保存未完成，已留在本页：' + (result.reason || '请先处理上方提示'), 'err'); return; }
+  if (result.skipped === true && result.reason === 'no-snapshot') {
+    columnMsg('columnLogoutMsg', '配置尚未读取成功，本次不保存，直接退出。', 'meta');
+  }
+  await columnSubmitLogout(result.saved === true);
+}
+async function refreshColumnAudit() {
+  if (!columnSessionIsVerified()) return;
+  const msg = columnSettingsEl('columnAuditMsg');
+  const box = columnSettingsEl('columnAuditTable');
+  if (msg) msg.textContent = '读取中…';
+  try {
+    const data = await columnApi(COLUMN_AUDIT_PATH + '?limit=50');
+    if (!data || data.ok !== true) {
+      if (msg) msg.textContent = '读取失败：' + ((data && (data.error || data.reason)) || '未知错误');
+      return;
+    }
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (msg) msg.textContent = String(data.day || '') + ' 共 ' + String(entries.length) + ' 条（最近在前）';
+    if (!box) return;
+    box.textContent = '';
+    if (entries.length === 0) { box.textContent = '当日暂无审计记录。'; return; }
+    const table = document.createElement('table');
+    const head = document.createElement('tr');
+    for (const title of ['时间', '平台', '动作', '结果', '原因']) {
+      const th = document.createElement('th');
+      th.textContent = title;
+      head.appendChild(th);
+    }
+    table.appendChild(head);
+    for (const entry of entries.slice().reverse()) {
+      const row = document.createElement('tr');
+      const at = Number.isFinite(entry.at) ? new Date(entry.at).toLocaleString('zh-CN', { hour12: false }) : '—';
+      for (const value of [at, entry.platform || '—', entry.action || '—', entry.result || '—', entry.reason || '—']) {
+        const td = document.createElement('td');
+        td.textContent = String(value);
+        row.appendChild(td);
+      }
+      table.appendChild(row);
+    }
+    box.appendChild(table);
+  } catch (error) {
+    if (msg) msg.textContent = '读取失败：' + (error && error.message ? error.message : '未知错误');
+  }
+}
+function columnSettingsHasUnsaved() { return columnSettingsDirty === true; }
+window.addEventListener('beforeunload', function (event) {
+  if (!columnSettingsHasUnsaved()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
+function columnFailureMessage(reason) {
+  const messages = {
+    'agent-not-paused': '二代 AI 尚未暂停。请到「二代仿真」页点击「暂停二代 AI」；本次未做任何改动。',
+    'password-too-short': '密码至少 10 个字符。',
+    'password-equals-console-token': '密码不能与控制台访问令牌相同。',
+    'already-set': '专栏密码已设置，请直接验证。',
+    'state-untrusted': '密码状态不可信（本地密码文件已损坏或无法解析）。请直接使用「忘记密码」重新设置。',
+    'persist-failed': '保存失败（磁盘写入失败），本次未做任何改动；请稍后重试。',
+  };
+  return messages[reason] || ('操作失败：' + (reason || '未知原因'));
+}
+async function columnHandleFailure(result, messageId) {
+  const reason = result && result.reason;
+  let text = columnFailureMessage(reason);
+  if (reason === 'agent-not-paused' && result && result.agentPaused) {
+    const still = [];
+    if (result.agentPaused.socialV2 !== true) still.push('二代仿真（到「二代仿真」页点「暂停二代 AI」）');
+    if (still.length > 0) text = '仍在运行：' + still.join('、') + '。请先暂停它们，再重新设置密码；本次未做任何改动。';
+  }
+  columnMsg(messageId, text, 'err');
+  if (reason === 'already-set' || reason === 'state-untrusted') await refreshColumnStatus();
+  else renderColumnView();
+}
+function columnPasswordsMatch(firstId, secondId, messageId) {
+  const first = columnEl(firstId);
+  const second = columnEl(secondId);
+  const firstValue = first ? first.value : '';
+  const secondValue = second ? second.value : '';
+  if (firstValue.length < COLUMN_MIN_PASSWORD) {
+    columnMsg(messageId, '密码至少 ' + COLUMN_MIN_PASSWORD + ' 个字符。', 'err');
+    return null;
+  }
+  if (firstValue !== secondValue) {
+    columnMsg(messageId, '两次输入的密码不一致。', 'err');
+    return null;
+  }
+  return firstValue;
+}
+async function columnSubmitSetup() {
+  const password = columnPasswordsMatch('columnSetPassword', 'columnSetConfirm', 'columnSetMsg');
+  if (password === null) return;
+  try {
+    const result = await columnApi(COLUMN_SETUP_PATH, 'POST', { password });
+    if (result && result.ok === true) {
+      columnVerifiedAt = Date.now();
+      columnLastActivityAt = Date.now();
+      const first = columnEl('columnSetPassword'); if (first) first.value = '';
+      const second = columnEl('columnSetConfirm'); if (second) second.value = '';
+      columnMsg('columnSetMsg', '密码已设置。', 'ok');
+      await refreshColumnStatus();
+    } else {
+      await columnHandleFailure(result, 'columnSetMsg');
+    }
+  } catch (error) {
+    columnMsg('columnSetMsg', '设置失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  }
+}
+async function columnSubmitVerify() {
+  const input = columnEl('columnVerifyPassword');
+  const password = input ? input.value : '';
+  if (password === '') { columnMsg('columnVerifyMsg', '请输入专栏密码。', 'err'); return; }
+  try {
+    const result = await columnApi(COLUMN_VERIFY_PATH, 'POST', { password });
+    if (result && result.ok === true) {
+      columnVerifiedAt = Date.now();
+      columnLastActivityAt = Date.now();
+      if (input) input.value = '';
+      columnMsg('columnVerifyMsg', '', 'meta');
+      await refreshColumnStatus();
+      return;
+    }
+    const reason = result && result.reason;
+    if (reason === 'locked') {
+      columnLockedUntil = Date.now() + (Number.isFinite(result.lockedSeconds) ? result.lockedSeconds : 0) * 1000;
+      columnMsg('columnVerifyMsg', '密码已锁定，请稍后再试。', 'err');
+      renderColumnView();
+    } else if (reason === 'wrong-password') {
+      columnMsg('columnVerifyMsg', '密码错误（已失败 ' + (result.failedAttempts || 0) + ' 次）。', 'err');
+    } else if (reason === 'untrusted' || reason === 'unset') {
+      await refreshColumnStatus();
+    } else {
+      columnMsg('columnVerifyMsg', '验证失败：' + (reason || '未知原因'), 'err');
+    }
+  } catch (error) {
+    columnMsg('columnVerifyMsg', '验证失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  }
+}
+async function columnSubmitLogout(saved) {
+  if (columnLogoutBusy) return;
+  columnLogoutBusy = true;
+  try {
+    // m35946：这里原本是 columnApi(COLUMN_LOGOUT_PATH, 'POST') 不带 body。api() 只在 body 为真时
+    // 才设 content-type，而桥接对非 GET 一律要求 application/json（src/bridge.js 的 CSRF 门），
+    // 于是退出请求被 415 拒掉，页面只会显示「退出失败，请重试」——这就是点了退不出去的原因。
+    // 服务端这个路由根本不读 body，传空对象只是为了拿到正确的 content-type。
+    const result = await columnApi(COLUMN_LOGOUT_PATH, 'POST', {});
+    if (result && result.ok === true) {
+      columnVerifiedAt = 0;
+      columnLastActivityAt = 0;
+      // 会话结束后配置快照作废：下次验证通过要重新从服务端读，不能拿上一次的当基线。
+      columnSettingsLoadedOnce = false;
+      columnSettingsSnapshot = null;
+      columnSettingsDirty = false;
+      columnMsg('columnLogoutMsg', saved === true ? '已保存并退出专栏。' : '已退出专栏。', 'ok');
+    } else {
+      const reason = (result && (result.error || result.reason)) || '未知原因';
+      columnMsg('columnLogoutMsg', '退出失败：' + reason + '（会话仍在，可重试）', 'err');
+    }
+    await refreshColumnStatus();
+  } catch (error) {
+    columnMsg('columnLogoutMsg', '退出失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  } finally {
+    columnLogoutBusy = false;
+  }
+}
+async function columnSubmitReset() {
+  const password = columnPasswordsMatch('columnResetPassword', 'columnResetConfirm', 'columnResetMsg');
+  if (password === null) return;
+  try {
+    const result = await columnApi(COLUMN_FORGOT_PATH, 'POST', { password });
+    if (result && result.ok === true) {
+      const first = columnEl('columnResetPassword'); if (first) first.value = '';
+      const second = columnEl('columnResetConfirm'); if (second) second.value = '';
+      columnVerifiedAt = 0;
+      columnLastActivityAt = 0;
+      columnForgotOpen = false;
+      columnMsg('columnResetMsg', '密码已重设，请用新密码验证。', 'ok');
+      await refreshColumnStatus();
+    } else {
+      await columnHandleFailure(result, 'columnResetMsg');
+    }
+  } catch (error) {
+    columnMsg('columnResetMsg', '重设失败：' + (error && error.message ? error.message : '未知错误'), 'err');
+  }
+}
+// 事件绑定：全部由用户点击驱动；不在页面加载时就发请求（切到专栏页时才拉 status）。
+(function bindColumnEntry() {
+  const setup = columnEl('columnSetSubmit');
+  if (setup) setup.addEventListener('click', columnSubmitSetup);
+  const verify = columnEl('columnVerifySubmit');
+  if (verify) verify.addEventListener('click', columnSubmitVerify);
+  const logout = columnEl('columnLogout');
+  if (logout) logout.addEventListener('click', columnSaveAndExit);
+  const forgot = columnEl('columnForgotOpen');
+  if (forgot) forgot.addEventListener('click', () => {
+    columnForgotOpen = true;
+    renderColumnView();
+    columnMsg('columnForgotWarn', '重置密码前，请到「二代仿真」页点击「暂停二代 AI」，再重新设置密码', 'err');
+  });
+  const reset = columnEl('columnResetSubmit');
+  if (reset) reset.addEventListener('click', columnSubmitReset);
+})();
+
+/* QZONE_CONSOLE_BEGIN */
+// QQ 空间专栏使用专属接口、CSRF 标记和服务端会话 Cookie，不经过 api()。
+function qzoneNode(id) { return document.getElementById(id); }
+function qzoneMessage(id, text, error = false) {
+  const node = qzoneNode(id);
+  if (node) { node.textContent = text; node.className = error ? 'err' : 'meta'; }
+}
+function qzoneUpdateManagementButtons() {
+  const disabled = !qzoneVerified || !qzoneConfigValid || !qzoneStatusValid;
+  for (const id of ['qzoneSave', 'qzoneRecoverRead', 'qzoneRecoverWrite', 'qzoneRecoverAll']) qzoneNode(id).disabled = disabled;
+  for (const button of qzoneNode('qzoneQuotaReset').children) button.disabled = disabled;
+}
+function qzoneValidTimeRange(data) {
+  return Number.isSafeInteger(data.intervalMinutes) && data.intervalMinutes >= 15 &&
+    Number.isInteger(data.activeStart) && data.activeStart >= 0 && data.activeStart < 1440 &&
+    Number.isInteger(data.activeEnd) && data.activeEnd >= 0 && data.activeEnd < 1440 && data.activeStart !== data.activeEnd;
+}
+function qzoneValidCommon(data) {
+  return data && typeof data === 'object' && !Array.isArray(data) &&
+    ['enabled', 'readAllowed', 'writeAllowed', 'accessPaused', 'writePaused'].every(key => typeof data[key] === 'boolean') &&
+    data.tools && typeof data.tools === 'object' && !Array.isArray(data.tools) &&
+    qzoneToolNames.every(([key]) => typeof data.tools[key] === 'boolean') && qzoneValidTimeRange(data);
+}
+function qzoneValidConfig(data) {
+  return qzoneValidCommon(data) && data.limits && typeof data.limits === 'object' && !Array.isArray(data.limits) &&
+    qzoneQuotaNames.every(([key]) => Number.isSafeInteger(data.limits[key]) && data.limits[key] >= 0 && data.limits[key] <= 99);
+}
+function qzoneValidStatus(data) {
+  if (!qzoneValidCommon(data) || typeof data.dispatchAvailable !== 'boolean' ||
+      typeof data.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(data.day) ||
+      !Number.isFinite(Date.parse(data.day + 'T00:00:00Z')) || new Date(data.day + 'T00:00:00Z').toISOString().slice(0, 10) !== data.day ||
+      !data.quota || typeof data.quota !== 'object' || Array.isArray(data.quota)) return false;
+  return qzoneQuotaNames.every(([key]) => {
+    const item = data.quota[key];
+    return item && Number.isSafeInteger(item.used) && item.used >= 0 && Number.isSafeInteger(item.limit) && item.limit >= 0 && item.limit <= 99 &&
+      Number.isSafeInteger(item.remaining) && item.remaining === Math.max(0, item.limit - item.used);
+  });
+}
+function qzoneTimeText(minutes) { return String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0'); }
+function qzoneTimeMinutes(value) {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new Error('活动时段必须填写有效时间。');
+  return Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+}
+async function qzoneRequest(path, method = 'GET', body) {
+  const headers = { 'x-column-request': '1' };
+  const token = localStorage.getItem('consoleToken');
+  if (!token) throw new Error('缺少主控制台令牌，请先完成控制台鉴权。');
+  headers['x-console-token'] = token;
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  const response = await fetch(QZONE_COLUMN_BASE + path, {
+    method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin',
+  });
+  let data;
+  try { data = await response.json(); } catch { data = null; }
+  if (response.status === 401 || response.status === 403 || (data && data.error === 'qzone-column-session-required')) {
+    qzoneVerified = false;
+    qzoneConfigValid = false; qzoneStatusValid = false; qzoneUpdateManagementButtons();
+    qzoneRenderAuth();
+    if (qzonePasswordConfigured) qzoneNode('qzoneVerify').hidden = false;
+    qzoneMessage('qzoneAuthStatus', 'QQ 空间专栏会话已失效，请重新验证专栏密码。', true);
+  }
+  if (!response.ok || !data || data.ok !== true) {
+    // The plugin-state endpoints answer 503 with a typed `error` code. Callers must be able to
+    // branch on that code instead of matching message text, so it is attached to the error object.
+    const error = new Error((data && (data.error || data.reason)) || (response.ok ? '服务端回执无效' : 'HTTP ' + response.status));
+    error.status = response.status;
+    if (data && typeof data.error === 'string') error.code = data.error;
+    if (data && Array.isArray(data.missing)) error.missing = data.missing;
+    throw error;
+  }
+  return data;
+}
+// ── 插件库不可用时的三种 503 回执 ────────────────────────────────────────────────────────────
+// 后端把「插件库不存在 / 字段不全 / 被占用」拆成三个**类型化**的错误码，而不是一句话。
+// 这里集中翻译成中文，并区分「临时、可手动重试」与「必须先修环境」两种情况 ——
+// 前者给「重新读取」按钮，后者不给（给了也只会一直失败）。
+const QZONE_PLUGIN_UNAVAILABLE = 'plugin-state-unavailable';
+const QZONE_PLUGIN_INCOMPLETE = 'plugin-state-incomplete';
+const QZONE_PLUGIN_BUSY = 'plugin-busy';
+
+function qzonePluginStateText(error) {
+  if (!error || typeof error.code !== 'string') return null;
+  if (error.code === QZONE_PLUGIN_UNAVAILABLE) {
+    // 这条是给「换机 / 新装」的人看的：密码功能不依赖插件库，必须说清楚它还能用。
+    return 'QQ 空间插件尚未在本机运行过（state/qzone-plugin-state.sqlite 不存在）。专栏密码功能仍可正常使用；插件运行过一次后，本页会自动读到配置与审计。';
+  }
+  if (error.code === QZONE_PLUGIN_INCOMPLETE) {
+    const missing = Array.isArray(error.missing) ? error.missing.filter((name) => typeof name === 'string' && name !== '') : [];
+    return '插件库缺少必填字段：' + (missing.length ? missing.join('、') : '（服务端未列出字段名）') +
+      '。需要在仓库根运行 node scripts/qzone-migrate-plugin-state.mjs 后再回来重新读取。';
+  }
+  if (error.code === QZONE_PLUGIN_BUSY) {
+    return '插件正忙（数据库被占用），请稍后重试。本页不会自动重试。';
+  }
+  return null;
+}
+function qzoneClearPluginState() {
+  const notice = qzoneNode('qzoneStateNotice');
+  if (notice) { notice.hidden = true; notice.textContent = ''; }
+  const retryRow = qzoneNode('qzoneRetryRow');
+  if (retryRow) retryRow.hidden = true;
+}
+/** 把 503 的类型码翻成界面提示；返回提示文本（非插件库错误时返回 null）。 */
+function qzoneShowPluginState(error) {
+  const text = qzonePluginStateText(error);
+  if (text === null) return null;
+  const notice = qzoneNode('qzoneStateNotice');
+  if (notice) { notice.hidden = false; notice.className = 'err'; notice.textContent = text; }
+  // 只有 plugin-busy 是临时的；另外两种要先修环境，给重试按钮只会反复失败。
+  const retryRow = qzoneNode('qzoneRetryRow');
+  if (retryRow) retryRow.hidden = error.code !== QZONE_PLUGIN_BUSY;
+  return text;
+}
+function qzoneRenderAuth() {
+  qzoneNode('qzoneSetup').hidden = true;
+  qzoneNode('qzoneVerify').hidden = true;
+  qzoneNode('qzoneForgot').hidden = true;
+  qzoneNode('qzoneAuthStateMessage').hidden = true;
+  qzoneNode('qzonePanel').hidden = true;
+  if (qzoneVerified) {
+    qzoneNode('qzonePanel').hidden = false;
+    qzoneNode('qzoneSessionMessage').textContent = '独立专栏会话有效';
+  }
+}
+async function qzoneCheckAuth() {
+  qzoneVerified = false; qzoneConfigRequestId++; qzoneStatusRequestId++;
+  qzoneConfigValid = false; qzoneStatusValid = false; qzoneUpdateManagementButtons();
+  qzoneMessage('qzoneAuthStatus', '正在连接 QQ 空间专栏认证接口…');
+  try {
+    const data = await qzoneRequest('/auth/status');
+    if (typeof data.state !== 'string' || !data.session || typeof data.session.valid !== 'boolean' ||
+        (data.state === 'locked' && (!Number.isSafeInteger(data.lockedSeconds) || data.lockedSeconds < 0))) throw new Error('认证状态不完整或无效');
+    qzonePasswordConfigured = data.state === 'set' || data.state === 'locked' || data.state === 'untrusted';
+    qzoneVerified = data.state === 'set' && data.session?.valid === true;
+    qzoneRenderAuth();
+    if (qzoneVerified) {
+      qzoneMessage('qzoneAuthStatus', '专栏会话已由服务端确认。');
+      await qzoneLoadDispatchStatus();
+      if (!qzoneVerified) return;
+      await qzoneLoadSettings();
+      if (!qzoneVerified) return;
+      await qzoneRefreshAudit();
+    } else {
+      if (data.state === 'unset') {
+        qzoneNode('qzoneSetup').hidden = false;
+        qzoneMessage('qzoneAuthStatus', '尚未设置 QQ 空间专栏独立密码。');
+      } else if (data.state === 'set') {
+        qzoneNode('qzoneVerify').hidden = false;
+        qzoneMessage('qzoneAuthStatus', '请输入 QQ 空间专栏独立密码。');
+      } else if (data.state === 'locked') {
+        qzoneNode('qzoneForgot').hidden = false;
+        qzoneNode('qzoneAuthStateMessage').hidden = false;
+        qzoneNode('qzoneAuthStateMessage').textContent = '专栏密码验证已锁定，剩余 ' + Math.max(0, Number(data.lockedSeconds) || 0) + ' 秒。';
+        qzoneMessage('qzoneAuthStatus', '专栏已锁定；可在服务端策略允许时尝试忘记密码重设。', true);
+      } else if (data.state === 'untrusted') {
+        qzoneNode('qzoneForgot').hidden = false;
+        qzoneNode('qzoneAuthStateMessage').hidden = false;
+        qzoneNode('qzoneAuthStateMessage').textContent = '专栏密码状态不可信，已按关闭策略禁止进入；请通过服务端验证的重设流程处理。';
+        qzoneMessage('qzoneAuthStatus', '密码状态不可信，未开放登录或设置入口。', true);
+      } else {
+        qzoneNode('qzoneAuthStateMessage').hidden = false;
+        qzoneNode('qzoneAuthStateMessage').textContent = '服务端返回无法识别的密码状态，已按关闭策略禁止进入。';
+        qzoneMessage('qzoneAuthStatus', '无法识别专栏认证状态：' + String(data.state), true);
+      }
+    }
+  } catch (error) {
+    qzoneVerified = false;
+    qzoneRenderAuth();
+    if (qzonePasswordConfigured) qzoneNode('qzoneVerify').hidden = false;
+    qzoneMessage('qzoneAuthStatus', 'QQ 空间认证接口未连接/读取失败：' + error.message, true);
+  }
+}
+async function qzoneAuthSubmit(action, inputId, messageId) {
+  const input = qzoneNode(inputId);
+  const password = input.value;
+  if (!password) { qzoneMessage(messageId, '请输入专栏密码。', true); return; }
+  qzoneMessage(messageId, '正在等待服务端回执…');
+  try {
+    const result = await qzoneRequest('/auth/' + action, 'POST', { password });
+    input.value = '';
+    qzoneVerified = false;
+    qzoneRenderAuth();
+    qzoneMessage(messageId, '服务端已接受请求，正在重新读取认证状态…');
+    await qzoneCheckAuth();
+    if (action === 'forgot-reset' && !qzoneVerified) qzoneMessage(messageId, '重设请求已处理；请根据服务端返回状态重新验证或设置。');
+  } catch (error) {
+    const reason = error.message;
+    const detail = reason === 'agent-not-paused' ? '服务端确认 QQAgent 尚未暂停，拒绝重设。'
+      : reason === 'locked' ? '密码验证已锁定，请稍后再试。'
+        : reason === 'untrusted' || reason === 'state-untrusted' ? '密码状态不可信，服务端拒绝该操作。'
+          : reason === 'wrong-password' ? '专栏密码错误。'
+            : '操作失败：' + reason;
+    qzoneMessage(messageId, detail, true);
+  }
+}
+function qzoneBuildInputs() {
+  const permissions = qzoneNode('qzonePermissions');
+  const quotas = qzoneNode('qzoneQuotas');
+  const resets = qzoneNode('qzoneQuotaReset');
+  for (const [key, label] of qzoneToolNames) {
+    const wrapper = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox'; input.dataset.qzoneTool = key;
+    input.id = 'qzoneTool' + key.replace(/(^|_)([a-z])/g, (_, __, letter) => letter.toUpperCase());
+    wrapper.textContent = label + ' ';
+    wrapper.appendChild(input);
+    permissions.appendChild(wrapper);
+  }
+  for (const [key, label] of qzoneQuotaNames) {
+    const wrapper = document.createElement('label');
+    wrapper.textContent = label + '上限 ';
+    const input = document.createElement('input');
+    input.type = 'number'; input.min = '0'; input.max = '99'; input.value = '0'; input.dataset.qzoneQuota = key;
+    input.id = 'qzoneQuota' + key[0].toUpperCase() + key.slice(1);
+    input.style.width = '76px'; wrapper.appendChild(input); quotas.appendChild(wrapper);
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'small';
+    button.textContent = '重置' + label + '额度';
+    button.disabled = true;
+    button.dataset.qzoneResetKind = key;
+    button.addEventListener('click', () => qzoneAction('/quota/reset', 'POST', { kind: key }, '单项额度重置'));
+    resets.appendChild(button);
+  }
+  const editable = ['qzoneEnabled', 'qzoneReadAllowed', 'qzoneWriteAllowed', 'qzoneInterval', 'qzoneStart', 'qzoneEnd'].map(qzoneNode)
+    .concat([...document.querySelectorAll('[data-qzone-tool]')], [...document.querySelectorAll('[data-qzone-quota]')]);
+  for (const input of editable) {
+    const markDirty = () => { qzoneDirtyFields.add(input.id); qzoneDraftDirty = true; qzoneDraftVersion++; };
+    input.addEventListener('input', markDirty);
+    input.addEventListener('change', markDirty);
+  }
+  qzoneUpdateManagementButtons();
+}
+async function qzoneLoadDispatchStatus() {
+  const node = qzoneNode('qzoneDispatchStatus');
+  const requestId = ++qzoneStatusRequestId;
+  qzoneStatusValid = false; qzoneUpdateManagementButtons();
+  try {
+    const data = await qzoneRequest('/status');
+    if (requestId !== qzoneStatusRequestId) return;
+    if (!qzoneValidStatus(data)) throw new Error('状态字段缺失或无效');
+    qzoneStatusValid = true; qzoneUpdateManagementButtons();
+    qzoneClearPluginState();
+    // 状态读到了，这里**保持静默**。这一页的职责是配置、额度与审计；空间工具本身在 QQ 会话里
+    // 由模型通过 MCP 工具调用，控制台从来没有、也不需要派发入口。
+    //
+    // 以前这里常驻一行「空间工具/调度尚未接入，当前不可执行真实操作」的红字，读起来像"功能没
+    // 做完"，反而让人以为整个专栏是个空壳。那句话删掉了；容器留着，只在真出错时显示。
+    if (node !== null) { node.textContent = ''; node.hidden = true; }
+  } catch (error) {
+    if (requestId !== qzoneStatusRequestId) return;
+    qzoneStatusValid = false; qzoneUpdateManagementButtons();
+    const pluginText = qzoneShowPluginState(error);
+    if (node !== null) {
+      node.textContent = pluginText === null
+        ? '空间工具/调度状态读取失败，当前不可确认可执行：' + error.message
+        : pluginText;
+      node.hidden = false;
+      node.className = 'err';
+    }
+  }
+}
+function qzoneReadSettings() {
+  const limits = {};
+  for (const input of document.querySelectorAll('[data-qzone-quota]')) {
+    if (!/^\d{1,2}$/.test(input.value)) throw new Error('额度必须是 0–99 的整数。');
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < 0 || value > 99) throw new Error('额度必须是 0–99 的整数。');
+    limits[input.dataset.qzoneQuota] = value;
+  }
+  const interval = Number(qzoneNode('qzoneInterval').value);
+  if (!Number.isSafeInteger(interval) || interval < 15) throw new Error('主动机会间隔不得低于 15 分钟。');
+  const activeStart = qzoneTimeMinutes(qzoneNode('qzoneStart').value);
+  const activeEnd = qzoneTimeMinutes(qzoneNode('qzoneEnd').value);
+  if (activeStart === activeEnd) throw new Error('活动时段的开始和结束不能相同。');
+  return {
+    enabled: qzoneNode('qzoneEnabled').checked,
+    readAllowed: qzoneNode('qzoneReadAllowed').checked,
+    writeAllowed: qzoneNode('qzoneWriteAllowed').checked,
+    tools: Object.fromEntries([...document.querySelectorAll('[data-qzone-tool]')].map(el => [el.dataset.qzoneTool, el.checked])),
+    limits, intervalMinutes: interval,
+    activeStart, activeEnd,
+  };
+}
+async function qzoneLoadSettings() {
+  const requestId = ++qzoneConfigRequestId;
+  qzoneConfigValid = false; qzoneUpdateManagementButtons();
+  qzoneMessage('qzoneConnection', '正在读取 QQ 空间配置与暂停状态…');
+  try {
+    const data = await qzoneRequest('/config');
+    if (requestId !== qzoneConfigRequestId) return;
+    if (!qzoneValidConfig(data)) throw new Error('配置字段缺失或无效');
+    qzoneSettings = data;
+    for (const [id, value] of [['qzoneEnabled', data.enabled], ['qzoneReadAllowed', data.readAllowed], ['qzoneWriteAllowed', data.writeAllowed]]) {
+      if (!qzoneDirtyFields.has(id)) qzoneNode(id).checked = value;
+    }
+    for (const el of document.querySelectorAll('[data-qzone-tool]')) if (!qzoneDirtyFields.has(el.id)) el.checked = data.tools[el.dataset.qzoneTool];
+    for (const el of document.querySelectorAll('[data-qzone-quota]')) if (!qzoneDirtyFields.has(el.id)) el.value = String(data.limits[el.dataset.qzoneQuota]);
+    for (const [id, value] of [['qzoneInterval', String(data.intervalMinutes)], ['qzoneStart', qzoneTimeText(data.activeStart)], ['qzoneEnd', qzoneTimeText(data.activeEnd)]]) {
+      if (!qzoneDirtyFields.has(id)) qzoneNode(id).value = value;
+    }
+    qzoneNode('qzonePauseStatus').textContent = '访问暂停：' + (data.accessPaused ? '已暂停' : '未暂停') + '；写入暂停：' + (data.writePaused ? '已暂停' : '未暂停');
+    qzoneClearPluginState();
+    qzoneConfigValid = true; qzoneUpdateManagementButtons();
+    qzoneMessage('qzoneConnection', qzoneDraftDirty ? '配置已读取；保留未保存的修改。' : '配置已从服务端读取。');
+  } catch (error) {
+    if (requestId !== qzoneConfigRequestId) return;
+    qzoneConfigValid = false; qzoneUpdateManagementButtons();
+    qzoneNode('qzonePauseStatus').textContent = '暂停状态未知，请重新读取。';
+    const pluginText = qzoneShowPluginState(error);
+    qzoneMessage('qzoneConnection', '配置/状态接口未连接或读取失败：' + (pluginText === null ? error.message : pluginText), true);
+  }
+}
+async function qzoneAction(path, method, body, label, messageId = 'qzoneSaveMessage') {
+  if (!qzoneVerified) { qzoneMessage(messageId, '专栏会话无效，请重新验证。', true); return; }
+  if (!qzoneConfigValid || !qzoneStatusValid) { qzoneMessage(messageId, '状态或配置尚未完整读取，请先重新读取。', true); return; }
+  const submittedDraftVersion = qzoneDraftVersion;
+  qzoneMessage(messageId, label + '请求发送中，等待服务端回执…');
+  try {
+    const data = await qzoneRequest(path, method, body);
+    qzoneMessage(messageId, (data.message || label + '已由服务端确认。'));
+    if (path === '/config' && qzoneDraftVersion === submittedDraftVersion) { qzoneDirtyFields.clear(); qzoneDraftDirty = false; }
+    if (path === '/config' || path === '/pause/restore') await qzoneLoadSettings();
+  } catch (error) {
+    const pluginText = qzoneShowPluginState(error);
+    qzoneMessage(messageId, label + '失败：' + (pluginText === null ? error.message : pluginText), true);
+  }
+}
+// 审计：**一张表 + 类型列**。后端给每条记录带 `kind`（intent = 读/写意图，settle = 写结算）；
+// 缺字段或出现未知值时如实标成「未知」，不猜也不隐藏 —— 猜错类型比显示「未知」更容易误导人。
+function qzoneAuditKindText(kind) {
+  if (kind === 'intent') return 'intent（意图）';
+  if (kind === 'settle') return 'settle（结算）';
+  return '未知';
+}
+function qzoneAuditCell(row, text) {
+  const cell = document.createElement('td');
+  cell.textContent = (text === undefined || text === null || text === '') ? '—' : String(text);
+  row.appendChild(cell);
+  return cell;
+}
+async function qzoneRefreshAudit() {
+  if (!qzoneVerified) return;
+  qzoneMessage('qzoneAuditStatus', '正在读取空间审计…');
+  try {
+    const data = await qzoneRequest('/audit');
+    const entries = Array.isArray(data.records) ? data.records : [];
+    const box = qzoneNode('qzoneAudit'); box.textContent = '';
+    if (!entries.length) {
+      box.textContent = '服务端返回：暂无审计记录。';
+    } else {
+      const table = document.createElement('table');
+      const head = document.createElement('tr');
+      for (const title of ['类型', '时间', '来源', '动作', '目标', '结果', '原因', '内容']) {
+        const th = document.createElement('th'); th.textContent = title; head.appendChild(th);
+      }
+      table.appendChild(head);
+      for (const entry of entries) {
+        const row = document.createElement('tr');
+        // ⚠️ 两种记录是**不同词汇表**，不能拿同一组字段去套：
+        //   intent（读/写意图）：source / action / target / result / reason / content
+        //   settle（写结算）  ：stage / action / outcome / authorizationId —— 它没有 source/target
+        // 早先按 intent 的字段硬套 settle，结果 settle 行除动作外全是「—」，
+        // 结算成败（outcome）被彻底藏起来，看不出这笔写到底成没成。按 kind 取各自该显示的字段。
+        const isSettle = entry.kind === 'settle';
+        // 类型列放在第一列：一屏就能分清 intent（意图）与 settle（结算），不用横向滚动找。
+        qzoneAuditCell(row, qzoneAuditKindText(entry.kind));
+        qzoneAuditCell(row, entry.time ? new Date(entry.time).toLocaleString() : '');
+        qzoneAuditCell(row, isSettle ? entry.stage : entry.source);
+        qzoneAuditCell(row, entry.action);
+        qzoneAuditCell(row, isSettle ? entry.authorizationId : entry.target);
+        qzoneAuditCell(row, isSettle ? entry.outcome : entry.result);
+        qzoneAuditCell(row, isSettle ? null : entry.reason);
+        qzoneAuditCell(row, isSettle ? null : (entry.redacted ? '[已脱敏]' : entry.content));
+        table.appendChild(row);
+      }
+      box.appendChild(table);
+    }
+    qzoneMessage('qzoneAuditStatus', '已读取 ' + entries.length + ' 条服务端审计记录。');
+  } catch (error) {
+    const pluginText = qzoneShowPluginState(error);
+    qzoneMessage('qzoneAuditStatus', '审计接口未连接/读取失败：' + (pluginText === null ? error.message : pluginText), true);
+  }
+}
+qzoneBuildInputs();
+qzoneNode('qzoneSetupSubmit').addEventListener('click', () => qzoneAuthSubmit('setup', 'qzoneSetupPassword', 'qzoneSetupMessage'));
+qzoneNode('qzoneVerifySubmit').addEventListener('click', () => qzoneAuthSubmit('verify', 'qzoneVerifyPassword', 'qzoneVerifyMessage'));
+qzoneNode('qzoneForgotOpen').addEventListener('click', () => { qzoneNode('qzoneVerify').hidden = true; qzoneNode('qzoneForgot').hidden = false; });
+qzoneNode('qzoneForgotCancel').addEventListener('click', () => { qzoneNode('qzoneForgot').hidden = true; qzoneNode('qzoneVerify').hidden = false; });
+qzoneNode('qzoneForgotSubmit').addEventListener('click', () => qzoneAuthSubmit('forgot-reset', 'qzoneForgotPassword', 'qzoneForgotMessage'));
+qzoneNode('qzoneReload').addEventListener('click', async () => {
+  if (!qzoneVerified) return;
+  qzoneClearPluginState();
+  await qzoneLoadDispatchStatus();
+  if (qzoneVerified) await qzoneLoadSettings();
+});
+// 「重新读取」只在 plugin-busy（数据库被占用）时出现：那是临时状态，值得让人手动再点一次。
+// 另外两种 503（库不存在 / 字段不全）要先修环境，给按钮只会反复失败，所以不给。
+qzoneNode('qzoneRetryRead').addEventListener('click', async () => {
+  if (!qzoneVerified) return;
+  qzoneClearPluginState();
+  await qzoneLoadDispatchStatus();
+  if (qzoneVerified) await qzoneLoadSettings();
+  if (qzoneVerified) await qzoneRefreshAudit();
+});
+qzoneNode('qzoneLogout').addEventListener('click', async () => {
+  try {
+    await qzoneRequest('/auth/logout', 'POST', {});
+    qzoneVerified = false; qzoneRenderAuth();
+    qzoneMessage('qzoneAuthStatus', '已退出 QQ 空间专栏。');
+    await qzoneCheckAuth();
+  } catch (error) { qzoneMessage('qzoneSessionMessage', '退出失败：' + error.message, true); }
+});
+qzoneNode('qzoneSave').addEventListener('click', () => {
+  try { qzoneAction('/config', 'PATCH', qzoneReadSettings(), '配置保存', 'qzoneSaveMessage'); }
+  catch (error) { qzoneMessage('qzoneSaveMessage', error.message, true); }
+});
+qzoneNode('qzoneRecoverRead').addEventListener('click', () => qzoneAction('/pause/restore', 'POST', { layer: 'access' }, '读取恢复', 'qzoneRecoverMessage'));
+qzoneNode('qzoneRecoverWrite').addEventListener('click', () => qzoneAction('/pause/restore', 'POST', { layer: 'write' }, '写入恢复', 'qzoneRecoverMessage'));
+qzoneNode('qzoneRecoverAll').addEventListener('click', () => qzoneAction('/pause/restore', 'POST', { layer: 'both' }, '全部恢复', 'qzoneRecoverMessage'));
+qzoneNode('qzoneAuditRefresh').addEventListener('click', qzoneRefreshAudit);
+/* QZONE_CONSOLE_END */
+
 </script>
 </body>
 </html>

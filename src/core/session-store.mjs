@@ -16,6 +16,9 @@
  *  · `loaded.sessions` 是对象 → 整个 `loaded` 原样作 state（保留未知顶层字段）；
  *    否则 `{ sessions: {} }`；
  *  · `sessionPolicies` 不是普通对象（数组 / null / 字符串…）→ `{}`。
+ *  · task-58：`sessions` 的键名必须是白名单形状（`SESSION_KEY_PATTERN`：`group:`/`private:`/`patrol:background`），
+ *    非法键**逐个剔除 + 一条 warn + 计数**（`diagnostics` 可读），不整份丢弃——避免一个污染键连坐
+ *    全部合法会话、并让 hook 静默降级 legacy。剔除不属于读损坏，不改变 `writable`。
  * 写盘复用 `json-store` 的原子写（唯一临时名 + rename）；写失败原样抛出，且**不**把
  * `writable` 改成 false —— 与原来一样，由调用方决定怎么提示。
  */
@@ -28,12 +31,23 @@ function emptyState() {
 }
 
 /**
+ * task-58：`state/sessions.json` 的 sessions 键名白名单。
+ *
+ * 生产上只有三种键：群会话 `group:<QQ>`、私聊会话 `private:<QQ>`、后台巡逻固定键 `patrol:background`。
+ * 键名形状是 hook 身份模式判定（`isSessionMap`）的信任前提：一旦出现 legacy 形状的污染键
+ * （例如 `backgroundSessionKeys` 之类的属性名），hook 会静默降级为 legacy 并让 task-49 的
+ * 后台写门禁整体消失。因此 load 时逐键校验、剔除非法键并告警，绝不整份丢弃合法映射。
+ */
+export const SESSION_KEY_PATTERN = /^(?:group:[0-9]+|private:[0-9]+|patrol:background)$/u;
+
+/**
  * 创建一个绑定到指定映射文件的持久化实例。
  *
  * @param {object} options
  * @param {string} options.file 映射文件路径（必填；工厂不探测生产 `state/`）。
  * @param {(message: string) => void} [options.log] 窄日志接口，只接收一条字符串；默认静默。
- * @returns {{ load: () => object, save: (state: object) => void, readonly writable: boolean }}
+ * @returns {{ load: () => object, save: (state: object) => void, readonly writable: boolean,
+ *   readonly diagnostics: { removedSessionKeys: string[], removedCount: number } }}
  */
 export function createSessionStore({ file, log = () => {} } = {}) {
   if (typeof file !== 'string' || file === '') throw new TypeError('createSessionStore 需要 file');
@@ -43,6 +57,8 @@ export function createSessionStore({ file, log = () => {} } = {}) {
   const label = path.basename(target) || 'sessions.json';
   // 只降不升：与原来的 stateWritable 一样，读失败/损坏一次后必须重启进程才恢复写入。
   let writable = true;
+  // task-58：最近一次 load 剔除非法 sessions 键的诊断结果（供 bridge/测试观测，默认空）。
+  let lastLoadDiagnostics = { removedSessionKeys: [], removedCount: 0 };
 
   function degrade(message) {
     writable = false;
@@ -75,6 +91,19 @@ export function createSessionStore({ file, log = () => {} } = {}) {
     if (!state.sessionPolicies || typeof state.sessionPolicies !== 'object' || Array.isArray(state.sessionPolicies)) {
       state.sessionPolicies = {};
     }
+    // task-58：sessions 键名白名单校验。非法键逐个剔除（不整份丢弃，避免一个污染键连坐全部合法会话），
+    // 一次性 warn + 计数；剔除不等于读损坏，不改 writable。之所以必须校验：hook 的 isSessionMap()
+    // 靠「普通对象且不含 legacy 属性名」判定 mapper 模式，一旦键名被污染成 legacy 形状，
+    // hook 会静默降级、task-49 的后台写门禁整体消失（task-56 实测绕过）。
+    const removedSessionKeys = [];
+    for (const key of Object.keys(state.sessions)) {
+      if (!SESSION_KEY_PATTERN.test(key)) removedSessionKeys.push(key);
+    }
+    for (const key of removedSessionKeys) delete state.sessions[key];
+    lastLoadDiagnostics = { removedSessionKeys, removedCount: removedSessionKeys.length };
+    if (removedSessionKeys.length > 0) {
+      logger(`⚠️ ${label} 剔除 ${removedSessionKeys.length} 个非法会话键（已忽略：${removedSessionKeys.join(', ')}）；合法会话映射保留。`);
+    }
     return state;
   }
 
@@ -89,6 +118,12 @@ export function createSessionStore({ file, log = () => {} } = {}) {
     save,
     get writable() {
       return writable;
+    },
+    get diagnostics() {
+      return {
+        removedSessionKeys: [...lastLoadDiagnostics.removedSessionKeys],
+        removedCount: lastLoadDiagnostics.removedCount,
+      };
     },
   };
 }

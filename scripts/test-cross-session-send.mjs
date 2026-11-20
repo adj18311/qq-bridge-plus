@@ -36,6 +36,8 @@ import * as stateAcl from '../src/state-acl.mjs';
 import * as retryObserver from '../src/retry-observer.js';
 import * as retryDiagnostic from '../src/retry-diagnostic.js';
 import * as errorNotice from '../src/error-notice.js';
+import * as quotaNotice from '../src/quota-notice.js';
+import * as quotaRuntime from '../src/quota-notice-runtime.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -94,6 +96,7 @@ async function crossHarness({ config = {}, transformSource = null } = {}) {
     agentPresets: { list: async () => success({ presets: [{ id: 'standard', isDefault: true }, { id: 'qq-chat' }, { id: 'qq-chat-v2' }] }) },
   };
   class FakeBot {
+    on() {} off() {}
     async sendPrivateMessage(id, text) { calls.sent.push({ kind: 'private', id, text }); }
     async sendGroupMessage(id, text) { calls.sent.push({ kind: 'group', id, text }); }
     async request() { return { status: 'ok', retcode: 0, data: [] }; }
@@ -145,6 +148,7 @@ async function crossHarness({ config = {}, transformSource = null } = {}) {
     ...markdown, ...sensitive, ...wait, ...safeFetch, ...forward, ...slang, ...sticker,
     ...modelPrices, ...tokenLedger, ...voiceLib, ...stateAcl, ...coreBindings, ...retryObserver, ...retryDiagnostic, ...errorNotice,
     defaultErrorNoticeGate: errorNotice.createErrorNoticeGate(),
+    ...quotaNotice, ...quotaRuntime,
     hardenDir: () => ({ ok: true, detail: 'stub' }),
     processAudioVolume: async (file) => ({ path: String(file), converted: false, applied: false, mode: 'original', volume: 1, loudness: null }),
     cleanupTemp: () => {},
@@ -1097,6 +1101,7 @@ await test('跨会话-19（t82）：/api/send/private 与 /api/socialV2/send-bur
     console.log('   [证据] /api/send/private=200、send-burst=200(sent=2)、两个端点各 1 行 [cross-send→owner]；老端点打别人仍 403');
   });
 });
+
 
 if (failures) {
   console.error(`\n❌ 跨会话发送测试失败 ${failures} 项`);  process.exit(1);

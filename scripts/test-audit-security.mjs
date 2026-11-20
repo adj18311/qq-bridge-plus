@@ -22,6 +22,22 @@ try { fetchModule = await import('../src/safe-fetch.js'); }
 finally { dns.promises.lookup = originalLookup; }
 const { isPrivateIp, safeFetch, safeFetchBuffer, validateFetchUrl } = fetchModule;
 
+test('图片下载禁用跳转时拒绝首个重定向且不请求目标', async (t) => {
+  const { requests } = mockTransport(t, [{ status: 302, headers: { location: 'http://93.184.216.34/next.png' }, produce() {} }]);
+  await assert.rejects(safeFetchBuffer('http://93.184.216.34/image.png', 4096, { allowRedirect: false }), /重定向/);
+  assert.equal(requests.length, 1);
+});
+
+test('取消图片下载会销毁在途请求', async (t) => {
+  const { requests } = mockTransport(t, [{ produce() {} }]);
+  const controller = new AbortController();
+  const promise = safeFetchBuffer('http://93.184.216.34/image.png', 4096, { signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(promise, /取消|abort/i);
+  assert.equal(requests[0].req.destroyed, true);
+});
+
 function mockTransport(t, scripts) {
   const requests = [];
   const responses = [];
@@ -59,7 +75,7 @@ function mockTransport(t, scripts) {
 test('sensitive audit catches UNC paths and quoted JSON credentials', () => {
   for (const value of [
     String.raw`\\server\share\private.txt`,
-    String.raw`C:\Users\fixture-user\config.json`,
+    String.raw`C:\Users\someone\config.json`,
     '/root/.ssh/id_rsa',
     '{"token":"fixture-only-token"}',
     '{"accessToken": "fixture-only-token"}',

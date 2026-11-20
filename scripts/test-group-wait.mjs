@@ -2,9 +2,12 @@
 // 覆盖：3 秒静默、6 秒硬期限抗续延、显式 quietMs=60000 被钳、无消息观察窗口、minNew>1、
 // 边界新消息、私聊不变、权限变化、断连，以及未读/水位不被清空（不自动 mark_read）。
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { test } from 'node:test';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 import { groupWaitPolicy } from '../src/core/group-wait-policy.mjs';
+// 端口安全辅助（唯一来源）：fetch blocked 端口表 + listen(0) 重试取可 fetch 端口。
+import { closeServer, isFetchBlockedPort, MAX_PORT_ATTEMPTS } from './test-port-safe.mjs';
 
 // bridge 在 handler 里用 Date.now / sleep / setTimeout；这里用虚拟时钟把 3s/6s 压缩到
 // 毫秒级，并允许按虚拟时间表精确投放“新消息”，从而稳定复现续延/边界场景。
@@ -124,6 +127,35 @@ function createVirtualClock() {
 
 const realWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// ── 端口选择：避开 Node 内置 fetch(undici) 的 blocked-port 列表 ────────────────
+//
+// 背景（环境 flake，已复现证据）：harness 用 `consolePort: 0` 让 OS 分配临时端口，而本机
+// Windows 动态端口范围是 **1024–15000**（`netsh int ipv4 show dynamicportrange tcp`），它与
+// undici 的 blocked-port 列表重叠 13 个端口（3659/4045/5060/5061/6000/6566/6665-6669/6697/10080）。
+// 实测 8000 次 listen(0)：min=2831 max=11233，**12 次落到 blocked 端口**（≈0.15%/次）。
+// 一旦 fixture 拿到这些端口，`fetch()` 会抛 `TypeError: fetch failed`（cause: `bad port`）——
+// 这就是 quick 里偶发失败的根因。端口表与重试助手统一在 scripts/test-port-safe.mjs；
+// 这里保留 startConsoleServer 专用循环（命中 blocked 端口就关闭并重新 startConsoleServer，
+// 只换端口，不吞真实请求失败、不改被测生产代码）。
+async function startConsoleServerOnFetchablePort(h) {
+  for (let attempt = 1; attempt <= MAX_PORT_ATTEMPTS; attempt += 1) {
+    const server = h.startConsoleServer();
+    if (!server.listening) {
+      await new Promise((resolve) => { server.once('listening', resolve); });
+    }
+    const port = server.address().port;
+    if (!isFetchBlockedPort(port)) {
+      if (attempt > 1) {
+        console.log(`[test-group-wait] 丢弃 fetch blocked port，第 ${attempt} 次重试后使用 ${port}`);
+      }
+      return { server, port };
+    }
+    // 命中 blocked 端口：只换端口，绝不把后续真实失败当 flake —— 关闭后重取。
+    await closeServer(server);
+  }
+  throw new Error(`test-group-wait: 连续 ${MAX_PORT_ATTEMPTS} 次拿到 fetch blocked 端口，无法建立可 fetch 的本地服务`);
+}
+
 async function fixture(t, { key = 'group:456', config = {} } = {}) {
   const clock = createVirtualClock();
   const h = await bridgeHarness({
@@ -148,9 +180,8 @@ async function fixture(t, { key = 'group:456', config = {} } = {}) {
   });
   h.setMode('reserved2');
   const st = h.getSocialV2State(key);
-  const server = h.startConsoleServer();
-  if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
-  const port = server.address().port;
+  const { server, port } = await startConsoleServerOnFetchablePort(h);
+  assert.equal(isFetchBlockedPort(port), false, `fixture 端口 ${port} 不得在 Node fetch blocked-port 列表内`);
 
   const append = (text) => {
     h.appendSocialV2Message(key, 'fixture-person', text, text, false, false, `fixture-${(st.lastUnreadSeq || 0) + 1}`, [], '789', []);
@@ -161,21 +192,46 @@ async function fixture(t, { key = 'group:456', config = {} } = {}) {
   };
   const appendAt = (delayMs, text) => clock.schedule(delayMs, () => append(text));
 
+  // task-81：请求改用 node:http，不用全局 fetch(undici)。
+  // 根因（已复现）：undici 自带 blocked-port 列表（3659/4045/5060/5061/6000/6566/6665-6669/6697/10080），
+  // 与 Windows 动态端口范围（1024–15000）重叠；即使本文件已避开 blocked 端口拿 listen(0)，
+  // 全量负载下仍偶见 `TypeError: fetch failed`（bad port / 共享 dispatcher 调度）。
+  // http.request 没有该黑名单、也不共享全局 dispatcher，错误面只剩本地连接与超时。
+  // 断言与返回形状（{status, data}）保持不变，不改被测生产代码。
   const request = async (route, body, signal) => {
-    const response = await fetch(`http://127.0.0.1:${port}/api/socialV2/${route}`, {
-      method: 'POST',
-      headers: {
-        'x-console-token': 'fixture-console-token',
-        'x-agent-token': st.agentToken,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ key, ...body }),
-      signal: signal ?? AbortSignal.timeout(10000),
+    const payload = JSON.stringify({ key, ...body });
+    const { status, raw } = await new Promise((resolve, reject) => {
+      const req = http.request({
+        host: '127.0.0.1',
+        port,
+        path: `/api/socialV2/${route}`,
+        method: 'POST',
+        // 每个请求新建连接：不与测试内其他请求复用 socket（旧 fetch 走连接池，server 关闭时
+        // 仍可能复用半关闭连接导致 ECONNRESET；这些测试的请求量很小，开销可忽略）。
+        agent: false,
+        headers: {
+          'x-console-token': 'fixture-console-token',
+          'x-agent-token': st.agentToken,
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+        },
+      }, (response) => {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => resolve({ status: response.statusCode, raw: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.setTimeout(10000, () => req.destroy(new Error('fixture request timeout (10000ms)')));
+      signal?.addEventListener?.('abort', () => {
+        const aborted = new Error('fixture request aborted');
+        aborted.name = 'AbortError';
+        req.destroy(aborted);
+      }, { once: true });
+      req.on('error', reject);
+      req.end(payload);
     });
-    const raw = await response.text();
     let data = null;
     try { data = JSON.parse(raw); } catch { /* 非 JSON 错误页交给调用方按 status 断言 */ }
-    return { status: response.status, data };
+    return { status, data };
   };
 
   t.after(async () => {
@@ -341,6 +397,92 @@ test('私聊 messages 等待保持原有行为：显式 60000 静默不被群策
   assert.ok(result.data.waitedMs >= 60000 && result.data.waitedMs <= 62000, `waitedMs=${result.data.waitedMs}`);
 });
 
+test('私聊 reply 等待：快照已读后只补等 lastIncomingAt 剩余约 2 秒', async (t) => {
+  const f = await fixture(t, { key: 'private:123' });
+  const seq = f.append('already handled');
+  assert.ok(seq >= 1, `append 未产生消息：${seq}`);
+  await f.h.sendWakePromptV2(f.key, 'question');
+  // 不手工清未读/水位：走真实快照投递，让 readThroughSeq 覆盖这条已有消息。
+  f.st.lastIncomingAt = f.clock.now() - 1000;
+  f.clock.begin();
+  const result = await f.request('wait', { purpose: 'reply', timeoutMs: 8000 });
+  f.clock.end();
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.purpose, 'reply');
+  assert.equal(result.data.quietMs, 3000);
+  assert.equal(result.data.quiet, true);
+  assert.equal(result.data.timeout, false);
+  assert.equal(result.data.arrived, false);
+  assert.deepEqual(result.data.newMessages.map((message) => message.seq), []);
+  assert.equal(result.data.waitLimitReached, false);
+  assert.ok(result.data.waitedMs >= 1900 && result.data.waitedMs <= 2100, `waitedMs=${result.data.waitedMs}`);
+});
+
+test('私聊 reply 等待：lastIncomingAt 已安静 10 秒时立即返回 waitedMs=0，不伪造观察', async (t) => {
+  const f = await fixture(t, { key: 'private:123' });
+  f.append('already quiet');
+  await f.h.sendWakePromptV2(f.key, 'question');
+  f.st.lastIncomingAt = f.clock.now() - 10000;
+  f.clock.begin();
+  const result = await f.request('wait', { purpose: 'reply', timeoutMs: 8000 });
+  f.clock.end();
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.purpose, 'reply');
+  assert.equal(result.data.quietMs, 3000);
+  assert.equal(result.data.waitedMs, 0);
+  assert.equal(result.data.quiet, true);
+  assert.equal(result.data.timeout, false);
+  assert.equal(result.data.arrived, false);
+  assert.deepEqual(result.data.newMessages.map((message) => message.seq), []);
+  assert.equal(result.data.waitLimitReached, false);
+  assert.equal(result.data.preSleepWaitObserved, false);
+  assert.equal(result.data.preSleepWaitSatisfied, false);
+  assert.equal(f.st.preSleepWaitObservedAt, 0);
+  assert.equal(f.st.preSleepWaitSatisfiedAt, 0);
+});
+
+test('私聊 reply 等待：未读与新到消息按固定 3 秒返回，不清未读也不记录观察', async (t) => {
+  const f = await fixture(t, { key: 'private:123' });
+  f.append('unread before wait');
+  f.st.lastIncomingAt = f.clock.now();
+  f.appendAt(200, 'arrived while waiting');
+  f.clock.begin();
+  const result = await f.request('wait', { purpose: 'reply', timeoutMs: 8000 });
+  f.clock.end();
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.purpose, 'reply');
+  assert.equal(result.data.quietMs, 3000);
+  assert.equal(result.data.suggestedQuietMs, 3000);
+  assert.equal(result.data.arrived, true);
+  assert.equal(result.data.quiet, true);
+  assert.equal(result.data.timeout, false);
+  assert.deepEqual(result.data.newMessages.map((message) => message.seq), [1, 2]);
+  assert.equal(result.data.readThroughSeq, 2);
+  assert.equal(f.st.unread.length, 2, 'reply 等待不得自动 mark_read / 清空未读');
+  assert.equal(result.data.preSleepWaitObserved, false);
+  assert.equal(result.data.preSleepWaitSatisfied, false);
+  assert.ok(result.data.waitedMs >= 2900 && result.data.waitedMs <= 3500, `waitedMs=${result.data.waitedMs}`);
+});
+
+test('私聊 reply 等待：显式 quietMs=60000 与后台 minQuietAfterNewMs=10000 都固定按 3000', async (t) => {
+  const f = await fixture(t, {
+    key: 'private:123',
+    config: { wait: { minMs: 100, maxMs: 600000, minQuietAfterNewMs: 10000 } },
+  });
+  f.st.lastIncomingAt = f.clock.now();
+  f.appendAt(200, 'hello');
+  f.clock.begin();
+  const result = await f.request('wait', { purpose: 'reply', timeoutMs: 300000, quietMs: 60000 });
+  f.clock.end();
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.purpose, 'reply');
+  assert.equal(result.data.quietMs, 3000);
+  assert.equal(result.data.arrived, true);
+  assert.equal(result.data.quiet, true);
+  assert.equal(result.data.timeout, false);
+  assert.ok(result.data.waitedMs >= 2900 && result.data.waitedMs <= 3500, `waitedMs=${result.data.waitedMs}`);
+});
+
 test('群聊等待期间权限变化：等完后 403，且不记录任何观察', async (t) => {
   const f = await fixture(t);
   f.clock.schedule(500, () => f.h.setMode('chat'));
@@ -374,9 +516,9 @@ test('群聊等待期间断连：请求中止、租约释放、不记录观察',
   assert.equal(f.st.modelSeenSeqs.size, 0);
 });
 
-test('replyTimingV2：群聊固定 3 秒且按真实 lastIncomingAt 算剩余，私聊保留原行为', async (t) => {
+test('replyTimingV2：群聊与私聊 reply 都固定 3 秒且按真实 lastIncomingAt 算剩余', async (t) => {
   const f = await fixture(t, {
-    // 后台 quiet 配置 < 3000ms：群聊仍必须是 3 秒，私聊继续按冻结实现/原配置计算。
+    // 后台 quiet 配置 < 3000ms：群聊和私聊 reply 仍必须是 3 秒；私聊 messages 不变。
     config: { wait: { minMs: 100, maxMs: 600000, minQuietAfterNewMs: 1500, replyQuietMs: 1500, quietMs: 1500 } },
   });
   const timingFn = f.h.replyTimingV2;
@@ -385,11 +527,12 @@ test('replyTimingV2：群聊固定 3 秒且按真实 lastIncomingAt 算剩余，
   const groupTiming = timingFn(f.st, 'group:456');
   assert.equal(groupTiming.quietMs, 3000, '群聊窗口固定 3 秒，不受后台更小配置影响');
   assert.equal(groupTiming.remainingQuietMs, 0, '真实安静 4 秒后不应再提示剩余等待');
-  // 私聊没有 groupPolicy：返回冻结实现的旧窗口，不能被群聊固定 3 秒覆盖。
+  // 私聊 reply 同样固定 3 秒：不再沿用冻结实现的旧 8 秒窗口。
   const privateSt = f.h.getSocialV2State('private:123');
   privateSt.lastIncomingAt = f.clock.now() - 4000;
   const privateTiming = timingFn(privateSt, 'private:123');
-  assert.equal(privateTiming.quietMs, 8000);
+  assert.equal(privateTiming.quietMs, 3000);
+  assert.equal(privateTiming.remainingQuietMs, 0);
 });
 
 test('群聊等待默认建议静默取群策略：minQuietAfterNewMs=10000 时不被抬高', async (t) => {
@@ -482,6 +625,62 @@ test('群聊 reply 等待：lastIncomingAt 已安静 10 秒时立即返回 waite
   assert.equal(result.data.arrived, false);
   assert.deepEqual(result.data.newMessages.map((message) => message.seq), []);
   assert.equal(result.data.waitLimitReached, false);
+  assert.equal(result.data.preSleepWaitObserved, false);
+  assert.equal(result.data.preSleepWaitSatisfied, false);
+});
+
+test('私聊 messages 省略 quietMs：按后台默认 10000ms，短等待不授予睡前观察', async (t) => {
+  const f = await fixture(t, {
+    key: 'private:123',
+    config: { wait: { minMs: 100, maxMs: 600000, minQuietAfterNewMs: 10000 } },
+  });
+  f.clock.begin();
+  const result = await f.request('wait', { purpose: 'messages', timeoutMs: 500 });
+  f.clock.end();
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.purpose, 'messages');
+  // 私聊 messages 省略 quietMs：不套用 replyTiming=3000，使用后台原默认值。
+  assert.equal(result.data.quietMs, 10000);
+  assert.equal(result.data.suggestedQuietMs, 10000);
+  assert.equal(result.data.arrived, false);
+  assert.equal(result.data.quiet, false);
+  assert.equal(result.data.timeout, true);
+  assert.equal(result.data.waitLimitReached, false);
+  assert.deepEqual(result.data.newMessages.map((message) => message.seq), []);
+  // 只等了 500ms，离 5 分钟观察窗口还很远，不能误报睡前观察成立。
+  assert.equal(result.data.preSleepWaitSatisfied, false);
+  assert.equal(result.data.preSleepWaitObserved, false);
+});
+
+test('私聊 reply 等待：每秒补话并显式对齐 lastIncomingAt，末条 8s 后 3s 返回 1..8', async (t) => {
+  const f = await fixture(t, {
+    key: 'private:123',
+    config: { wait: { minMs: 100, maxMs: 600000, minQuietAfterNewMs: 10000 } },
+  });
+  f.st.lastIncomingAt = f.clock.now();
+  for (let second = 1; second <= 8; second += 1) {
+    f.clock.schedule(second * 1000, () => {
+      f.append(`supplement ${second}`);
+      // 补话到达后显式把最后来信时间对齐虚拟时钟：reply 静默从这一刻重新计 3 秒。
+      f.st.lastIncomingAt = f.clock.now();
+    });
+  }
+  f.clock.begin();
+  const result = await f.request('wait', { purpose: 'reply', timeoutMs: 20000 });
+  f.clock.end();
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.purpose, 'reply');
+  assert.equal(result.data.quietMs, 3000);
+  assert.equal(result.data.quiet, true);
+  assert.equal(result.data.arrived, true);
+  assert.equal(result.data.timeout, false);
+  // 私聊 reply 没有群聊的 6 秒硬上限：补话持续 8 秒也不触发 waitLimitReached。
+  assert.equal(result.data.waitLimitReached, false);
+  assert.deepEqual(result.data.newMessages.map((message) => message.seq), [1, 2, 3, 4, 5, 6, 7, 8]);
+  // 最后一条 8 秒到达，再等 3 秒静默，约 11 秒才返回。
+  assert.ok(result.data.waitedMs >= 10900 && result.data.waitedMs <= 11300, `waitedMs=${result.data.waitedMs}`);
+  // reply 等待不清未读、也不得误授予睡前观察资格。
+  assert.equal(f.st.lastUnreadSeq, 8);
   assert.equal(result.data.preSleepWaitObserved, false);
   assert.equal(result.data.preSleepWaitSatisfied, false);
 });

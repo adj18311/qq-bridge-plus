@@ -3,20 +3,51 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-export function discoverDshAsar() {
-  if (process.env.DSH_INSTALL_ASAR) return process.env.DSH_INSTALL_ASAR;
-  if (process.platform !== 'win32') return null;
-  try {
-    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      "@(Get-CimInstance Win32_Process -Filter \"Name='DeepSeek Harness.exe'\" | Select-Object -ExpandProperty ExecutablePath -Unique) | ConvertTo-Json -Compress"
-    ], { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    const value = JSON.parse(output);
+/** 默认的命令执行器：跑 PowerShell 并拿 stdout（可注入以便离线测试）。 */
+function runPowerShell(query) {
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', query],
+    { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+// 两段式：CIM 可能被禁用 / 不可用 / 超时（实测偶发返回空），故再退一步用 Get-Process。
+// 任一段成功即可定位安装目录；都失败才返回 null（调用方据此跳过或报错）。
+// 注意：两段各有独立的失败形态（返回空、抛错、超时、JSON 非法、路径不带 resources/app.asar），
+// 不能只用一个成功用例就宣称覆盖。
+export const DSH_PROCESS_QUERIES = Object.freeze({
+  cim: "@(Get-CimInstance Win32_Process -Filter \"Name='DeepSeek Harness.exe'\" | Select-Object -ExpandProperty ExecutablePath -Unique) | ConvertTo-Json -Compress",
+  getProcess: "@(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -Unique) | ConvertTo-Json -Compress",
+});
+
+/**
+ * @param {object} [options]
+ * @param {string} [options.platform] 覆盖 process.platform（测试非 Windows 分支）
+ * @param {NodeJS.ProcessEnv} [options.env]
+ * @param {(query:string)=>string} [options.runCommand] 执行一次查询并返回 stdout
+ * @param {(p:string)=>boolean} [options.exists] 判断候选 app.asar 是否存在
+ */
+export function discoverDshAsar(options = {}) {
+  const {
+    platform = process.platform,
+    env = process.env,
+    runCommand = runPowerShell,
+    exists = fs.existsSync,
+  } = options;
+  if (env.DSH_INSTALL_ASAR) return env.DSH_INSTALL_ASAR;
+  if (platform !== 'win32') return null;
+  for (const query of [DSH_PROCESS_QUERIES.cim, DSH_PROCESS_QUERIES.getProcess]) {
+    let output;
+    try {
+      output = runCommand(query);
+    } catch { continue; /* 这一段不可用（抛错 / 超时 / 退出码非 0），继续试下一段。 */ }
+    if (typeof output !== 'string' || output.trim() === '') continue;
+    let value;
+    try { value = JSON.parse(output); } catch { continue; /* 输出不是合法 JSON，继续试下一段。 */ }
     for (const executable of Array.isArray(value) ? value : [value]) {
-      if (typeof executable !== 'string') continue;
+      if (typeof executable !== 'string' || executable === '') continue;
       const candidate = path.join(path.dirname(executable), 'resources', 'app.asar');
-      if (fs.existsSync(candidate)) return candidate;
+      if (exists(candidate)) return candidate;
     }
-  } catch { /* DSH may not be running; unpacked installs remain supported. */ }
+  }
   return null;
 }
 

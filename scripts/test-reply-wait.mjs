@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+// 端口安全：fixture 用 OS 临时端口，请求由测试自己发出 ⇒ 用原生 http（支持 signal 中止），
+// 避免命中 undici fetch 的 blocked-port 列表（listen(0) ≈0.15%/次 假红）。
+import { httpRequest } from './test-port-safe.mjs';
 
 async function fixture(run, cfg = {}) {
   const h = await bridgeHarness({ config: { socialV2: {
@@ -54,7 +57,7 @@ async function fixture(run, cfg = {}) {
 
 test('disconnected long wait releases its lease and cannot grant sleep observation', () => fixture(async ({ st, key, request, server }) => {
   const controller = new AbortController();
-  const pending = fetch(`http://127.0.0.1:${server.address().port}/api/socialV2/wait`, {
+  const pending = httpRequest(`http://127.0.0.1:${server.address().port}/api/socialV2/wait`, {
     method: 'POST', headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': st.agentToken, 'content-type': 'application/json' },
     body: JSON.stringify({ key, timeoutMs: 1800 }), signal: controller.signal,
   }).catch(() => null);
@@ -71,7 +74,7 @@ test('disconnected long wait releases its lease and cannot grant sleep observati
 
 test('disconnect during the quiet window does not expose a message or record an observation', () => fixture(async ({ st, key, request, server, append }) => {
   const controller = new AbortController();
-  const pending = fetch(`http://127.0.0.1:${server.address().port}/api/socialV2/wait`, {
+  const pending = httpRequest(`http://127.0.0.1:${server.address().port}/api/socialV2/wait`, {
     method: 'POST', headers: { 'x-console-token': 'fixture-console-token', 'x-agent-token': st.agentToken, 'content-type': 'application/json' },
     body: JSON.stringify({ key, timeoutMs: 1800, quietMs: 800 }), signal: controller.signal,
   }).catch(() => null);
@@ -108,20 +111,26 @@ test('first reply does not wait out timeout when the snapshot message is already
 test('reply waits only for the remaining quiet time after model reading', () => fixture(async ({ h, key, st, request, append }) => {
   append('complete message');
   await h.sendWakePromptV2(key, 'question');
-  st.lastIncomingAt = Date.now() - 600;
+  // 私聊首答静默固定 3 秒：只留约 100ms 剩余，让这条回归仍在秒级内跑完。
+  st.lastIncomingAt = Date.now() - 2900;
   const result = await request('wait', { purpose: 'reply', timeoutMs: 1500, quietMs: 800 });
+  assert.equal(result.data.quietMs, 3000);
   assert.equal(result.data.quiet, true);
-  assert.ok(result.data.waitedMs >= 100 && result.data.waitedMs < 600, `remaining wait was ${result.data.waitedMs}ms`);
+  assert.equal(result.data.timeout, false);
+  assert.ok(result.data.waitedMs >= 20 && result.data.waitedMs < 600, `remaining wait was ${result.data.waitedMs}ms`);
 }));
 
 test('a message between snapshot and wait is returned without duplicate snapshot content', () => fixture(async ({ h, key, st, request, append }) => {
   append('in snapshot');
   await h.sendWakePromptV2(key, 'question');
   append('arrived while model was thinking');
-  st.lastIncomingAt = Date.now() - 1000;
-  const result = await request('wait', { purpose: 'reply', timeoutMs: 1200, quietMs: 100, minNewMessages: 20 });
+  // 固定 3 秒窗口：超时预算给足，lastIncomingAt 用真实已安静时间，保证只等剩余部分。
+  st.lastIncomingAt = Date.now() - 2900;
+  const result = await request('wait', { purpose: 'reply', timeoutMs: 5000, quietMs: 100, minNewMessages: 20 });
+  assert.equal(result.data.quietMs, 3000);
   assert.equal(result.data.arrived, true);
   assert.equal(result.data.quiet, true);
+  assert.equal(result.data.timeout, false);
   assert.deepEqual(result.data.newMessages.map(m => m.seq), [2]);
   assert.equal(result.data.readThroughSeq, 2);
   assert.equal(st.unread.length, 2, 'visibility never acknowledges messages');
@@ -131,11 +140,18 @@ test('each supplement restarts quiet from its actual arrival, and appears exactl
   append('first');
   await request('unread');
   st.lastIncomingAt = Date.now();
-  const timers = [setTimeout(() => append('second'), 120), setTimeout(() => append('third'), 240)];
+  const timers = [
+    setTimeout(() => { append('second'); st.lastIncomingAt = Date.now(); }, 120),
+    setTimeout(() => { append('third'); st.lastIncomingAt = Date.now(); }, 240),
+  ];
   try {
-    const result = await request('wait', { purpose: 'reply', timeoutMs: 1500, quietMs: 300 });
+    // 私聊 reply 固定 3 秒：补话按各自到达时刻重新计时（回调里显式对齐 lastIncomingAt），
+    // 末条 240ms 到达后再等 3 秒，waitedMs 下界按 3150ms（240+3000≈3240ms）断言。
+    const result = await request('wait', { purpose: 'reply', timeoutMs: 5000, quietMs: 300 });
+    assert.equal(result.data.quietMs, 3000);
     assert.equal(result.data.quiet, true);
-    assert.ok(result.data.waitedMs >= 500 && result.data.waitedMs < 1200);
+    assert.equal(result.data.timeout, false);
+    assert.ok(result.data.waitedMs >= 3150 && result.data.waitedMs < 4500, `waitedMs=${result.data.waitedMs}`);
     assert.deepEqual(result.data.newMessages.map(m => m.seq), [2, 3]);
     assert.equal(result.data.readThroughSeq, 3);
   } finally { timers.forEach(clearTimeout); }

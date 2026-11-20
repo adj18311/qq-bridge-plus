@@ -3,7 +3,8 @@
  * scripts/model-tui.mjs — 交互式「模型管理器」（纯 node 内置 + ANSI，无第三方依赖）
  * ---------------------------------------------------------------------------
  * 干什么：
- *   ① 顶部状态行：本版本不查询任何供应商额度/余额（不读取供应商凭据，不请求供应商额度接口；本地模型目录/热更新保留），只固定说明额度显示已停用；
+ *   ① 顶部常驻额度行：按**当前会话实际使用的 provider** 给额度状态（无查询能力 / 凭证不可用 /
+ *      查询失败 / 真实数值分开说，见 A④），按 r 重新拉取；
  *   ② 第二行常驻目录行：本次模型菜单来自 `GET /api/dsh/models`（A① 只读接口）的 DSH 目录；
  *      目录读不到时明确显示「已降级 + 原因」，菜单退回**只含 DeepSeek 家族**的兜底（A⑤）；
  *   ③ 列出 config.json 里 allow.private / allow.groups 的**全部**会话（私人/群），
@@ -35,11 +36,12 @@
  *   --script <文件>  从文件读按键序列（支持 \e \r \n \t \\ \xNN 转义），不改变交互与写盘语义；
  *   --dry-run        exit 时只打印将要写入的变更，不写盘；
  *   --config <文件>  **测试用**：换一个配置文件路径（默认仓库根的 config.json）；
- *   --no-quota       兼容参数：接受但不生效（不读取供应商凭据，不请求供应商额度接口；本地模型目录/热更新保留）。
+ *   --no-quota       不联网查额度（离线/自动化用），额度行显示「已跳过」。
  *
- * 用法 / 退出码 / 详细说明见 --help。
+ * 用法 / 退出码 / 详细说明见 --help 与 scripts/README-model-tui.md。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +51,9 @@ const CONFIG_FILE = path.join(ROOT, 'config.json');
 const STATE_DIR = path.join(ROOT, 'state');
 const LEDGER_FILE = path.join(STATE_DIR, 'token-usage.jsonl');
 
+const MINIMAX_REMAINS_URL = 'https://api.minimaxi.com/v1/token_plan/remains';
+const DEEPSEEK_BALANCE_URL = 'https://api.deepseek.com/user/balance';
+const HTTP_TIMEOUT_MS = 8000;
 const RULE_WIDTH = 74;
 
 /**
@@ -168,10 +173,143 @@ function stampLocal(d = new Date()) {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+function fmtDuration(ms) {
+  if (!Number.isFinite(Number(ms))) return '';
+  const s = Math.max(0, Math.round(Number(ms) / 1000));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d${h}h`;
+  if (h > 0) return `${h}h${m}m`;
+  return `${m}m`;
+}
+
+function fmtMoney(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return n >= 100 ? String(Math.round(n)) : String(Math.round(n * 100) / 100);
+}
+
 /** 变更摘要里的一格：对象/undefined 都要可读。 */
 function jsonShort(value) {
   if (value === undefined) return '(无)';
   return JSON.stringify(value);
+}
+
+// ── 凭据（不引第三方 YAML：只解析 .credentials.yaml 的 refs 段）──────────────
+/**
+ * 读一个凭据：先看同名环境变量，再看 ~/.dsh/.credentials.yaml 的 refs.<name>。
+ * 这里刻意不 import js-yaml（验收要求只用 node 内置），所以只认 refs 段的
+ * 「两空格缩进的 NAME: value」这种最简形态，够用且不会误读别的段。
+ */
+function loadCredential(name) {
+  const fromEnv = process.env[name];
+  if (fromEnv && String(fromEnv).trim()) return { value: String(fromEnv).trim(), source: 'env' };
+  const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+  const file = path.join(dshHome, '.credentials.yaml');
+  let text = null;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    const e = new Error(`读不到凭据 ${name}：既没有环境变量，也读不到 ${file}（${error?.code ?? error?.message}）`);
+    e.kind = 'credential'; // A④：「有查询能力但凭证不可用」要能和其它失败区分开
+    throw e;
+  }
+  const value = readYamlRef(text, name);
+  if (!value) {
+    const e = new Error(`读不到凭据 ${name}：${file} 的 refs 段里没有它（也没有同名环境变量）`);
+    e.kind = 'credential';
+    throw e;
+  }
+  return { value, source: 'file' };
+}
+
+function readYamlRef(text, name) {
+  const key = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^[ \\t]+${key}\\s*:\\s*(.*)$`);
+  let inRefs = false;
+  for (const line of String(text).split(/\r?\n/)) {
+    if (/^refs:\s*(#.*)?$/.test(line)) { inRefs = true; continue; }
+    if (!inRefs) continue;
+    if (/^\S/.test(line)) break; // 缩进回退到顶格：refs 段结束
+    const m = re.exec(line);
+    if (!m) continue;
+    let v = m[1].trim().replace(/\s+#.*$/, '');
+    if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) {
+      v = v.slice(1, -1);
+    }
+    return v || null;
+  }
+  return null;
+}
+
+// ── 额度 ─────────────────────────────────────────────────────────────────────
+async function fetchJson(url, headers, timeoutMs = HTTP_TIMEOUT_MS) {
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {}
+  return { status: res.status, text, json };
+}
+
+/** MiniMax：current_interval_remaining_percent（5h 窗口）/ current_weekly_remaining_percent（周窗口）。 */
+async function minimaxQuota() {
+  try {
+    const { value: key } = loadCredential('MINIMAX_CN_API_KEY');
+    const r = await fetchJson(MINIMAX_REMAINS_URL, { authorization: `Bearer ${key}` });
+    const row = r.json?.model_remains?.[0];
+    if (r.status !== 200 || !row) {
+      // MiniMax 的鉴权失败不走 401：HTTP 200 + base_resp.status_code=1004 / "login fail"。
+      // A④ 要区分「凭证不可用」与其它查询失败，所以这里认这两类信号。
+      const msg = String(r.json?.base_resp?.status_msg ?? r.text ?? '');
+      const code = Number(r.json?.base_resp?.status_code ?? NaN);
+      const credential = r.status === 401 || r.status === 403
+        || code === 1004
+        || /login fail|api secret key|authentication|unauthor|invalid\s*(api\s*)?key/i.test(msg);
+      return {
+        ok: false,
+        kind: credential ? 'credential' : 'http',
+        error: `HTTP ${r.status} ${String(r.text).slice(0, 120)}`,
+      };
+    }
+    return {
+      ok: true,
+      model: row.model_name ?? null,
+      intervalPercent: row.current_interval_remaining_percent ?? null,
+      intervalRemains: fmtDuration(row.remains_time),
+      weeklyPercent: row.current_weekly_remaining_percent ?? null,
+      weeklyRemains: fmtDuration(row.weekly_remains_time),
+    };
+  } catch (error) {
+    return { ok: false, kind: error?.kind === 'credential' ? 'credential' : 'network', error: error?.message ?? String(error) };
+  }
+}
+
+/** DeepSeek：user/balance 的 total_balance（元）。 */
+async function deepseekQuota() {
+  try {
+    const { value: key } = loadCredential('DEEPSEEK_API_KEY');
+    const r = await fetchJson(DEEPSEEK_BALANCE_URL, { authorization: `Bearer ${key}` });
+    if (r.status !== 200 || !r.json) {
+      return {
+        ok: false,
+        kind: (r.status === 401 || r.status === 403) ? 'credential' : 'http',
+        error: `HTTP ${r.status} ${String(r.text).slice(0, 120)}`,
+      };
+    }
+    const info = Array.isArray(r.json.balance_infos) ? r.json.balance_infos[0] : null;
+    const total = Number(info?.total_balance ?? r.json.total_balance);
+    return {
+      ok: true,
+      balance: Number.isFinite(total) ? total : null,
+      currency: info?.currency ?? 'CNY',
+      available: r.json.is_available === true,
+    };
+  } catch (error) {
+    return { ok: false, kind: error?.kind === 'credential' ? 'credential' : 'network', error: error?.message ?? String(error) };
+  }
 }
 
 // ── state/token-usage.jsonl（只读！）────────────────────────────────────────
@@ -531,6 +669,19 @@ function providerFamily(id) {
   return 'none';
 }
 
+function providerDisplayName(id) {
+  for (const p of catalogProvidersForMenu().providers) {
+    if (p.id === id) return p.name || id;
+  }
+  return KNOWN_PROVIDER_NAMES[id] ?? String(id ?? '');
+}
+
+/** 目录里第一个 DeepSeek provider（没有就按桥接默认 id 报），用于「其它额度源」那一格。 */
+function deepseekDisplayProvider() {
+  const hit = catalogModelList().map((m) => m.provider).find((id) => providerFamily(id) === 'deepseek');
+  return hit ?? 'deepseek-account';
+}
+
 /** 一句话概括一个模型的档位能力（只按目录声明说，不猜）。 */
 function effortSummary(model) {
   if (!model) return '思考强度未知（不在目录里）';
@@ -656,7 +807,7 @@ function parseArgs(argv) {
     input: 'arrows',
     script: null,
     config: CONFIG_FILE,
-    noQuota: false, // 兼容参数：接受 --no-quota 但不生效（本版本不查询额度）
+    noQuota: false,
     consolePort: null,
     noHotApply: false,
     drainMs: 80,
@@ -715,8 +866,8 @@ const HELP = `交互式模型管理器（会话模型 / 全局档位，只在 ex
   --config <文件>           测试用：操作指定的配置文件（默认仓库根的 config.json）
   --console-port <端口>     桥接控制台端口（默认取 config.json 的 consolePort，缺省 3100），热生效用
   --no-hot-apply            写盘后不调 POST /api/dsh/model（只写盘，自己决定什么时候重启）
-  --no-quota                兼容参数：接受但不生效（本版本不读取供应商凭据，不请求供应商额度接口；本地模型目录/热更新保留；热生效仍访问本机 127.0.0.1）
-  --drain-ms <毫秒>         退出前清残留输入的静默窗口（默认 80，0=关掉）
+  --no-quota                不联网查额度，额度行显示「已跳过」
+  --drain-ms <毫秒>         退出前清残留输入的静默窗口（默认 80，0=关掉；见 README §9「残留输入」）
   -h, --help                本帮助
 
 环境变量：
@@ -724,16 +875,17 @@ const HELP = `交互式模型管理器（会话模型 / 全局档位，只在 ex
                             再取 state/console-token；401/403 时摘要会告诉你用的是哪一个）
 
 界面：
-  顶部是固定说明行：本版本不查询供应商额度/余额（不读取供应商凭据，不请求供应商额度接口；本地模型目录/热更新保留；热生效仍访问本机 127.0.0.1）；--no-quota 只是兼容参数。
+  顶部是常驻额度行：按**当前光标所在会话实际使用的 provider** 报告额度（无查询能力 / API Key 不可用 /
+  查询失败 / 真实数值分开说），其它有查询能力的源（MiniMax、DeepSeek）跟在后面；按 r 重新拉取。
   第二行是目录行：菜单内容来自运行中桥接的 GET /api/dsh/models（DSH 模型目录）；目录读不到时明确显示
   「已降级 + 原因」，菜单只保留 DeepSeek 家族兜底（兼容 deepseek-account / deepseek-official，标「兜底·未验证」）。
   中间是列表：全部单会话条目（私人在前、群在后，各自号码升序）→ 全局档位 → exit；
-  每行形如「2. 私人会话 private:10001   deepseek-flash · 强度 high (实际: 无记录) ［跟随全局］」。
+  每行形如「2. 私人会话 private:1420193228   deepseek-flash · 强度 high (实际: 无记录) ［跟随全局］」。
   Enter 打开模型列表（=目录内容；单会话条目多一项「跟随全局」；光标默认停在**当前生效模型**上），
   选中模型后进入思考强度子菜单：只列该模型 reasoning.efforts 声明的档位（带 name/description），
   无档位就显示「该模型不支持思考强度」并可直接 Enter 确认；切换模型会把 reasoningEffort 重置为
   该模型 defaultEffort（无 default 则留空/跟随）并提示。列表里按 e 也可以直接改当前条目的强度。
-  Esc（或 b）返回；r 刷新目录/实际模型。
+  Esc（或 b）返回；r 刷新额度/目录/实际模型。
 
 安全约束：
   - 选中 exit 按 Enter 之前，磁盘上的 config.json 一个字节都不会变；
@@ -755,7 +907,7 @@ const HELP = `交互式模型管理器（会话模型 / 全局档位，只在 ex
   才打印「已热生效」。
   - 端点不可达 / 报错 / 回读不一致：摘要明确打印「未能热生效」+ 原因，按里面给的命令重启桥接即可；
   - 控制台端口取自 config.json 的 consolePort，可用 --console-port 覆盖；--no-hot-apply 可跳过调用。
-
+  详见 scripts/README-model-tui.md §6 与 §11。
 
 退出码：0 正常（含无改动退出）/ 1 运行失败或检测到并发修改 / 2 用法错误 / 130 用户 Ctrl+C 取消。
 
@@ -763,7 +915,7 @@ const HELP = `交互式模型管理器（会话模型 / 全局档位，只在 ex
   node scripts/model-tui.mjs
   node scripts/model-tui.mjs --input number
   node scripts/model-tui.mjs --dry-run --input number --script keys.txt
-（keys.txt 的写法见上面 --script 一行的转义说明。）
+（keys.txt 的写法见 scripts/README-model-tui.md「自动化：--script 按键文件」。）
 `;
 
 // ── 按键 ─────────────────────────────────────────────────────────────────────
@@ -838,6 +990,7 @@ const state = {
   cursor: 0,
   numberBuffer: '', // 编号输入模式：多位数字连打（例如 1 再 2 = 第 12 项）
   submenu: null, // { title, key, items:[{sel,label,detail}], cursor }
+  quota: { loading: false, skipped: false, loadedAt: null, minimax: null, deepseek: null },
   message: '',
   frame: 0,
   done: false,
@@ -885,12 +1038,82 @@ function timeOf(ms) {
 }
 
 /**
- * 发布版（纯净代码包）不查询任何供应商额度：不读取供应商凭据，不请求供应商额度接口，不探测任何额度窗口。
- * 本地模型目录与热生效保留（热生效仍访问本机 127.0.0.1），因此不宣称完全不联网。
- * 保留固定一行说明，避免使用者以为额度显示坏了；--no-quota 只是兼容参数，传不传都不请求额度接口。
+ * A④：额度行要看**当前这一行（光标所在会话）实际使用的 provider**，不是菜单里有哪些候选。
+ * 单会话 → state/token-usage.jsonl 里该 key 最后一条记录（真实使用）；没有记录才退回「将要生效」的档位，
+ * 并在行尾标「计划」（免得把计划当实际）。全局/exit → 全局档位。
  */
+function focusedProvider() {
+  const entry = currentEntry();
+  if (!entry || entry.type !== 'session') {
+    const sel = globalSelection(state.work);
+    return { provider: sel.provider, model: sel.model, scope: '全局档位', actual: false };
+  }
+  const actual = state.ledger.map.get(entry.key);
+  if (actual?.provider) {
+    return {
+      provider: actual.provider,
+      model: actual.model ?? effectiveSelection(state.work, entry.key).model,
+      scope: entry.key,
+      actual: true,
+    };
+  }
+  const sel = effectiveSelection(state.work, entry.key);
+  return { provider: sel.provider, model: sel.model, scope: entry.key, actual: false };
+}
+
+/**
+ * 一个 provider 的额度文案（A④）。四种「没数据」必须分开说，且**绝不显示成 0**：
+ *   · 没有额度查询能力      →「<显示名> 模型未配置额度查询」
+ *   · 有查询能力但凭证不可用 →「API Key 不可用，无法查询余额」
+ *   · 有查询能力但查询失败   →「额度/余额查询失败（原因）」
+ *   · 查到                   → 真实数值
+ */
+function quotaSegmentFor(provider) {
+  const q = state.quota;
+  const family = providerFamily(provider);
+  const name = providerDisplayName(provider);
+  if (family === 'none') {
+    return `${C.bold}${name}${C.reset} 模型未配置额度查询${C.dim}（provider ${provider}）${C.reset}`;
+  }
+  const data = family === 'minimax' ? q.minimax : q.deepseek;
+  if (!data) return `${C.bold}${name}${C.reset} ${C.dim}尚未查询${C.reset}`;
+  if (data.ok) {
+    if (family === 'minimax') {
+      const seg = [`5h 剩余 ${C.bold}${data.intervalPercent ?? '?'}%${C.reset}${data.intervalRemains ? `（${data.intervalRemains} 后重置）` : ''}`];
+      if (data.weeklyPercent !== null && data.weeklyPercent !== undefined) {
+        seg.push(`周剩余 ${C.bold}${data.weeklyPercent}%${C.reset}${data.weeklyRemains ? `（${data.weeklyRemains} 后重置）` : ''}`);
+      }
+      return `${C.cyan}${name}${C.reset} ${seg.join(' · ')}`;
+    }
+    const money = fmtMoney(data.balance);
+    return `${C.green}${name}${C.reset} 余额 ${C.bold}${money === null ? '?' : `${money} ${data.currency}`}${C.reset}${data.available ? '' : ` ${C.red}（账号 is_available=false）${C.reset}`}`;
+  }
+  if (data.kind === 'credential') {
+    return `${C.bold}${name}${C.reset} ${C.yellow}API Key 不可用，无法查询余额${C.reset}${C.dim}（${sanitizeInline(data.error, 120)}）${C.reset}`;
+  }
+  return `${C.bold}${name}${C.reset} ${C.red}${family === 'minimax' ? '额度' : '余额'}查询失败（${sanitizeInline(data.error, 140)}）${C.reset}`;
+}
+
 function quotaLine() {
-  return `额度  ${C.dim}本版本不查询供应商额度/余额（不读取供应商凭据，不请求供应商额度接口；本地模型目录/热更新保留；--no-quota 为兼容参数，不影响行为）${C.reset}`;
+  const q = state.quota;
+  const focus = focusedProvider();
+  const focusFamily = providerFamily(focus.provider);
+  if (q.skipped) {
+    const ability = focusFamily === 'none'
+      ? `${providerDisplayName(focus.provider)} 模型未配置额度查询`
+      : `未查询 ${providerDisplayName(focus.provider)} 额度`;
+    return `额度  ${C.dim}${ability}（--no-quota：已跳过联网查询）${C.reset}`;
+  }
+  if (q.loading) {
+    return `额度  ${C.dim}正在拉取…（当前 provider：${providerDisplayName(focus.provider)}）${C.reset}`;
+  }
+  if (!q.loadedAt) return `额度  ${C.dim}（未查询）${C.reset}`;
+  // 当前 provider 的状态永远放第一格（A④）；其它有查询能力的源保留在后面，不丢信息。
+  const parts = [quotaSegmentFor(focus.provider)];
+  if (focusFamily !== 'minimax') parts.push(quotaSegmentFor('minimax-cn'));
+  if (focusFamily !== 'deepseek') parts.push(quotaSegmentFor(deepseekDisplayProvider()));
+  const scopeNote = `${focus.scope}（${focus.actual ? '实际' : '计划'} provider）`;
+  return `额度  ${parts.join('  ｜  ')}  ${C.dim}（按 ${scopeNote}；${timeOf(q.loadedAt)} 拉取，按 r 刷新）${C.reset}`;
 }
 
 /** 目录行（A②/A⑤）：正常时报告目录规模与拉取时间；降级时**必须**显示降级 + 原因，不许静默。 */
@@ -965,7 +1188,7 @@ function render() {
     const modeHint = state.input === 'number'
       ? '编号=跳到对应项（多位数字可以直接连打，例如 12）· Enter 打开/确认 · e 选思考强度'
       : '↑/↓ 选择 · Enter 打开模型列表（编号也可以直接跳：1~99）· e 选思考强度';
-    lines.push(`${C.dim}${modeHint} · r 刷新目录/实际模型 · Ctrl+C 放弃（不写盘）${C.reset}`);
+    lines.push(`${C.dim}${modeHint} · r 刷新额度/目录/实际模型 · Ctrl+C 放弃（不写盘）${C.reset}`);
   }
   const rows = computeChanges(state.orig, state.work);
   lines.push(`${C.dim}内存累计改动：${rows.length} 项${C.reset}`);
@@ -1317,12 +1540,24 @@ function moveSubmenuCursor(delta) {
   state.submenu.cursor = ((state.submenu.cursor + delta) % n + n) % n;
 }
 
-/** r：强制重读「实际模型」快照 + 重新读 DSH 目录（A② 的菜单可能变）。本版本不查询任何额度。 */
+/** r：强制重读「实际模型」快照 + 重新读 DSH 目录（A② 的菜单可能变）+ 重新查额度。 */
 async function refreshAll() {
-  reloadLedger(true); // r 也强制重读「实际模型」快照（与目录一起刷新）
+  reloadLedger(true); // r 也强制重读「实际模型」快照（与额度、目录一起刷新）
+  const catalogPromise = fetchCatalog();
+  if (state.args.noQuota) {
+    state.quota = { ...state.quota, skipped: true, loading: false };
+    state.catalog = { ...state.catalog, loading: true };
+    render();
+    state.catalog = await catalogPromise;
+    render();
+    return;
+  }
+  state.quota = { ...state.quota, loading: true, skipped: false };
   state.catalog = { ...state.catalog, loading: true };
   render();
-  state.catalog = await fetchCatalog();
+  const [catalog, minimax, deepseek] = await Promise.all([catalogPromise, minimaxQuota(), deepseekQuota()]);
+  state.catalog = catalog;
+  state.quota = { loading: false, skipped: false, loadedAt: Date.now(), minimax, deepseek };
   render();
 }
 
@@ -1401,7 +1636,7 @@ async function handleKey(key) {
       if (c === 'b' && state.submenu) { state.numberBuffer = ''; closeSubmenu('已返回列表（未改动）'); render(); return; }
       if (c === 'e' && !state.submenu) { state.numberBuffer = ''; openEffortForCurrentEntry(); render(); return; }
       state.numberBuffer = '';
-      state.message = `未绑定的按键：${JSON.stringify(key.c)}（r=刷新目录，e=思考强度，Enter=打开/确认，数字=跳转，Ctrl+C=放弃）`;
+      state.message = `未绑定的按键：${JSON.stringify(key.c)}（r=刷新额度/目录，e=思考强度，Enter=打开/确认，数字=跳转，Ctrl+C=放弃）`;
       render();
       return;
     }
@@ -1736,7 +1971,7 @@ async function hotApplyModel() {
   };
 }
 
-/** 写盘后的生效提示。按行给，免得窄终端里折行折得难看。 */
+/** 写盘后的生效提示（详细版见 scripts/README-model-tui.md §6）。按行给，免得窄终端里折行折得难看。 */
 function closingHintState(hotState, hot = {}) {
   const port = hot.port ?? consolePort();
   switch (hotState) {
@@ -1838,7 +2073,7 @@ let drainDone = false;
  * 背景：曾有用户报告「双击运行后，TUI 退出时外层 shell 执行两行『不是内部或外部命令』的假命令，
  * 碎片像 'on'、'◆互终端'」。**真因已查明**（2026-10-12，队长用真 ConPTY 二分 + 我独立复现）：
  * 那两行来自 `模型管理.bat` 里的**非 ASCII echo/rem 行**在「ConPTY 控制台 + chcp 65001」下被 cmd
- * 拆坏，碎片被当成命令执行 —— 与输入残留无关，修法是让 bat 文件保持纯 ASCII。
+ * 拆坏，碎片被当成命令执行 —— 与输入残留无关，修法是让 bat 保持 ASCII（见 README §10）。
  *
  * 那这里为什么还留着？因为它挡的是另一件真实存在的边角情况：退出瞬间还排在控制台缓冲里的多余按键，
  * 会被外层 shell（cmd 提示符 / bat 末尾的 pause）读走当命令。做法是在**恢复终端状态之前**读空并丢弃：
@@ -1959,11 +2194,22 @@ async function main() {
   state.cursor = 0;
   state.ledger = actualModelsByKey();
 
-  // 目录：先渲染一帧（加载中），再读本地桥接的只读接口 GET /api/dsh/models 后重绘。
-  // 本版本不查询任何供应商额度（不读取供应商凭据，不请求供应商额度接口；本地模型目录/热更新保留）；--no-quota 仍被接受，但只是兼容参数。
+  // 额度 + 目录：先渲染一帧（加载中），再并发拉取后重绘。
+  // 目录是本地桥接的只读接口（GET /api/dsh/models），即使 --no-quota 也要读 —— 菜单必须来自目录。
   state.catalog = { loadedAt: null, status: 'loading', degraded: false, source: null, error: null, providers: [], loading: true };
+  state.quota = args.noQuota
+    ? { loading: false, skipped: true, loadedAt: null, minimax: null, deepseek: null }
+    : { loading: true, skipped: false, loadedAt: null, minimax: null, deepseek: null };
   render();
-  state.catalog = await fetchCatalog();
+  const [catalog, minimax, deepseek] = await Promise.all([
+    fetchCatalog(),
+    args.noQuota ? Promise.resolve(null) : minimaxQuota(),
+    args.noQuota ? Promise.resolve(null) : deepseekQuota(),
+  ]);
+  state.catalog = catalog;
+  state.quota = args.noQuota
+    ? { loading: false, skipped: true, loadedAt: null, minimax: null, deepseek: null }
+    : { loading: false, skipped: false, loadedAt: Date.now(), minimax, deepseek };
   render();
 
   if (args.script) {

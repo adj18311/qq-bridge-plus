@@ -1,0 +1,39 @@
+# 示例配置：dsh-xhh-tool-watcher（阶段 2，仅离线候选）
+#
+# ⚠️ 当前不要把它装进真实 profile。
+#    · 通知契约只有 `none`（见 notifier.mjs）：任何配置都不可能产出 delivered；
+#    · 装上去的唯一效果是每 15 分钟往日志写一条「未满足送达契约 none」；
+#    · 真实通知能力要等阶段 2C（bridge 侧持有凭据的投递路径）落地并通过接线审查。
+#
+# 用法（未来接线审查通过后）：把插件目录放到 ~/.dsh/plugins/dsh-xhh-tool-watcher/，
+# 然后在 profile 的 cordis.patch.yml 里插入：
+#
+# - insert:
+#     - id: xhh-tool-watcher
+#       name: 'file:///C:/Users/<you>/.dsh/plugins/dsh-xhh-tool-watcher/index.mjs'
+#       config:
+#         decisionPath: 'file:///D:/qq-bridge/src/core/xhh-tool-surface-decision.mjs'
+#         statePath: 'C:/Users/<you>/.dsh/state/xhh-tool-surface.json'
+#         intervalMs: 60000
+#         prefix: 'mcp__xiaoheihe__'
+#
+# 说明：
+#   · decisionPath 必须是绝对路径（装到 ~/.dsh/plugins 后相对路径解析不到 2A 模块）；
+#   · statePath 不配则状态只存在内存，重启即丢（会重置连续计数与节流）；
+#   · intervalMs 默认 60000，用户要求「每 1 分钟检查一次」，不要调大；
+#   · 通知相关键（notifyUrl / notifySuccessContract / notifyToken / ownerUserId /
+#     notifyTimeoutMs）在阶段 2C 落地前不要填写；即使填了，契约只有 none，
+#     结果恒为 unknown，不会向 QQ 发送任何内容。
+
+decisionPath: 'file:///D:/qq-bridge/src/core/xhh-tool-surface-decision.mjs'
+intervalMs: 60000
+prefix: 'mcp__xiaoheihe__'
+# statePath: 'C:/Users/<you>/.dsh/state/xhh-tool-surface.json'
+
+# ── 阶段 2C 落地后才启用 ────────────────────────────────────────────────
+# 注意：`/api/owner-notice` 这个端点**当前不存在**（阶段 2C 才会新增）。
+# 现在把它填进去只会得到连接失败；契约也仍然只有 none。
+# notifyUrl: 'http://127.0.0.1:<bridge-port>/api/owner-notice'
+# notifySuccessContract: none
+# ownerUserId: <ownerQQ>
+# notifyTimeoutMs: 8000

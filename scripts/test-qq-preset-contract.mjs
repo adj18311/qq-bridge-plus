@@ -34,6 +34,21 @@ test('local/admin tool restrictions and existing compaction budgets stay intact'
   }
 });
 
+// DSH 0.2.1 的 ops_* 是 scoped 注册，tools.restrict 遮不住（见 qq-tool-restrict 注释）。
+// 执行期 guard 会拒绝，但模型仍会在 schema 里看到 ops_bash；两套预设都必须明确要求忽略它。
+test('stray scoped local tools (ops_bash) are explicitly ignored in both QQ presets', () => {
+  for (const name of ['qq-chat', 'qq-chat-v2']) {
+    const p = yaml.load(fs.readFileSync(
+      new URL(`../dsh/agent-presets/${name}/agent.cordis.yml`, import.meta.url), 'utf8',
+    ));
+    const text = (p.find((row) => row.id === 'persona')?.config?.prefix ?? '');
+    assert.match(text, /ops_bash/, `${name}：必须点名 ops_bash`);
+    assert.match(text, /那(是|属于).*宿主层(残留|遗漏)/, `${name}：要说明它是宿主层残留`);
+    assert.match(text, /不要调用/, `${name}：必须要求不要调用`);
+    assert.match(text, /调用(会|将)被拒绝/, `${name}：要说清调用会被拒绝`);
+  }
+});
+
 test('snapshots are optional, partial snapshots require reading, and watermarks are not message IDs', () => {
   assert.match(prefix, /可能附带【本次消息快照】/);
   assert.match(prefix, /partial=true[^。]*继续读取/);
@@ -58,7 +73,8 @@ test('pre-reply quiet checks, waiting for replies and pre-sleep observation have
   assert.match(prefix, /群聊静默只有 3 秒/);
   assert.match(prefix, /从第一条新消息到达起最多再等 6 秒（固定上限，后续消息不延长）/);
   assert.match(prefix, /新消息不再延长 6 秒上限/);
-  assert.match(prefix, /私聊沿用推荐旧配置（通常 10~12 秒）/);
+  // 私聊首答静默也固定 3 秒，不再沿用 10~12 秒的旧推荐值。
+  assert.match(prefix, /私聊[^\n。]*3 秒/);
   assert.match(prefix, /按最后来信计时，读取和思考花掉的时间也算/);
   assert.match(prefix, /quiet=false[^。]*不代表对方已经说完/);
   assert.match(prefix, /不要机械重开等待/);
@@ -141,8 +157,9 @@ test('the send/admin hard-rules section is scoped to sending tools and admin rig
 test('自主逛贴吧：允许想逛就逛，但巡逻的量控/降级约束一条都不能丢', () => {
   // 语义放宽（用户确认）：自发闲逛从"必须聊到才去"改成"想逛就逛"。
   for (const text of [
-    '【自主逛贴吧：想逛就逛，不是定时巡逻】',
-    '在主动机会里，你可以自己决定去某个吧看看——**想逛就逛**；没有想看的就继续待着，不必勉强。',
+    '【自主逛贴吧：想逛就逛，后台也会定期给机会】',
+    '你想逛就可以自己决定去某个吧看看——**想逛就逛**；没有想看的就继续待着，不必勉强。',
+    '后台大约每 60–120 分钟会给你一次自主探索机会（仅北京时间 07:00–23:00）',
     '逛不逛只看你当下的念头',
   ]) assert.ok(prefix.includes(text), `missing self-initiated browsing permission: ${text}`);
   for (const text of ['不要没事就去贴吧溜达', '不要为了刷存在感而逛']) {
@@ -152,11 +169,12 @@ test('自主逛贴吧：允许想逛就逛，但巡逻的量控/降级约束一�
   for (const text of [
     '必须带 reason="patrol"', '并把这次的话题写进 trigger',
     '单次最多读一条帖的前两页', '第 3 页起没有预算',
-    '想继续往下读必须先问用户', '那部分不占每日次数',
-    '每日自主访问上限 12 次', '静默时段 01:00–08:00 不主动逛',
+    '想继续往下读必须先问用户', '是否计入额度以桥接判定为准',
+    '每日自主访问上限以当前生效配置为准', '静默时段为**北京时间 23:00–07:00**',
     'PATROL_DAILY_CAP', 'PATROL_DISABLED', 'PATROL_QUIET_HOURS', '不要重试、不要绕道',
     '被百度安全验证拦住', '不要反复重试',
     'reason="user"', '抓取层节流照样生效',
+    '来源不明按自主访问计数',
     '看 ≠ 说', '没有值得说的就安静待着',
     'pendingThought', '用 tid 去重',
   ]) assert.ok(prefix.includes(text), `missing patrol constraint: ${text}`);

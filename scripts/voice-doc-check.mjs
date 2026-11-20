@@ -1,18 +1,14 @@
-// 「语音能力发布契约」断言的唯一实现：纯函数 + 一个薄 fs 包装。
+// 「语音工具权威文档」断言的唯一实现：纯函数 + 一个薄 fs 包装。
 //
-// 为什么改检查对象
-// ----------------
-// 纯净代码包只发代码，不随包附 README / docs（用户要求「无任何 README」），所以原来断言
-// docs/guides/VOICE-TOOLS.md 的用例没有可断言的对象了。直接删除或 skip 会让这条门禁失效，
-// 因此把同样的实质约束落到**代码与包元数据**上：
-//   1. 语音核心保留：scripts/send-voice.mjs 存在且非空；
-//   2. 语音测试保留：package.json 的 `test-voice` 脚本 + scripts/test-voice.mjs；
-//   3. 发送入口保留：package.json 的 `send-voice` 脚本指向本包内的 scripts/send-voice.mjs；
-//   4. 外置可选语音工具（voice-tool）不属于本包：不得再出现 voice-gui / voice-cli 包脚本，
-//      也不得出现指向 voice-tool 的脚本命令。
-//
-// 旧导出名（checkVoiceDoc / checkVoiceDocText / VOICE_DOC_REL）保留，避免其它调用点
-// （如 scripts/test-voice-system.mjs）改 import；语义已经是「包契约」而不是「文档」。
+// 为什么要单独一个模块
+// --------------------
+// 1. `scripts/test-voice-system.mjs` 需要一条**不 skip** 的文档断言：权威文档
+//    (`docs/guides/VOICE-TOOLS.md`) 是随仓库跟踪的一部分，缺失就是回归失败，不能用
+//    "这份文档不在工作区里"当借口跳过（根 README.md 已被用户删除，旧断言曾无条件读它）。
+// 2. 文档断言本身也要有负向证据：缺文档 / 缺 voice-gui / 缺 voice-cli / 缺"默认关闭"表述
+//    都必须判红，否则"文档检查"很容易退化成永远为真的空检查。
+//    `scripts/test-voice-doc-check.mjs` 复用这里的纯函数，在 os.tmpdir() 的临时副本上
+//    做红/绿对照，绝不动生产文档。
 //
 // 本模块只读文件：不写盘、不联网、不启动任何服务。
 import fs from 'node:fs';
@@ -22,148 +18,112 @@ import { fileURLToPath } from 'node:url';
 /** 本仓库根目录。 */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/** 旧接口名保留：历史上指向权威文档；纯净代码包不再带 docs，这里指向包元数据本身。 */
-export const VOICE_DOC_REL = 'package.json';
-
-/** 必须保留的语音入口：包脚本名 → 必须包含的本包内脚本路径。 */
-const REQUIRED_SCRIPTS = [
-  {
-    id: 'send-voice-script',
-    name: 'send-voice',
-    cmdFragment: 'scripts/send-voice.mjs',
-    message: '缺少 send-voice 脚本，或它没有指向本包内的 scripts/send-voice.mjs（语音发送入口不在包里）',
-  },
-  {
-    id: 'test-voice-script',
-    name: 'test-voice',
-    cmdFragment: 'scripts/test-voice.mjs',
-    message: '缺少 test-voice 脚本，或它没有指向本包内的 scripts/test-voice.mjs（语音核心测试不在包里）',
-  },
-];
-
-/** 必须存在的语音文件（相对仓库根）：核心入口与核心测试。 */
-const REQUIRED_FILES = [
-  { id: 'voice-core-file', rel: path.join('scripts', 'send-voice.mjs'), message: 'scripts/send-voice.mjs 缺失或为空：语音核心不在包里' },
-  { id: 'voice-test-file', rel: path.join('scripts', 'test-voice.mjs'), message: 'scripts/test-voice.mjs 缺失或为空：语音测试不在包里' },
-];
-
-/** 外置可选工具不该出现在包脚本里（键名形态）。 */
-const FORBIDDEN_SCRIPT_KEYS = [
-  { id: 'no-voice-gui-script', name: 'voice-gui', message: '包脚本里不得再出现 voice-gui（外置可选工具不属于本包）' },
-  { id: 'no-voice-cli-script', name: 'voice-cli', message: '包脚本里不得再出现 voice-cli（外置可选工具不属于本包）' },
-];
-
-/** 包脚本命令里不该出现的外置工具名（path/命令形态都覆盖）。 */
-const EXTERNAL_TOOL_NEEDLE = 'voice-tool';
-const EXTERNAL_TOOL_ID = 'no-external-voice-tool';
-const EXTERNAL_TOOL_MESSAGE = '包脚本仍然指向 voice-tool：外置可选语音工具不属于本代码包';
-
-function pushCheck(checks, failures, check) {
-  checks.push(check);
-  if (!check.ok) failures.push({ id: check.id, message: check.message });
-}
+/** 权威文档的仓库相对路径。 */
+export const VOICE_DOC_REL = path.join('docs', 'guides', 'VOICE-TOOLS.md');
 
 /**
- * 对 package.json 正文做断言（纯函数，不碰文件系统）。
- * @param {unknown} text package.json 文本；非字符串/坏 JSON 视为缺失。
- * @param {{ docLabel?: string }} [options]
+ * 权威文档必须包含的关键表述。
+ *
+ * 只钉"必须存在的实质内容"，不钉措辞顺序：两个外置入口名、AI 默认关闭、桥接 audio/ 边界、
+ * 操作者通道、以及"工具不在本仓库"这句（防止文档把外置工具写成已随仓库提供）。
+ */
+export const VOICE_DOC_REQUIRED = [
+  { id: 'voice-gui', needle: 'voice-gui.mjs' },
+  { id: 'voice-cli', needle: 'voice-cli.mjs' },
+  { id: 'default-off', needle: 'AI 发语音默认关闭' },
+  { id: 'audio-dir', needle: 'audio/' },
+  { id: 'operator-channel', needle: '操作者' },
+  { id: 'external-not-vendored', needle: '不在本仓库' },
+];
+
+/** 文档里不该出现的东西：本机绝对路径（会让文档变成"作者机器说明书"）。 */
+const FORBIDDEN_IN_DOC = [
+  {
+    id: 'no-absolute-windows-path',
+    re: /(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]/m,
+    message: '出现带盘符的 Windows 绝对路径（应改成仓库相对路径）',
+  },
+  {
+    id: 'no-absolute-posix-home',
+    re: /\/(?:Users|home)\//,
+    message: '出现 /Users 或 /home 下的本机绝对路径（应改成仓库相对路径）',
+  },
+];
+
+/**
+ * 对一段文档正文做断言（纯函数，不碰文件系统）。
+ *
+ * @param {unknown} text 文档正文；非字符串视为缺失。
+ * @param {{ docLabel?: string }} [options] 用于输出文案的文档名。
+ * @returns {{
+ *   ok: boolean,
+ *   docLabel: string,
+ *   checks: Array<{ id: string, ok: boolean, label: string, message?: string }>,
+ *   failures: Array<{ id: string, message: string }>,
+ * }}
  */
 export function checkVoiceDocText(text, options = {}) {
   const docLabel = options.docLabel ?? VOICE_DOC_REL;
   const checks = [];
   const failures = [];
 
-  let pkg = null;
-  if (typeof text === 'string' && text.trim() !== '') {
-    try { pkg = JSON.parse(text); } catch { pkg = null; }
-  }
-  if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg)) {
-    checks.push({
-      id: 'package-json',
+  if (typeof text !== 'string' || text.trim() === '') {
+    const check = {
+      id: 'doc-exists',
       ok: false,
-      label: `包元数据 ${docLabel} 是合法 JSON（缺失即失败，不 skip）`,
-      message: `${docLabel} 缺失或不是合法 JSON —— 包契约断言不允许 skip`,
-    });
-    return { ok: false, docLabel, checks, failures: [{ id: 'missing-package', message: `${docLabel} 缺失或不是合法 JSON —— 包契约断言不允许 skip` }] };
-  }
-  pushCheck(checks, failures, { id: 'package-json', ok: true, label: `包元数据 ${docLabel} 是合法 JSON` });
-
-  if (!pkg.scripts || typeof pkg.scripts !== 'object' || Array.isArray(pkg.scripts)) {
-    pushCheck(checks, failures, {
-      id: 'package-scripts',
-      ok: false,
-      label: 'package.json 有 scripts 对象',
-      message: 'package.json 缺少 scripts 对象：语音入口无从校验',
-    });
+      label: `文档 ${docLabel} 存在且非空（缺失即失败，不 skip）`,
+      message: '文档缺失或为空',
+    };
+    checks.push(check);
+    failures.push({ id: 'missing-doc', message: `${docLabel} 缺失或为空 —— 文档断言不允许 skip` });
     return { ok: false, docLabel, checks, failures };
   }
-  const scripts = pkg.scripts;
 
-  for (const req of REQUIRED_SCRIPTS) {
-    const cmd = scripts[req.name];
-    const ok = typeof cmd === 'string' && cmd.trim() !== '' && cmd.includes(req.cmdFragment);
-    pushCheck(checks, failures, {
+  checks.push({ id: 'doc-exists', ok: true, label: `文档 ${docLabel} 存在且非空（缺失即失败，不 skip）` });
+
+  for (const req of VOICE_DOC_REQUIRED) {
+    const hit = text.includes(req.needle);
+    checks.push({
       id: req.id,
-      ok,
-      label: `scripts.${req.name} 存在且运行本包内的 ${req.cmdFragment}`,
-      message: ok ? undefined : req.message,
+      ok: hit,
+      label: `文档 ${docLabel} 提到「${req.needle}」`,
+      message: hit ? undefined : `缺少必须表述「${req.needle}」`,
     });
+    if (!hit) failures.push({ id: req.id, message: `缺少必须表述「${req.needle}」` });
   }
 
-  for (const rule of FORBIDDEN_SCRIPT_KEYS) {
-    const hit = Object.prototype.hasOwnProperty.call(scripts, rule.name);
-    pushCheck(checks, failures, {
+  for (const rule of FORBIDDEN_IN_DOC) {
+    const hit = rule.re.test(text);
+    checks.push({
       id: rule.id,
       ok: !hit,
-      label: `package.json scripts 不包含 ${rule.name}（外置工具不属于本包）`,
+      label: `文档 ${docLabel} 不含本机绝对路径（${rule.id}）`,
       message: hit ? rule.message : undefined,
     });
+    if (hit) failures.push({ id: rule.id, message: rule.message });
   }
-
-  const scriptText = JSON.stringify(scripts);
-  const externalHit = scriptText.includes(EXTERNAL_TOOL_NEEDLE);
-  pushCheck(checks, failures, {
-    id: EXTERNAL_TOOL_ID,
-    ok: !externalHit,
-    label: 'package.json scripts 不指向外置 voice-tool',
-    message: externalHit ? EXTERNAL_TOOL_MESSAGE : undefined,
-  });
 
   return { ok: failures.length === 0, docLabel, checks, failures };
 }
 
 /**
- * 读取并断言某个根目录下的语音发布契约。
+ * 读取并断言某个根目录下的权威文档。
+ *
+ * 与 `test-voice-system.mjs` 里"外置工具不在就跳过"的口径刻意不同：文档在仓库里，
+ * 缺失一律是 `missing-doc` 失败。
+ *
  * @param {string} [root] 仓库根（默认本仓库；负向回归传 os.tmpdir() 下的临时根）。
  * @param {{ docRel?: string }} [options]
  */
 export function checkVoiceDoc(root = REPO_ROOT, options = {}) {
   const docRel = options.docRel ?? VOICE_DOC_REL;
   const abs = path.join(root, docRel);
-  let text = null;
+  let text;
   try {
     text = fs.readFileSync(abs, 'utf8');
   } catch {
-    text = null;
+    const result = checkVoiceDocText(null, { docLabel: docRel });
+    return { ...result, docPath: abs };
   }
-  const result = checkVoiceDocText(text, { docLabel: docRel });
-  const checks = [...result.checks];
-  const failures = [...result.failures];
-
-  for (const req of REQUIRED_FILES) {
-    let size = 0;
-    try {
-      size = fs.statSync(path.join(root, req.rel)).size;
-    } catch {
-      size = 0;
-    }
-    pushCheck(checks, failures, {
-      id: req.id,
-      ok: size > 0,
-      label: `${req.rel} 存在且非空（语音能力保留）`,
-      message: size > 0 ? undefined : req.message,
-    });
-  }
-
-  return { ...result, ok: failures.length === 0, checks, failures, docPath: abs };
+  return { ...checkVoiceDocText(text, { docLabel: docRel }), docPath: abs };
 }

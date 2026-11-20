@@ -142,7 +142,7 @@ const GUARD_020_NAMES = [
   'subagent_codex', 'subagent_claude_code',
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'plugin_manager',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  'schedule_create', 'schedule_list', 'schedule_edit', 'schedule_view',
 ];
 const guardMod = await import(pathToFileURL(canonicalGuardPath).href);
 const guardNames = new Set(guardMod.RESTRICTED_TOOL_NAMES ?? []);

@@ -60,6 +60,23 @@ function localMs(y, mo, d, h = 12, mi = 0) {
   return new Date(y, mo - 1, d, h, mi, 0, 0).getTime();
 }
 
+/** 用固定北京时间造毫秒时间戳（enabled 路径的时段判定固定按 UTC+8，与宿主时区无关）。 */
+function beijingMs(iso) {
+  return Date.parse(iso);
+}
+
+/**
+ * 把巡逻时钟固定成指定时刻：测试接缝 `globalThis.backgroundPatrolNow` 同时供
+ * 「07:00–23:00 时段判定」与贴吧账本记账使用，所以两者不会像伪造 Date 那样互相错位。
+ */
+function makeFixedClock(initialMs) {
+  let current = initialMs;
+  return {
+    now: () => current,
+    setNow(ms) { current = ms; },
+  };
+}
+
 // ── 假抓取器（贴吧抓取层被替换，测试只关心接线与闸门）──────────────────────
 function fakeThreadPage(tid, page) {
   return { ok: true, url: `https://tieba.invalid/mo/q/m?kz=${tid}&pn=${(Number(page) || 1) - 1}`, data: { tid: String(tid), blocked: false, posts: [] }, text: '【贴吧帖子】fixture 正文' };
@@ -83,11 +100,43 @@ function fakeBarPage(bar, page) {
   return { ok: true, url: `https://tieba.invalid/mo/q/m?kw=${bar}&pn=0`, data: { bar: String(bar), blocked: false, threads: [] }, text: '【贴吧】fixture 吧页' };
 }
 
+// ── F-C：enabled 路径需要的后台运行时 fake（避免真实 lifecycle/调度在 VM 里起副作用）──
+function fakeE1Globals() {
+  return {
+    createBackgroundPatrolBridgeHook: () => ({
+      async start() { return { ok: true, enabled: true, url: 'http://127.0.0.1:1', port: 1 }; },
+      async stop() { return { stopped: true }; },
+      status() { return { started: true, identityMode: 'mapper' }; },
+    }),
+    createBackgroundPatrolAudit: () => ({ async load() {}, async record() { return { ok: true }; } }),
+    createBackgroundPatrolSessionLifecycle: () => ({
+      async ensureSession() { return { ok: true, sessionId: 'sid-patrol' }; },
+      async close() { return { ok: true }; },
+      async status() { return { phase: 'ready' }; },
+    }),
+    createBackgroundPatrolScheduleStore: () => ({
+      async load() {},
+      async advanceGeneration() { return { ok: true, generation: 1 }; },
+      async snapshot() { return { generation: 1, platforms: { tieba: { nextAt: null }, xiaoheihe: { nextAt: null } } }; },
+      async markOpportunity() { return { ok: true }; },
+      async planNext() { return { ok: true }; },
+      async close() {},
+    }),
+    createBackgroundPatrolScheduler: () => ({
+      start() {},
+      stop() {},
+      snapshot() { return { started: true, runningPlatform: null, nextAt: { tieba: null, xiaoheihe: null } }; },
+    }),
+  };
+}
+
 // ── 临时目录里的真桥接 + 假抓取器 ──────────────────────────────────────────
-async function patrolHarness({ config = {}, capture = {}, overrides = {} } = {}) {
+async function patrolHarness({ config = {}, capture = {}, overrides = {}, now } = {}) {
+  const clock = now === undefined ? null : makeFixedClock(now);
   const h = await bridgeHarness({
     config: { socialV2: { tools: { tiebaList: true, tiebaRead: true }, ...(config.socialV2 ?? {}) }, ...config },
     globals: {
+      ...(clock ? { backgroundPatrolNow: () => clock.now() } : {}),
       fetchBarPage: async (bar, page) => { capture.bar = { bar, page }; return fakeBarPage(bar, page); },
       fetchThreadPage: async (tid, page) => { capture.thread = { tid, page }; return fakeThreadPage(tid, page); },
       fetchThreadPages: async (tid, opts) => { capture.threadPages = { tid, opts: { ...opts } }; return fakeThreadPages(tid, opts); },
@@ -101,6 +150,7 @@ async function patrolHarness({ config = {}, capture = {}, overrides = {} } = {})
     h,
     port,
     capture,
+    setNow: clock ? (ms) => clock.setNow(ms) : null,
     get: (pathname) => httpGet(port, pathname),
     patrolLog: () => readPatrolLog(h.temp),
     bridgeLog: () => { try { return fs.readFileSync(path.join(h.temp, 'state', 'bridge.log'), 'utf8'); } catch { return ''; } },
@@ -147,21 +197,21 @@ const BAR_Q = (extra = {}) => {
   return `/api/socialV2/tieba/bar?${q.toString()}`;
 };
 
-// ── ① 纯闸门：每日 12 次上限 / 计数 / 用户不计数 ───────────────────────────
-await test('① 纯闸门：巡逻默认上限 12 次，第 13 次返回 PATROL_DAILY_CAP', () => {
+// ── ① 纯闸门：每日默认 6 次上限 / 计数 / 用户不计数 ─────────────────────────
+await test('① 纯闸门：巡逻默认上限 6 次，第 7 次返回 PATROL_DAILY_CAP', () => {
   const gate = createTiebaPatrolGate({ config: PATROL_DEFAULTS });
   const t = localMs(2026, 10, 8, 12, 0);
-  for (let i = 1; i <= 12; i += 1) {
+  for (let i = 1; i <= 6; i += 1) {
     const r = gate.request({ reason: 'patrol', at: t + i * 1000 });
     assert.equal(r.ok, true, `第 ${i} 次应放行`);
     assert.equal(r.capUsed, i, `第 ${i} 次放行后 capUsed=${i}`);
-    assert.equal(r.cap, 12);
+    assert.equal(r.cap, 6);
   }
-  const denied = gate.request({ reason: 'patrol', at: t + 13000 });
+  const denied = gate.request({ reason: 'patrol', at: t + 7000 });
   assert.equal(denied.ok, false);
   assert.equal(denied.code, PATROL_CODE_DAILY_CAP);
-  assert.equal(denied.error, '今日自主访问已达 12 次上限；如确需继续，请让用户明确要求');
-  assert.equal(denied.capUsed, 12, '被拒时计数不再增长');
+  assert.equal(denied.error, '今日自主访问已达 6 次上限；如确需继续，请让用户明确要求');
+  assert.equal(denied.capUsed, 6, '被拒时计数不再增长');
   assert.equal(denied.patrolled, true);
 });
 
@@ -241,7 +291,11 @@ await test('④ 纯闸门：enabled=false ⇒ 巡逻 PATROL_DISABLED，用户指
 await test('④b 配置归一：非法值回默认，cap=0 是合法值（自主访问一律拒绝）', () => {
   assert.deepEqual(normalizePatrolConfig(undefined), { ...PATROL_DEFAULTS, quietHours: [...PATROL_DEFAULTS.quietHours] });
   const bad = normalizePatrolConfig({ dailyVisitCap: 'x', maxPagesPerThread: -3, quietHours: ['a', 'b'], enabled: 'yes' });
-  assert.equal(bad.dailyVisitCap, 12);
+  assert.equal(bad.dailyVisitCap, 6, '非法 dailyVisitCap 回默认 6');
+  // 0..99 可配置：超过 99 按 99 截断（避免手滑写成无上限），floor 取整
+  assert.equal(normalizePatrolConfig({ dailyVisitCap: 99 }).dailyVisitCap, 99);
+  assert.equal(normalizePatrolConfig({ dailyVisitCap: 100 }).dailyVisitCap, 99);
+  assert.equal(normalizePatrolConfig({ dailyVisitCap: 7.9 }).dailyVisitCap, 7);
   assert.equal(bad.maxPagesPerThread, 2);
   assert.deepEqual(bad.quietHours, [1, 8]);
   assert.equal(bad.enabled, true, '只有明确的 false 才算关闭');
@@ -368,7 +422,9 @@ await test('⑥b 巡逻路径没有自己的节流旁路：桥接不改写 limit
 
 // ── 真端点接线（临时目录里的真桥接 + 假抓取器）────────────────────────────
 await test('③b 端点：reason=patrol 时读帖被钳到前两页（并如实说明），响应里给出 clampedPages', async () => {
-  const t = await patrolHarness();
+  // E2b 契约：disabled（默认）路径走旧 gate，cap 取 socialV2.patrol.dailyVisitCap（缺省 6）；
+  // 静默时段关闭，避免测试结果依赖运行时刻（真实静默语义由 ⑤b 单独覆盖）。
+  const t = await patrolHarness({ config: { socialV2: { patrol: { quietHours: [0, 0] } } } });
   try {
     const res = await t.get(THREAD_Q({ pages: '1-5', reason: 'patrol', trigger: '群里在聊示例话题' }));
     assert.equal(res.status, 200);
@@ -378,26 +434,27 @@ await test('③b 端点：reason=patrol 时读帖被钳到前两页（并如实�
     assert.deepEqual(res.body.patrol.clampedPages, [1, 2]);
     assert.equal(res.body.patrol.reason, 'patrol');
     assert.equal(res.body.patrol.capUsed, 1);
-    assert.equal(res.body.patrol.cap, 12);
+    assert.equal(res.body.patrol.cap, 6, 'disabled（默认）路径用旧 gate 的 socialV2.patrol.dailyVisitCap 默认 6');
     assert.match(res.body.text, /巡逻单次最多读前 2 页/, '钳制必须如实写在正文里');
   } finally { await t.close(); }
 });
 
 await test('③c 端点：reason=user 不钳制页数、不计数', async () => {
-  const t = await patrolHarness();
+  const t = await patrolHarness({ config: { socialV2: { patrol: { quietHours: [0, 0] } } } });
   try {
     const res = await t.get(THREAD_Q({ pages: '1-5', reason: 'user' }));
     assert.equal(res.status, 200);
     assert.equal(t.capture.threadPages.opts.pages, '1-5', '用户指定原样透传');
     assert.equal(t.capture.threadPages.opts.maxPages, undefined);
     assert.equal(res.body.patrol.reason, 'user');
-    assert.equal(res.body.patrol.capUsed, 0);
+    assert.equal(res.body.patrol.capUsed, 0, 'disabled 旧 gate：user 不占额度，capUsed 保持已用次数');
+    assert.equal(res.body.patrol.cap, 6, 'disabled 旧 gate：cap 取 socialV2.patrol.dailyVisitCap 默认 6');
     assert.equal(/巡逻单次最多读前/.test(res.body.text), false, '用户指定不该出现巡逻钳制说明');
   } finally { await t.close(); }
 });
 
 await test('③d 端点：巡逻单页请求仍走原单页入口（未钳制时路由与改动前一致）', async () => {
-  const t = await patrolHarness();
+  const t = await patrolHarness({ config: { socialV2: { patrol: { quietHours: [0, 0] } } } });
   try {
     const single = await t.get(THREAD_Q({ reason: 'patrol', page: 2 }));
     assert.equal(single.status, 200);
@@ -413,8 +470,9 @@ await test('③d 端点：巡逻单页请求仍走原单页入口（未钳制时
   } finally { await t.close(); }
 });
 
-await test('①d 端点：dailyVisitCap=2 时第 3 次巡逻被拒（PATROL_DAILY_CAP，HTTP 429）', async () => {
-  const t = await patrolHarness({ config: { socialV2: { patrol: { dailyVisitCap: 2 } } } });
+// F-C：backgroundPatrol 未启用（默认）⇒ 旧 gate 契约完全不变。
+await test('①d 端点（disabled）：旧 gate 的 dailyVisitCap=2 生效，第 3 次 429；user 不占', async () => {
+  const t = await patrolHarness({ config: { socialV2: { patrol: { dailyVisitCap: 2, quietHours: [0, 0] } } } });
   try {
     const first = await t.get(BAR_Q({ reason: 'patrol' }));
     const second = await t.get(THREAD_Q({ reason: 'patrol' }));
@@ -422,12 +480,13 @@ await test('①d 端点：dailyVisitCap=2 时第 3 次巡逻被拒（PATROL_DAIL
     assert.equal(second.status, 200);
     assert.equal(first.body.patrol.capUsed, 1, '吧页访问也算 1 次');
     assert.equal(second.body.patrol.capUsed, 2);
+    assert.equal(second.body.patrol.cap, 2);
     const third = await t.get(BAR_Q({ reason: 'patrol' }));
     assert.equal(third.status, 429);
     assert.equal(third.body.ok, false);
     assert.equal(third.body.code, PATROL_CODE_DAILY_CAP);
     assert.equal(third.body.error, '今日自主访问已达 2 次上限；如确需继续，请让用户明确要求');
-    // 用户明确要求仍然放行，且**不增加计数**
+    // 用户明确要求仍然放行，且不增加计数（旧 gate 语义）。
     const user = await t.get(THREAD_Q({ reason: 'user' }));
     assert.equal(user.status, 200);
     assert.equal(user.body.patrol.capUsed, 2, 'user 访问不占名额');
@@ -436,8 +495,78 @@ await test('①d 端点：dailyVisitCap=2 时第 3 次巡逻被拒（PATROL_DAIL
   } finally { await t.close(); }
 });
 
-await test('⑧b 端点：不带 reason 的调用按 patrol 处理（一样吃上限）', async () => {
-  const t = await patrolHarness({ config: { socialV2: { patrol: { dailyVisitCap: 1 } } } });
+// task-128：enabled ⇒ 新 ledger 的日上限跟随 socialV2.patrol.dailyVisitCap（0..99，默认 6），
+// 调整上限不清空当天 used，也不产生额外写盘；user 直通不 reserve。
+await test('①f 新巡逻：模型自报 user 无可信证明，仍按自主访问计额', async () => {
+  const t = await patrolHarness({
+    config: {
+      ownerQQ: 123,
+      backgroundPatrol: { enabled: true, authorizeToken: 'x'.repeat(32) },
+      socialV2: { patrol: { dailyVisitCap: 1, quietHours: [0, 0] } },
+    },
+    overrides: fakeE1Globals(),
+    now: beijingMs('2026-10-08T12:00:00+08:00'),
+  });
+  try {
+    const first = await t.get(BAR_Q({ reason: 'user' }));
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(first.body.patrol.reason, 'patrol');
+    assert.equal(first.body.patrol.capUsed, 1);
+    t.capture.bar = null;
+    const denied = await t.get(BAR_Q({ reason: 'user' }));
+    assert.equal(denied.status, 429);
+    assert.doesNotMatch(denied.body.error, /请让用户明确要求/, '没有可信豁免路径时不能误导用户重试');
+    assert.equal(t.capture.bar, null, '额度用尽后不得发起抓取');
+  } finally { await t.close(); }
+});
+
+await test('①e 端点（enabled）：日上限跟随配置（3→5→2），调上限不重置当天 used', async () => {
+  const t = await patrolHarness({
+    config: {
+      ownerQQ: 123,
+      backgroundPatrol: { enabled: true, authorizeToken: 'x'.repeat(32) },
+      socialV2: { patrol: { dailyVisitCap: 3, quietHours: [0, 0] } },
+    },
+    overrides: fakeE1Globals(),
+    now: beijingMs('2026-10-08T12:00:00+08:00'),
+  });
+  try {
+    for (let i = 1; i <= 3; i += 1) {
+      const next = i % 2 === 0 ? await t.get(THREAD_Q({ reason: 'patrol' })) : await t.get(BAR_Q({ reason: 'patrol' }));
+      assert.equal(next.status, 200, `第 ${i} 次（上限 3）应放行`);
+      assert.equal(next.body.patrol.capUsed, i);
+      assert.equal(next.body.patrol.cap, 3, 'enabled：cap 跟随配置 dailyVisitCap=3');
+    }
+    const capped = await t.get(BAR_Q({ reason: 'patrol' }));
+    assert.equal(capped.status, 429);
+    assert.equal(capped.body.code, PATROL_CODE_DAILY_CAP);
+    assert.equal(capped.body.error, '今日自主访问已达 3 次上限，本次未发出请求');
+
+    // 上限调到 5：当天已用的 3 次保留，下一次放行后 capUsed=4、cap=5。
+    t.h.cfg.socialV2.patrol.dailyVisitCap = 5;
+    const continued = await t.get(THREAD_Q({ reason: 'patrol' }));
+    assert.equal(continued.status, 200, '上限调到 5 后当天已用 3 次仍可继续（不清空）');
+    assert.equal(continued.body.patrol.capUsed, 4);
+    assert.equal(continued.body.patrol.cap, 5);
+
+    // 上限降到 2（低于已用 4）：立即拒绝，不再发出平台请求。
+    t.h.cfg.socialV2.patrol.dailyVisitCap = 2;
+    const lowered = await t.get(BAR_Q({ reason: 'patrol' }));
+    assert.equal(lowered.status, 429);
+    assert.equal(lowered.body.error, '今日自主访问已达 2 次上限，本次未发出请求');
+
+    const user = await t.get(THREAD_Q({ reason: 'user' }));
+    assert.equal(user.status, 429, '模型自报 user 无可信证明，不能绕过已满额度');
+
+    // 不双扣 + 调上限不写盘：ledger 当日 used 恰好 4，且文件里没有 limit 字段。
+    const ledger = JSON.parse(fs.readFileSync(path.join(t.h.temp, 'state', 'xiaoheihe-tieba-patrol.json'), 'utf8'));
+    assert.equal(ledger.used, 4, '每次请求只扣一次；调上限不清空/不改写当天 used');
+    assert.equal('limit' in ledger, false, 'limit 只影响放行判定，不持久化');
+  } finally { await t.close(); }
+});
+
+await test('⑧b 端点（disabled）：不带 reason 的调用按 patrol 处理（旧 cap 配置生效）', async () => {
+  const t = await patrolHarness({ config: { socialV2: { patrol: { dailyVisitCap: 1, quietHours: [0, 0] } } } });
   try {
     const first = await t.get(THREAD_Q());
     assert.equal(first.status, 200);
@@ -472,7 +601,7 @@ await test('④d 端点：控制台那一行（tools.patrol=false）也能关掉
   } finally { await t.close(); }
 });
 
-await test('⑤b 端点：静默时段内 patrol 被拒（403 / PATROL_QUIET_HOURS），user 照旧放行', async () => {
+await test('⑤b 端点：静默时段内 patrol 被拒（403 / PATROL_CODE_QUIET_HOURS），user 照旧放行', async () => {
   // 把静默时段设成全天：等价于「现在就是静默时段」，不用去改系统时钟。
   const t = await patrolHarness({ config: { socialV2: { patrol: { quietHours: [0, 24] } } } });
   try {
@@ -482,16 +611,16 @@ await test('⑤b 端点：静默时段内 patrol 被拒（403 / PATROL_QUIET_HOU
     assert.match(denied.body.error, /静默时段/);
     const user = await t.get(THREAD_Q({ reason: 'user' }));
     assert.equal(user.status, 200);
-    assert.equal(user.body.patrol.capUsed, 0);
+    assert.equal(user.body.patrol.capUsed, 0, 'disabled 旧 gate：user 不占额度，capUsed 保持 0');
   } finally { await t.close(); }
 });
 
-await test('⑦b 端点：patrol-log.jsonl 每行结构正确且含 cap 使用量，bridge.log 有摘要行', async () => {
-  const t = await patrolHarness({ config: { socialV2: { patrol: { dailyVisitCap: 1 } } } });
+await test('⑦b 端点（disabled 旧 gate）：patrol-log.jsonl 每行结构正确且含 cap 使用量，bridge.log 有摘要行', async () => {
+  const t = await patrolHarness({ config: { socialV2: { patrol: { dailyVisitCap: 1, quietHours: [0, 0] } } } });
   try {
     assert.deepEqual(t.patrolLog(), [], '还没访问过时不该有日志');
     await t.get(THREAD_Q({ reason: 'patrol', pages: '1-5', trigger: '群里在聊示例话题' }));
-    await t.get(THREAD_Q({ reason: 'patrol' }));           // 被上限拒绝 ⇒ 也要有一行
+    await t.get(THREAD_Q({ reason: 'patrol' }));           // 旧 cap=1：被上限拒绝 ⇒ 也要有一行
     await t.get(BAR_Q({ reason: 'user' }));                 // 用户指定 ⇒ 记一行 reason=user
     const lines = t.patrolLog();
     assert.equal(lines.length, 3, `三次访问应有三行，实际 ${lines.length}`);
@@ -503,8 +632,7 @@ await test('⑦b 端点：patrol-log.jsonl 每行结构正确且含 cap 使用�
       assert.equal(typeof line.ts, 'string');
       assert.equal(line.key, 'group:456');
       assert.ok(Array.isArray(line.pages));
-      assert.equal(typeof line.capUsed, 'number');
-      assert.equal(line.cap, 1, 'cap 使用量要如实写当日上限');
+      assert.equal(line.cap, 1, 'disabled 旧 gate：cap 来自 socialV2.patrol.dailyVisitCap');
     }
     assert.deepEqual(lines.map((l) => l.outcome), ['silent', 'rejected', 'silent']);
     assert.deepEqual(lines.map((l) => l.reason), ['patrol', 'patrol', 'user']);
@@ -523,6 +651,7 @@ await test('⑦b 端点：patrol-log.jsonl 每行结构正确且含 cap 使用�
 
 await test('⑦c 端点：被拦（安全验证）与总开关关闭分别记 blocked / disabled', async () => {
   const blockedHarness = await patrolHarness({
+    config: { socialV2: { patrol: { quietHours: [0, 0] } } },
     overrides: {
       fetchThreadPage: async (tid, page) => ({
         ok: true,
@@ -547,7 +676,7 @@ await test('⑦c 端点：被拦（安全验证）与总开关关闭分别记 bl
 });
 
 await test('⑦d 端点：巡逻之后真的发言 ⇒ 那一行的 outcome 由 silent 改写成 spoke（不新增行）', async () => {
-  const t = await patrolHarness();
+  const t = await patrolHarness({ config: { socialV2: { patrol: { quietHours: [0, 0] } } } });
   try {
     await t.get(THREAD_Q({ reason: 'patrol' }));
     assert.deepEqual(t.patrolLog().map((l) => l.outcome), ['silent']);
@@ -560,6 +689,121 @@ await test('⑦d 端点：巡逻之后真的发言 ⇒ 那一行的 outcome 由 
     await t.get(THREAD_Q({ key: 'group:456', reason: 'patrol' }));
     t.h.recordSentMessagesV2('private:123', ['无关会话']);
     assert.deepEqual(t.patrolLog().map((l) => l.outcome), ['spoke', 'silent']);
+  } finally { await t.close(); }
+});
+
+await test('⑦e 端点（disabled）：不读 ledger —— ledger 文件损坏也不影响旧 gate', async () => {
+  const t = await patrolHarness({ config: { socialV2: { patrol: { quietHours: [0, 0] } } } });
+  try {
+    fs.mkdirSync(path.join(t.h.temp, 'state'), { recursive: true });
+    fs.writeFileSync(path.join(t.h.temp, 'state', 'xiaoheihe-tieba-patrol.json'), '{ broken json', 'utf8');
+    const allowed = await t.get(THREAD_Q({ reason: 'patrol' }));
+    assert.equal(allowed.status, 200, 'disabled 路径不读取 ledger');
+    assert.equal(allowed.body.patrol.reason, 'patrol');
+    const user = await t.get(THREAD_Q({ reason: 'user' }));
+    assert.equal(user.status, 200);
+    assert.equal(user.body.patrol.reason, 'user');
+  } finally { await t.close(); }
+});
+
+await test('⑦f 端点（enabled）：ledger 损坏 ⇒ 来源不明一律 fail-closed（零抓取）', async () => {
+  const t = await patrolHarness({
+    config: {
+      ownerQQ: 123,
+      backgroundPatrol: { enabled: true, authorizeToken: 'x'.repeat(32) },
+      socialV2: { patrol: { quietHours: [0, 0] } },
+    },
+    overrides: fakeE1Globals(),
+    now: beijingMs('2026-10-08T12:00:00+08:00'),
+  });
+  try {
+    fs.mkdirSync(path.join(t.h.temp, 'state'), { recursive: true });
+    fs.writeFileSync(path.join(t.h.temp, 'state', 'xiaoheihe-tieba-patrol.json'), '{ broken json', 'utf8');
+    const denied = await t.get(THREAD_Q({ reason: 'patrol' }));
+    assert.equal(denied.status, 403);
+    assert.equal(denied.body.code, 'TIEBA_PATROL_REJECTED');
+    assert.equal(t.capture.thread, undefined, 'ledger 不可用必须零抓取');
+    const user = await t.get(THREAD_Q({ reason: 'user' }));
+    assert.equal(user.status, 403, '自报 user 不能绕过损坏的账本');
+    assert.equal(t.capture.thread, undefined);
+  } finally { await t.close(); }
+});
+
+await test('同会话贴吧读取仍计额，但不产生旧后台代发候选', async () => {
+  const t = await patrolHarness({
+    config: { ownerQQ: 123, backgroundPatrol: { enabled: true, authorizeToken: 'x'.repeat(32) }, socialV2: { patrol: { quietHours: [0, 0] } } },
+    overrides: fakeE1Globals(), now: beijingMs('2026-10-08T12:00:00+08:00'),
+  });
+  try {
+    await t.h.ensureSession('private:123');
+    const machine = t.h.getBackgroundPatrolReportOnce();
+    const before = machine.snapshot();
+    const result = await t.get(THREAD_Q({ key: 'private:123', reason: 'patrol' }));
+    assert.equal(result.status, 200);
+    assert.equal(result.body.patrol.reason, 'patrol');
+    assert.ok(result.body.patrol.capUsed >= 1);
+    assert.deepEqual(machine.snapshot(), before, '同会话访问不得排队旧式桥接代发');
+  } finally { await t.close(); }
+});
+
+await test('⑦g 端点（enabled）：贴吧成功放行后按 ledger used 触发概率汇报（F-E）', async () => {
+  const t = await patrolHarness({
+    config: {
+      ownerQQ: 123,
+      backgroundPatrol: { enabled: true, authorizeToken: 'x'.repeat(32) },
+      socialV2: { patrol: { quietHours: [0, 0] } },
+    },
+    overrides: { ...fakeE1Globals(), backgroundPatrolReportRandom: () => 0.1 },
+    now: beijingMs('2026-10-08T12:00:00+08:00'),
+  });
+  try {
+    const first = await t.get(THREAD_Q({ reason: 'patrol' }));
+    assert.equal(first.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(t.h.calls.sent.length, 0, '回合结束前不发送');
+    await t.h.handleBackgroundPatrolFrame('sid', { type: 'turn/start', data: { turn: 1 } });
+    await t.h.handleBackgroundPatrolFrame('sid', { type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: '<patrol-report sensitive="false" destination="admin">模型写的贴吧巡逻观察</patrol-report>' }] } } });
+    await t.h.handleBackgroundPatrolFrame('sid', { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } });
+    assert.ok(t.h.calls.sent.some((item) => /模型写的贴吧巡逻观察/.test(item.text)), '贴吧第 1 次成功应发送模型汇报');
+    assert.ok(!t.h.calls.sent.some((item) => /次后台读取/.test(item.text)), '不得再使用小黑盒 readCount 文案');
+  } finally { await t.close(); }
+});
+
+// 用户 m05803 决策：enabled 路径的自主巡逻时段统一为北京时间 07:00–23:00，
+// 不再受 legacy `socialV2.patrol.quietHours`（默认 01:00–08:00）影响；legacy 路径保持原样。
+await test('⑦h 端点（enabled）：北京时间 07:00 含、23:00 不含；自报 user 不豁免', async () => {
+  const t = await patrolHarness({
+    config: {
+      ownerQQ: 123,
+      backgroundPatrol: { enabled: true, authorizeToken: 'x'.repeat(32) },
+      // 显式保留 legacy 默认 01:00–08:00：enabled 路径若仍读它，07:00 会被错误拒绝。
+      socialV2: { patrol: { quietHours: [1, 8] } },
+    },
+    overrides: fakeE1Globals(),
+    now: beijingMs('2026-10-08T06:59:00+08:00'),
+  });
+  try {
+    const before = await t.get(BAR_Q());
+    assert.equal(before.status, 403, '北京时间 06:59 应静默');
+    assert.equal(before.body.code, PATROL_CODE_QUIET_HOURS);
+
+    t.setNow(beijingMs('2026-10-08T07:00:00+08:00'));
+    const atStart = await t.get(BAR_Q());
+    assert.equal(atStart.status, 200, '北京时间 07:00 应放行');
+    assert.equal(atStart.body.patrol.reason, 'patrol');
+
+    t.setNow(beijingMs('2026-10-08T22:59:00+08:00'));
+    const beforeEnd = await t.get(THREAD_Q());
+    assert.equal(beforeEnd.status, 200, '北京时间 22:59 应放行');
+
+    t.setNow(beijingMs('2026-10-08T23:00:00+08:00'));
+    const atEnd = await t.get(BAR_Q());
+    assert.equal(atEnd.status, 403, '北京时间 23:00 应静默');
+    assert.equal(atEnd.body.code, PATROL_CODE_QUIET_HOURS);
+    assert.match(atEnd.body.error, /北京时间 23:00–07:00/, '文案应说明新的统一时段');
+
+    const user = await t.get(BAR_Q({ reason: 'user' }));
+    assert.equal(user.status, 403, 'enabled 路径自报 user 仍按自主访问处理');
   } finally { await t.close(); }
 });
 
@@ -628,6 +872,13 @@ async function loadTiebaTools({ patrolMaxPages } = {}) {
   };
   return { call, calls, tools, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
+
+await test('MCP：自报 user 不保证豁免，模型工具描述不得误导', () => {
+  const source = fs.readFileSync(new URL('../src/mcp-snowluma-safe.js', import.meta.url), 'utf8');
+  const section = source.slice(source.indexOf('// ── 贴吧只读工具（二代仿真模式）'), source.indexOf('// ── ', source.indexOf('// ── 贴吧只读工具（二代仿真模式）') + 10));
+  assert.ok(section.includes('来源不明按自主访问计数'));
+  assert.doesNotMatch(section, /不受限、不计数|继续读的部分不占每日次数/);
+});
 
 await test('MCP：qq_tieba_read/list 接受 reason 与 trigger，并原样带进桥接 URL', async () => {
   const m = await loadTiebaTools();

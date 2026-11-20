@@ -10,7 +10,7 @@
     "allowRemote": false
   },
   "role": {
-    "maxInjectChars": 10000
+    "maxInjectChars": 6000
   },
   "snowluma": {
     "wsUrl": "ws://127.0.0.1:3001",
@@ -232,10 +232,6 @@
     },
     "proactive": {
       "enabled": true,
-      "activeHours": {
-        "start": 7,
-        "end": 23
-      },
       "checkIntervalMinMs": 1800000,
       "checkIntervalMaxMs": 5400000,
       "idleThresholdMs": 900000,

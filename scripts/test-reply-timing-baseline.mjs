@@ -140,11 +140,12 @@ test('real bridge prompt consumer uses the timing calculation', () => withBridge
   st.recentMessages = [{ text: 'done', time: NOW - 500 }];
   st.lastIncomingAt = NOW - 3000;
   h.cfg.socialV2.wait.defaultQuietMs = 14000;
+  // 私聊首答静默固定 3 秒：后台 defaultQuietMs=14000 不再决定窗口；已安静 3 秒则剩余 0。
   const result = h.replyTimingV2(st, 'private:123');
-  assert.equal(result.quietMs, 14000);
-  assert.equal(result.remainingQuietMs, 11000);
-  assert.match(h.buildWakePromptV2('private:123', 'question'), /quietMs=14000/);
-  assert.match(h.buildWakePromptV2('private:123', 'question'), /还差约 11 秒静默/);
+  assert.equal(result.quietMs, 3000);
+  assert.equal(result.remainingQuietMs, 0);
+  assert.match(h.buildWakePromptV2('private:123', 'question'), /quietMs=3000/);
+  assert.match(h.buildWakePromptV2('private:123', 'question'), /还差约 0 秒静默/);
 }));
 
 test('real group prompt consumer applies the 3s window measured from lastIncomingAt', () => withBridge((h) => {
