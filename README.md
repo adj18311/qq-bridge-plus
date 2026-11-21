@@ -364,3 +364,18 @@ Cookie 会过期。哪天它突然又只给降级结果，先换 Cookie，再怀
 
 最后谢一次 Derpyu520，以及所有给 qq-bridge 提过 issue、补过 PR、写过文档的人。
 
+## 打赏
+
+如果想请开发者喝一杯咖啡，或者请我的鱼儿吃一碗白饭，下面两个码随便扫。
+纯粹是无偿赞助，不给对价、不承诺任何服务，打赏与否都不影响任何功能。
+
+<table>
+<tr>
+<td align="center"><img src="assets/reward-wechat.png" width="240" alt="微信"></td>
+<td align="center"><img src="assets/reward-alipay.png" width="240" alt="支付宝"></td>
+</tr>
+<tr>
+<td align="center"><b>微信</b></td>
+<td align="center"><b>支付宝</b></td>
+</tr>
+</table>
