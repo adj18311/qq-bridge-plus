@@ -9,7 +9,7 @@
 
 只用 Windows 11 x64 做过实机验证。这是 [qq-bridge](https://github.com/Derpyu520/qq-bridge) 的衍生项目，致谢放在最后。
 
-跟着 B 站视频能配好除贴吧以外的所有功能（视频来自上游）：https://www.bilibili.com/video/BV1ss8R6zERG/
+跟着 B 站视频能配好除贴吧和小黑盒以外的所有功能（视频来自上游）：https://www.bilibili.com/video/BV1ss8R6zERG/
 
 用得着的话，点个 star。
 QQ交流群：1134618762
@@ -271,3 +271,4 @@ Cookie 会过期。哪天它突然又只给降级结果，先换 Cookie，再怀
 代码用 MIT 许可，见 [LICENSE](LICENSE)，版权行仍然是上游和贡献者的。SnowLuma、DSH 及其他依赖有各自的许可，用之前自己读一遍。`npm ci` 的 `postinstall` 会修补本机安装的 SnowLuma SDK/MCP 副本，这一步会动到你 `node_modules` 里的东西。介意的话先看 LICENSE 里的说明。
 
 最后谢一次 Derpyu520，以及所有给 qq-bridge 提过 issue、补过 PR、写过文档的人。
+
