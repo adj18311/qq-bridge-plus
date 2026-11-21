@@ -12,6 +12,7 @@
 跟着 B 站视频能配好除贴吧以外的所有功能（视频来自上游）：https://www.bilibili.com/video/BV1ss8R6zERG/
 
 用得着的话，点个 star。
+QQ交流群：1134618762
 
 ## 这是什么
 
