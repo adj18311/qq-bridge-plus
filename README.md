@@ -2,12 +2,12 @@
 
 ![version](https://img.shields.io/badge/version-1.2.0-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![platform](https://img.shields.io/badge/platform-Windows%2011%20x64-lightgrey)
+![platform](https://img.shields.io/badge/platform-Windows%2011%20x64%20%7C%20Linux-lightgrey)
 [![upstream](https://img.shields.io/badge/upstream-Derpyu520%2Fqq--bridge-informational)](https://github.com/Derpyu520/qq-bridge)
 
 把一台真实登录的 QQ 接到 DeepSeek Harness（下称 DSH）上，让智能体用这个号在群聊和私聊里说话。
 
-只用 Windows 11 x64 做过实机验证。这是 [qq-bridge](https://github.com/Derpyu520/qq-bridge) 的衍生项目，致谢放在最后。
+Windows 11 x64 和 Ubuntu 22.04 都做过实机验证。这是 [qq-bridge](https://github.com/Derpyu520/qq-bridge) 的衍生项目，致谢放在最后。
 
 跟着 B 站视频能配好大部分功能（视频来自上游）：https://www.bilibili.com/video/BV1ss8R6zERG/
 
@@ -16,20 +16,20 @@ QQ交流群：1134618762
 
 ## 这是什么
 
-SnowLuma 做网关，用 OneBot v11 把 QQ 消息推给桥接。桥接按白名单挑出要处理的会话，整理成提示词送进 DSH；智能体处理完，通过桥接注册的一组 MCP 工具把回复、表情、图片、拍一拍发回 QQ。
+SnowLuma 或 NapCat 做网关，用 OneBot v11 把 QQ 消息推给桥接。桥接按白名单挑出要处理的会话，整理成提示词送进 DSH；智能体处理完，通过桥接注册的一组 MCP 工具把回复、表情、图片、拍一拍发回 QQ。
 
 中间那层桥接是 Node 写的，跑在你自己机器上，不经过中转服务器。模型调用还是走你在 DSH 里配的那家 provider。
 
-它不是你想象中的"收到消息就调一次 API 回一段文本"。智能体可以选择不说话：有沉睡、唤醒条件、沉睡前的观察窗口，有主动开口的概率和时间窗。群聊里它会先等 3 秒，看看对方还有没有下半句。这些由配置和人格预设共同决定，模型本身也在判断——同一套配置换模型，表现会不一样。
+它不是你想象中的"收到消息就调一次 API 回一段文本"。智能体可以选择不说话：有沉睡、唤醒条件、沉睡前的观察窗口，有主动开口的概率和时间窗。群聊里它会先等 3 秒，看看对方还有没有下半句。这些由配置和人格预设共同决定，模型本身也在判断，同一套配置换模型，表现会不一样。
 
 会话状态、消息映射、共享记忆、黑话词库、收藏表情落在 `state/`。本地有个控制台（默认 `http://127.0.0.1:3200`），能看会话和连接、切模式、换人格卡、逐个开关工具、看日志。模型按会话选，`模型管理.bat` 提供一个终端界面，列表直接从 DSH 的模型目录读。
 
-适合谁：有一台常年开着的 Windows 机器、已经在用 DSH Desktop、想让自己的智能体在 QQ 群里有个身份。只想跑个自动回复机器人，用不上这么重的东西。
+适合谁：手边有台常年开着的 Windows 机器，或者一台 Linux 服务器，已经在用 DSH，想让自己的智能体在 QQ 群里有个身份。只想跑个自动回复机器人，用不上这么重的东西。
 
 ## 一条消息的旅程
 
-1. SnowLuma 把消息通过 WebSocket 推给桥接（默认 `ws://127.0.0.1:13001`）。
-2. 桥接检查 `allow.private` / `allow.groups`。默认两个都是空数组，`allowAllWhenEmpty` 是 `false`——装完不配白名单，它对谁都不响应。这是有意的。
+1. 网关把消息通过 WebSocket 推给桥接（Windows 走 SnowLuma，默认 `ws://127.0.0.1:13001`；Linux 走 NapCat，默认 `ws://127.0.0.1:3001`）。
+2. 桥接检查 `allow.private` / `allow.groups`。默认两个都是空数组，`allowAllWhenEmpty` 是 `false`，装完不配白名单，它对谁都不响应。这是有意的。
 3. 消息进本地队列。同一会话短时间内的多条会合并：@、点名、提问这类明确触发最多等 2 秒，其它最多 4 秒。
 4. 唤醒策略决定要不要叫醒：被 @、被叫名字、命中关键词、被提问、被拍一拍、指定发言人发言、按概率随机。没叫醒就继续潜水。
 5. 叫醒了，桥接把上下文和未读消息交给跑 `qq-chat-v2` 预设的会话，等它调工具。
@@ -37,6 +37,171 @@ SnowLuma 做网关，用 OneBot v11 把 QQ 消息推给桥接。桥接按白名�
 7. 群聊里想再等等，用 `qq_wait_for_messages`。群聊静默固定 3 秒，首条新消息之后最多再等 6 秒。
 
 贴吧走另一条路：`qq_tieba_list` / `qq_tieba_read` → 桥接去抓百度页面 → 解析成文本和图片交给模型。这条链路上没有 DSH 模型参与，跟模型配置无关，跟网络和 Cookie 关系更大。
+
+## 两个平台，两套部署
+
+两个平台的功能是一套代码，差别在网关和宿主形态上。挑一个就行，不用都装。
+
+| | Windows | Linux |
+|---|---|---|
+| 宿主 | DSH Desktop 0.2.2-rc5 | DSH Web 0.2.2-rc5 |
+| QQ 网关 | SnowLuma 2.3.4（随包带运行时）| NapCat（Docker，镜像自行拉）|
+| 默认 OneBot 端口 | 13000 / 13001 | 3000 / 3001 |
+| 桥接控制台 | `127.0.0.1:3200` | `127.0.0.1:3100` |
+| Node.js | `>= 22.13.0` | 同左（实测 v24.22.1）|
+| 端点发现 | 自动找 DSH Desktop 端口 | 无，`dsh.baseUrl` 必须写死 |
+| 图形界面 | 有窗口 | 无，需 Xvfb + openbox 才能跑小黑盒 |
+| 额外依赖 | 无 | Docker + Docker Compose + openssl；小黑盒还要 .NET 10 SDK |
+| 实测系统 | Windows 11 x64 | Ubuntu 22.04.5 |
+
+Windows 那套下面先讲，Linux 单独一节放在后面。
+
+## Windows：环境与依赖
+
+| 组件 | 要求 | 说明 |
+|---|---|---|
+| 操作系统 | Windows 11 x64 | 唯一验证过的 Windows 版本 |
+| Node.js | `>= 22.13.0` | `package.json` 的 `engines` 写的就是这个 |
+| DSH | Desktop 0.2.2-rc5 | 1.2.0 在这个版本上跑通 |
+| QQ 网关 | SnowLuma（OneBot v11） | 实机跑的是 2.3.4。要开 HTTP 和 WebSocket 服务端，默认 13000 / 13001 |
+| 可选 | 7-Zip / Bandizip | 下 zip 发布包时需要。Windows 自带解压对中文文件名支持很差 |
+
+**发布包里带了 SnowLuma 2.3.4 的完整运行时**（`snowluma2.3.4/`），但**不含配置、数据、日志**，首次启动它会自己建目录、生成访问令牌。这样省得你再去别处找下载源。
+
+## Windows：安装步骤
+
+以下命令在 PowerShell 里跑，路径按自己的改。
+
+1. 装 Node.js 22.13.0 或更高：
+
+   ```powershell
+   node --version
+   ```
+
+2. 装并启动 DSH Desktop，配好一个能用的模型和凭据。默认端点 `http://127.0.0.1:3080`，换过就记下来。
+
+3. 启动 SnowLuma（`snowluma2.3.4/launcher.bat`），按引导登录 QQ。打开 OneBot 的 HTTP 和 WebSocket 服务端，记下地址、端口和 access token。
+
+4. 拿代码，或者下发布包解压。路径建议纯英文、不带空格，比如 `D:\qq-bridge`。
+
+   ```powershell
+   git clone https://github.com/adj18311/qq-bridge-plus.git
+   cd qq-bridge-plus
+   ```
+
+5. **必须先装依赖再启动**，直接 `npm start` 会在 import 阶段报错：
+
+   ```powershell
+   npm ci
+   ```
+
+6. 复制配置模板。已经有自己的 `config.json` 就别覆盖：
+
+   ```powershell
+   Copy-Item config.example.json config.json
+   ```
+
+7. 编辑 `config.json`，至少改这几处：
+
+   - `dsh.baseUrl`：DSH 实际地址；`dsh.provider`、`dsh.model`、`dsh.reasoningEffort` 要和 DSH 里能用的模型对得上
+   - `snowluma.wsUrl` / `snowluma.httpUrl`：OneBot 的地址；设了 token 就填 `snowluma.accessToken`
+   - `ownerQQ`：你自己的 QQ 号
+   - `allow.private` / `allow.groups`：先只填自己的私聊，确认通了再放开群。**默认是空的，空着它一句话都不会回**
+   - `consolePort`：控制台端口，模板是 3200，冲突就换
+
+8. 把预设和 MCP 装进 DSH：
+
+   ```powershell
+   node scripts/setup-dsh.mjs
+   ```
+
+   这一步会改本机的 DSH profile 和插件链接，已有的环境建议先备份。它会打印做了什么，别把它报的错当成"跳过也行"。
+
+9. **重启 DSH Desktop。** 不重启，新装的预设和 MCP 不生效。
+
+10. 启动桥接。双击 `start.bat`，或者跑 `npm start`。
+
+11. 打开 `http://127.0.0.1:3200`，用启动日志里的控制台令牌登录。然后在白名单里的私聊发一条消息，看有没有回复。通了再测群聊、人格卡、记忆、模型切换。
+
+12. 可选自检：`npm run test:quick`。离线回归，代替不了真实收发。
+
+## Linux：装法
+
+另外做了一份 Linux 部署包：DSH Web + NapCat Docker，把桥接放在服务器上跑，不需要 Windows 桌面版。
+
+实测环境（2026-11-22）：
+
+| 组件 | 版本 |
+|---|---|
+| 系统 | Ubuntu 22.04.5 x86_64 |
+| Node.js | v24.22.1 |
+| DSH | 0.2.2-rc5（`dsh web`，非 Desktop）|
+| NapCat | Docker，OneBot v11，HTTP 3000 / WS 3001 |
+| Docker | 29.1.3 |
+| .NET | 10.0.100（小黑盒要用）|
+
+文档里的「4 核 4 GB 能跑」是由其他成员测试并实现的，**没做过长期压测，并且明确不支持 2 核 2 GB 的服务器**。
+
+先初始化桥接：
+
+```bash
+npm ci --registry=https://registry.npmjs.org/
+node scripts/linux-init-config.mjs
+```
+
+初始化脚本只创建不存在的 `config.json`，生成独立随机控制台令牌和 QQ 空间令牌，不覆盖已有配置。
+
+要自己填的：`ownerQQ`、`allow`、`snowluma.accessToken`（跟 NapCat 一致）、`dsh`。
+
+**Linux 没有 Windows 那个端口自动发现**，`dsh.baseUrl` 必须显式写 `http://127.0.0.1:3080/`。
+
+然后铺 NapCat：
+
+```bash
+cd napcat
+bash scripts/install.sh
+bash scripts/pull-image.sh
+docker compose up -d
+bash scripts/verify.sh
+```
+
+打开 `http://127.0.0.1:6099/webui/` 扫码，回 WebUI 里核对 OneBot 的 HTTP 3000、WebSocket 3001 和令牌。
+
+镜像不在包里（约 981 MB），得联网拉。默认走第三方同步镜像 `ghcr.io/sqing33/napcat`，脚本按摘要固定版本。**这不是上游官方镜像，也没做过安全审计**，介意的话用 `NAPCAT_IMAGE` 换自己的。
+
+### Linux：安全边界
+
+所有服务只绑回环。外网走 SSH 隧道：
+
+```bash
+ssh -L 3080:127.0.0.1:3080 -L 3100:127.0.0.1:3100 -L 6099:127.0.0.1:6099 user@server
+```
+
+别在云安全组开 3080、3100、6099、19489。
+
+`config.json` 里有令牌和 QQ 号，权限给 `600`。贴吧 Cookie 只写路径，文件放仓库外。
+
+### Linux：功能情况
+
+小黑盒、QQ 空间都能用。小黑盒在 Linux 上跑 Firefox，登录到发帖那条链是通的；QQ 空间读写也在。
+
+跨会话记忆、自主巡逻这两块是其他成员测的，反馈是没碰到问题。
+
+说白了就是配置麻烦。尤其是小黑盒：要 .NET 10 SDK、要联网构建、要装 Playwright Firefox；QQ 空间的令牌还得在桥接和 DSH 插件两边对齐。功能本身没问题，是配起来费劲。
+
+包里做的是把配好的东西打包出来：`deploy/linux/` 下有 systemd 单元、NapCat 模板、DSH 挂载片段、小黑盒构建和二维码登录脚本，照着改路径和令牌就行，不用从零摸。
+
+两个随包补丁解决的是上游改版问题：登录页二维码入口换了、个人页 URL 换了。源码用 CRLF，应用补丁得加 `--binary`。
+
+### Linux：测试
+
+自动化脚本跑了 113 个，过 105 个，8 个失败或未完成。
+
+失败集在：桥接测试契约、DSH 发现、小黑盒图片与身份守卫、巡逻配置契约、控制台审计。
+
+这批是脚本层面的问题，功能层面上面说的都验过了。但脚本没全绿这事不打算含糊过去，写在这。
+
+还没验的：群聊大规模使用、长期跑着稳不稳。
 
 ## 这一版（1.2.0）改了什么
 
@@ -152,78 +317,9 @@ other  处理出错了，细节记在日志里。
 
 完整清单见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 环境与依赖
-
-| 组件 | 要求 | 说明 |
-|---|---|---|
-| 操作系统 | Windows 11 x64 | 唯一实机验证过的平台。macOS / Linux 没上过真机 |
-| Node.js | `>= 22.13.0` | `package.json` 的 `engines` 写的就是这个 |
-| DSH | Desktop 0.2.2-rc5 | 1.2.0 在这个版本上跑通 |
-| QQ 网关 | SnowLuma（OneBot v11） | 实机跑的是 2.3.4。要开 HTTP 和 WebSocket 服务端，默认 13000 / 13001 |
-| 可选 | 7-Zip / Bandizip | 下 zip 发布包时需要。Windows 自带解压对中文文件名支持很差 |
-
-**发布包里带了 SnowLuma 2.3.4 的完整运行时**（`snowluma2.3.4/`），但**不含配置、数据、日志**——首次启动它会自己建目录、生成访问令牌。这样省得你再去别处找下载源。
-
-## 安装步骤
-
-以下命令在 PowerShell 里跑，路径按自己的改。
-
-1. 装 Node.js 22.13.0 或更高：
-
-   ```powershell
-   node --version
-   ```
-
-2. 装并启动 DSH Desktop，配好一个能用的模型和凭据。默认端点 `http://127.0.0.1:3080`，换过就记下来。
-
-3. 启动 SnowLuma（`snowluma2.3.4/launcher.bat`），按引导登录 QQ。打开 OneBot 的 HTTP 和 WebSocket 服务端，记下地址、端口和 access token。
-
-4. 拿代码，或者下发布包解压。路径建议纯英文、不带空格，比如 `D:\qq-bridge`。
-
-   ```powershell
-   git clone https://github.com/adj18311/qq-bridge-plus.git
-   cd qq-bridge-plus
-   ```
-
-5. **必须先装依赖再启动**，直接 `npm start` 会在 import 阶段报错：
-
-   ```powershell
-   npm ci
-   ```
-
-6. 复制配置模板。已经有自己的 `config.json` 就别覆盖：
-
-   ```powershell
-   Copy-Item config.example.json config.json
-   ```
-
-7. 编辑 `config.json`，至少改这几处：
-
-   - `dsh.baseUrl`：DSH 实际地址；`dsh.provider`、`dsh.model`、`dsh.reasoningEffort` 要和 DSH 里能用的模型对得上
-   - `snowluma.wsUrl` / `snowluma.httpUrl`：OneBot 的地址；设了 token 就填 `snowluma.accessToken`
-   - `ownerQQ`：你自己的 QQ 号
-   - `allow.private` / `allow.groups`：先只填自己的私聊，确认通了再放开群。**默认是空的，空着它一句话都不会回**
-   - `consolePort`：控制台端口，模板是 3200，冲突就换
-
-8. 把预设和 MCP 装进 DSH：
-
-   ```powershell
-   node scripts/setup-dsh.mjs
-   ```
-
-   这一步会改本机的 DSH profile 和插件链接，已有的环境建议先备份。它会打印做了什么，别把它报的错当成"跳过也行"。
-
-9. **重启 DSH Desktop。** 不重启，新装的预设和 MCP 不生效。
-
-10. 启动桥接。双击 `start.bat`，或者跑 `npm start`。
-
-11. 打开 `http://127.0.0.1:3200`，用启动日志里的控制台令牌登录。然后在白名单里的私聊发一条消息，看有没有回复。通了再测群聊、人格卡、记忆、模型切换。
-
-12. 可选自检：`npm run test:quick`。离线回归，代替不了真实收发。
-
 ## 模型管理：给不同会话配不同的大脑
 
-双击 `模型管理.bat`，一边是会话，一边是可选模型。
+双击 `模型管理.bat`，一边是会话，一边是可选模型。Linux 下没有这个 bat，改 `config.json` 的 `dsh.modelOverrides` 即可，字段格式一样。
 
 列表不是写死的，它问 DSH 要模型目录（`GET /api/dsh/models`）。DSH 里配了哪些 provider、下面有哪些模型，这里就列什么。只要某个第三方 API 能在 DSH 里配成功，这里就能选。
 
@@ -324,34 +420,41 @@ Cookie 会过期。哪天它突然又只给降级结果，先换 Cookie，再怀
 
 这些是当前的真实状态，不是待办清单：
 
-- **只在 Windows 11 x64 + DSH Desktop 0.2.2-rc5 上验过**。macOS、Linux 没上过真机
+- **Windows 11 x64 + DSH Desktop 0.2.2-rc5、Ubuntu 22.04 + DSH Web 0.2.2-rc5 都验过**。macOS 没上过真机
 - **`qzone_reply` 用不了**，详见上一章。审计里能看到它被拒的记录，不是静默失败
-- **QQ 分享卡片读不了**。json 消息段被折叠成字面量「卡片消息」，payload 从来没落盘。已经加了探针在采形状，但解析器还没写——猜字段名会吐出错误的 ID，那比读不到更糟
-- **QQ 空间自动熔断没闭环**。结算链接上了，但生产拿不到可信的"明确失败"分类，连续失败计数器攒不到 3，那道熔断不会触发
+- **QQ 分享卡片读不了**。json 消息段被折叠成字面量「卡片消息」，payload 从来没落盘。已经加了探针在采形状，但解析器还没写，猜字段名会吐出错误的 ID，那比读不到更糟
+- **QQ 空间自动熔断没闭环**。结算链接上了，但生产拿不到可信的「明确失败」分类，连续失败计数器攒不到 3，那道熔断不会触发
+- **Linux 的自动化脚本 113 个里过 105 个**，8 个失败或未完成，功能层面另行人工验过
+- **Linux 不支持 2 核 2 GB 的机器**。4 核 4 GB 是其他成员实测过的下限，没做长期压测
+- **Linux 下小黑盒要图形环境**，无桌面的话得装 Xvfb + openbox
 - 缺 `config.json` 是直接报错退出，不会引导你去复制模板
 - 非正常退出会留下 `state/bridge.lock`，里面是死掉的 PID，下次启动前删掉即可
 - `npm ci` 会报几个传递依赖的漏洞，这一版没处理
 - 图片发送只放行白名单图床域名，本机路径、内网地址、base64 一律拒绝。这是故意的
 - 语音默认关闭，发布包里不带音频
 - 529/503 的提示依赖 DSH 真的发出并送达重试事件。桥接只旁观，不自己重放回合
-- `roles/` 里的"测试人格Tmp"是测试用，"小鲸鱼-微调"含粗口规则。不想听脏话就换"小鲸鱼-微调-无脏话"
+- `roles/` 里的「测试人格Tmp」是测试用，「小鲸鱼-微调」含粗口规则。不想听脏话就换「小鲸鱼-微调-无脏话」
 
 ## 文档
 
-- [安装与使用](docs/INSTALL.md)
-- [兼容性与支持范围](docs/COMPATIBILITY.md)
-- [已知限制](docs/LIMITATIONS.md)
-- [更新日志](CHANGELOG.md)
-- [使用规则](RULES.md)
-- [许可](LICENSE)
+| 文档 | 内容 |
+|---|---|
+| [安装与使用](docs/INSTALL.md) | Windows 完整步骤 |
+| [Linux 快速开始](LINUX-快速开始.md) | 只在 Linux 发布包里 |
+| [Linux 部署记录](docs/guides/LINUX_DEPLOY.md) | 只在 Linux 发布包里，含排障 |
+| [兼容性与支持范围](docs/COMPATIBILITY.md) | 哪些环境能用 |
+| [已知限制](docs/LIMITATIONS.md) | 更细的限制清单 |
+| [更新日志](CHANGELOG.md) | 逐版变更 |
+| [使用规则](RULES.md) | 行为边界 |
+| [许可](LICENSE) | MIT |
 
-遇到问题去 [Issues](https://github.com/adj18311/qq-bridge-plus/issues) 提，附上版本、复现步骤和日志片段。**贴日志前先检查有没有 QQ 号、群号、Cookie、访问令牌、聊天内容**，这些都不该出现在公开 issue 里。配置文件和 `state/` 目录整体也不要上传。
+遇到问题去 [Issues](https://github.com/adj18311/qq-bridge-plus/issues) 提，附上版本、复现步骤和相关日志片段。**贴日志前先检查有没有 QQ 号、群号、Cookie、访问令牌、聊天内容**，这些都不该出现在公开 issue 里。配置文件和 `state/` 目录整体也不要上传。
 
 ## 衍生项目与致谢
 
 这不是从零写的。上游是 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge)，本项目的对照基线是上游 `v0.2.0-r3`。
 
-接入 SnowLuma、跟 DSH 的会话协议打交道、控制台、人格预设、二代仿真那一整套骨架，基本都是上游打的底子。DSH 的鉴权、slash-RPC、`remote.mux` 那一串协议，加上 OneBot 各种消息段和事件顺序的坑，作者是一个一个趟出来的。本项目能站在上面改，是因为上游把这些脏活干完了。
+接入网关、跟 DSH 的会话协议打交道、控制台、人格预设、二代仿真那一整套骨架，基本都是上游打的底子。DSH 的鉴权、slash-RPC、`remote.mux` 那一串协议，加上 OneBot 各种消息段和事件顺序的坑，作者是一个一个趟出来的。本项目能站在上面改，是因为上游把这些脏活干完了。
 
 另外两个模块也站在别人的肩膀上：
 
@@ -360,7 +463,7 @@ Cookie 会过期。哪天它突然又只给降级结果，先换 Cookie，再怀
 
 改动之后本项目已经和上游差得比较远，尤其 `src/core/` 的拆分、巡逻、小黑盒和空间这几块。所以：遇到问题请提到[本仓库的 Issues](https://github.com/adj18311/qq-bridge-plus/issues)，别去打扰上游。想用最接近上游的版本，直接去用上游。
 
-代码用 MIT 许可，见 [LICENSE](LICENSE)，版权行仍然是上游和贡献者的。SnowLuma、DSH 及其他依赖有各自的许可，用之前自己读一遍。`npm ci` 的 `postinstall` 会修补本机安装的 SnowLuma SDK/MCP 副本，这一步会动到你 `node_modules` 里的东西。介意的话先看 LICENSE 里的说明。
+代码用 MIT 许可，见 [LICENSE](LICENSE)，版权行仍然是上游和贡献者的。SnowLuma、NapCat、DSH 及其他依赖有各自的许可，用之前自己读一遍。`npm ci` 的 `postinstall` 会修补本机安装的 SnowLuma SDK/MCP 副本，这一步会动到你 `node_modules` 里的东西。介意的话先看 LICENSE 里的说明。
 
 最后谢一次 Derpyu520，以及所有给 qq-bridge 提过 issue、补过 PR、写过文档的人。
 
